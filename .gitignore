@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Environments / tooling
+.venv/
+.python-version
+.pytest_cache/
+.ruff_cache/
+
+# Secrets & local data
+.env
+.secrets/
+data/
+*.sqlite
+*.sqlite3
+
+# Output
+candidates.csv
+
+# OS
+.DS_Store
