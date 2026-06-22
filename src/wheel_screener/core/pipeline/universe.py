@@ -9,9 +9,8 @@ from wheel_screener.core.ports import FundamentalsProvider
 def build_universe(provider: FundamentalsProvider, criteria: ScreenCriteria) -> list[Underlying]:
     """Return the price/market-cap/exchange-filtered universe (FMP company-screener).
 
-    For now the universe is truncated to ``criteria.universe_limit`` before the deep
-    per-name fetch. TODO(M1+): replace the naive cap with a cheap TTM-bulk pre-rank so
-    the *best* names (not the first N) survive into the deep fetch.
+    The whole universe is cheaply pre-ranked downstream (stage 2 bulk pre-rank), so this
+    only applies an optional hard size cap (``criteria.universe_limit``, default None).
     """
     universe = provider.screen_universe(criteria)
     if criteria.universe_limit and len(universe) > criteria.universe_limit:

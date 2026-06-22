@@ -70,6 +70,22 @@ def test_fetch_metrics_skips_unfetchable_symbol() -> None:
 
 
 @respx.mock
+def test_bulk_metrics_maps_partial_universe() -> None:
+    respx.get(f"{BASE}/ratios-ttm-bulk").mock(return_value=httpx.Response(200, json=[
+        {"symbol": "AAA", "peRatioTTM": 10.0, "returnOnEquityTTM": 0.2, "currentRatioTTM": 1.4},
+        {"symbol": "BBB", "peRatioTTM": 30.0, "returnOnEquityTTM": 0.05, "currentRatioTTM": 0.9},
+    ]))
+    respx.get(f"{BASE}/key-metrics-ttm-bulk").mock(return_value=httpx.Response(200, json=[
+        {"symbol": "AAA", "roicTTM": 0.22, "netDebtToEBITDATTM": 0.5},
+        {"symbol": "BBB", "roicTTM": 0.04, "netDebtToEBITDATTM": 3.0},
+    ]))
+    metrics = _provider().bulk_metrics(["AAA", "BBB", "CCC"])
+    assert set(metrics) == {"AAA", "BBB"}  # CCC absent from bulk
+    assert metrics["AAA"].pe == 10.0 and metrics["AAA"].roi == 0.22
+    assert metrics["AAA"].eps is None  # sign inputs come from the deep fetch only
+
+
+@respx.mock
 def test_earnings_calendar_parses() -> None:
     respx.get(f"{BASE}/earnings-calendar").mock(return_value=httpx.Response(200, json=[
         {"symbol": "AAA", "date": "2026-08-01"},

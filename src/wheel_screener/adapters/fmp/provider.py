@@ -42,9 +42,28 @@ class FmpFundamentalsProvider:
             return []
         return [map_universe_row(r) for r in rows if isinstance(r, dict) and r.get("symbol")]
 
+    def _bulk(self, path: str) -> dict[str, dict]:
+        payload = self._client.get(path, {})
+        rows = payload if isinstance(payload, list) else []
+        return {r["symbol"]: r for r in rows if isinstance(r, dict) and r.get("symbol")}
+
+    def bulk_metrics(self, symbols: list[str]) -> dict[str, FundamentalMetrics]:
+        """Cheap pre-rank metrics for the whole universe via the *-ttm-bulk endpoints
+        (no sign inputs / DCF — those come from the deep ``fetch_metrics``).
+
+        NOTE: the exact bulk response shape/tier (JSON vs CSV, `part` pagination) is
+        unverified against live FMP; this assumes a JSON array keyed by `symbol`.
+        """
+        ratios = self._bulk("ratios-ttm-bulk")
+        key_metrics = self._bulk("key-metrics-ttm-bulk")
+        out: dict[str, FundamentalMetrics] = {}
+        for sym in symbols:
+            if sym in ratios or sym in key_metrics:
+                out[sym] = map_metrics(ratios.get(sym, {}), key_metrics.get(sym, {}), {}, {}, {})
+        return out
+
     def fetch_metrics(self, symbols: list[str]) -> dict[str, FundamentalMetrics]:
-        """Per-symbol deep fetch. TODO(M1+): use the *-ttm-bulk endpoints to fetch the
-        whole universe in a few calls instead of one-per-symbol."""
+        """Per-symbol deep fetch (incl. EPS / equity / EBITDA sign inputs + DCF)."""
         out: dict[str, FundamentalMetrics] = {}
         for sym in symbols:
             try:

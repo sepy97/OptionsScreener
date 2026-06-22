@@ -20,6 +20,7 @@ class SchwabSettings(BaseModel):
 class FmpSettings(BaseModel):
     api_key: SecretStr = SecretStr("")
     base_url: str = "https://financialmodelingprep.com/stable"
+    calls_per_minute: int = 250  # client-side throttle (Starter ~300/min; Free is far lower)
 
 
 class IvRankSettings(BaseModel):

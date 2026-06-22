@@ -41,7 +41,8 @@ class ScreenCriteria(BaseModel):
     max_price: float = 200.0
     min_market_cap: float = 2_000_000_000.0
     exchanges: list[str] = Field(default_factory=lambda: ["nasdaq", "nyse"])
-    universe_limit: int = 100  # cap deep fetches (naive; real bulk pre-rank is a TODO)
+    universe_limit: int | None = None  # optional hard cap on the screener universe size
+    prerank_keep: int = 150  # names kept after the cheap bulk pre-rank, for the deep fetch
     # fundamentals
     stock_profile: StockProfile = StockProfile.STALWART
     top_n: int = 50  # keep the top N (by cross-sectional rank) for the chain pull

@@ -25,11 +25,14 @@ class FundamentalsProvider(Protocol):
     """Universe + fundamentals + earnings. FMP today.
 
     ``screen_universe`` returns the cheap price/market-cap/exchange universe;
-    ``fetch_metrics`` returns fundamentals (adapter decides bulk vs per-symbol);
+    ``bulk_metrics`` returns cheap partial TTM metrics for many symbols (the pre-rank);
+    ``fetch_metrics`` returns the deep per-name metrics incl. sign inputs + DCF;
     ``earnings_calendar`` maps symbol -> next earnings date within [start, end].
     """
 
     def screen_universe(self, criteria: ScreenCriteria) -> list[Underlying]: ...
+
+    def bulk_metrics(self, symbols: list[str]) -> dict[str, FundamentalMetrics]: ...
 
     def fetch_metrics(self, symbols: list[str]) -> dict[str, FundamentalMetrics]: ...
 

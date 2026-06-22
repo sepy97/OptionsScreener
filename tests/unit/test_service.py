@@ -22,6 +22,9 @@ class _FakeFundamentals:
     def screen_universe(self, criteria: ScreenCriteria):
         return [Underlying(symbol=s, sector=sec) for s, sec in self._universe]
 
+    def bulk_metrics(self, symbols):
+        return {s: self._metrics[s] for s in symbols if s in self._metrics}
+
     def fetch_metrics(self, symbols):
         return {s: self._metrics[s] for s in symbols if s in self._metrics}
 
