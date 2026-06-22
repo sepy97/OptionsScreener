@@ -36,6 +36,13 @@ _KEY_METRICS = {
 }
 _STATEMENT_YEARS = 3  # latest N fiscal years scanned for sign inputs (coalesced per symbol)
 
+# Names that aren't common stock: notes/baby-bonds, preferreds, warrants, depositary
+# shares, and partnerships (MLP units). Matched case-insensitively against companyName.
+_NONCOMMON_NAME = (
+    r"(?i)%|\bnotes?\b|\bdebentures?\b|\bsubordinated\b|\bpreferred\b|\bpfd\b"
+    r"|\bdepositary\b|\bwarrants?\b|\bdue\s+20\d\d|\bL\.P\.|,\s*LP\b"
+)
+
 
 class _EarningsSource(Protocol):
     def earnings_calendar(self, start: date, end: date) -> dict[str, date]: ...
@@ -120,6 +127,26 @@ class LocalFundamentalsProvider:
                 df = df.filter(pl.col(flag).str.to_lowercase() != "true")
         if "isActivelyTrading" in df.columns:
             df = df.filter(pl.col("isActivelyTrading").str.to_lowercase() == "true")
+        # common stocks only: drop notes/preferreds/warrants/MLPs (by name) and
+        # closed-end funds (Asset-Management industry with no employees).
+        if "companyName" in df.columns:
+            df = df.filter(~pl.col("companyName").fill_null("").str.contains(_NONCOMMON_NAME))
+        if "industry" in df.columns and "fullTimeEmployees" in df.columns:
+            emp = pl.col("fullTimeEmployees").cast(pl.Int64, strict=False).fill_null(0)
+            df = df.filter(~((pl.col("industry") == "Asset Management") & (emp <= 0)))
+        # keep only the shortest ticker per company name: drops suffixed preferreds (IMPP vs
+        # IMPPP, same name) and de-dups dual share classes (keep GOOG, drop GOOGL).
+        if "companyName" in df.columns:
+            min_len = (
+                self._profiles.with_columns(pl.col("symbol").str.len_chars().alias("_l"))
+                .group_by("companyName")
+                .agg(pl.col("_l").min().alias("_min_len"))
+            )
+            df = (
+                df.join(min_len, on="companyName", how="left")
+                .filter(pl.col("symbol").str.len_chars() <= pl.col("_min_len").fill_null(99))
+                .drop("_min_len")
+            )
         df = df.filter(
             (pl.col("price") >= criteria.min_price)
             & (pl.col("price") <= criteria.max_price)

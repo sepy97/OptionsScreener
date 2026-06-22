@@ -10,11 +10,21 @@ from wheel_screener.core.models import ScreenCriteria
 
 _FILES = {
     "profile-bulk_part0.csv": (
-        "symbol,price,marketCap,beta,companyName,exchange,sector,isEtf,isFund,isAdr,isActivelyTrading\n"
-        "GOOD,100,5000000000,1.1,Good Inc,NASDAQ,Technology,false,false,false,true\n"
-        "ETFX,50,1000000000,1.0,ETF X,NASDAQ,,true,false,false,true\n"
-        "FRGN,80,9000000000,1.0,Foreign Co,LSE,Technology,false,false,false,true\n"
-        "SMALL,5,3000000000,1.0,Small Co,NYSE,Industrials,false,false,false,true\n"
+        "symbol,price,marketCap,beta,companyName,exchange,sector,industry,"
+        "fullTimeEmployees,isEtf,isFund,isAdr,isActivelyTrading\n"
+        "GOOD,100,5000000000,1.1,Good Inc,NASDAQ,Technology,Software,5000,false,false,false,true\n"
+        "ETFX,50,1000000000,1.0,ETF X,NASDAQ,,Asset Management,0,true,false,false,true\n"
+        "FRGN,80,9000000000,1.0,Foreign Co,LSE,Technology,Software,100,false,false,false,true\n"
+        "SMALL,5,3000000000,1.0,Small Co,NYSE,Industrials,Manufacturing,50,false,false,false,true\n"
+        "NOTEX,25,3000000000,1.0,Acme 6.00% Notes due 2026,NASDAQ,Financial Services,"
+        "Asset Management,11,false,false,false,true\n"
+        "CEFX,50,3000000000,1.0,Some Closed Fund Limited,NYSE,Financial Services,"
+        "Asset Management,0,false,false,false,true\n"
+        # IMPP (common) + IMPPP (preferred, same name): dedup keeps the shorter ticker
+        "IMPP,30,3000000000,1.0,Imperial Petroleum Inc.,NASDAQ,Energy,Oil & Gas E&P,74,"
+        "false,false,false,true\n"
+        "IMPPP,26,3000000000,1.0,Imperial Petroleum Inc.,NASDAQ,Energy,Oil & Gas E&P,74,"
+        "false,false,false,true\n"
     ),
     "ratios-ttm-bulk.csv": (
         "symbol,priceToEarningsRatioTTM,priceToSalesRatioTTM,priceToBookRatioTTM,"
@@ -48,11 +58,14 @@ def store(tmp_path: Path) -> Path:
 
 def test_screen_universe_filters(store: Path) -> None:
     p = LocalFundamentalsProvider(str(store))
-    universe = p.screen_universe(ScreenCriteria(min_price=20, max_price=200, min_market_cap=2e9))
-    # GOOD kept; ETFX (isEtf), FRGN (LSE), SMALL (price<20) excluded
-    assert [u.symbol for u in universe] == ["GOOD"]
-    assert universe[0].sector == "Technology"
-    assert universe[0].market_cap == 5e9
+    universe = {u.symbol for u in p.screen_universe(
+        ScreenCriteria(min_price=20, max_price=200, min_market_cap=2e9)
+    )}
+    # kept: GOOD (common) and IMPP (common). Excluded: ETFX (isEtf), FRGN (LSE),
+    # SMALL (price<20), NOTEX (baby-bond name), CEFX (closed-end fund),
+    # IMPPP (preferred — same name as IMPP, longer ticker -> dedup drops it).
+    assert universe == {"GOOD", "IMPP"}
+    assert "IMPPP" not in universe and "NOTEX" not in universe and "CEFX" not in universe
 
 
 def test_fetch_metrics_maps_and_coalesces_latest_year(store: Path) -> None:
