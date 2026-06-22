@@ -110,8 +110,8 @@ def gate_reasons(metrics: FundamentalMetrics | None, criteria: ScreenCriteria) -
         and metrics.net_debt_to_ebitda > criteria.max_leverage
     ):
         reasons.append("excess_leverage")
-    if metrics.current_ratio is not None and metrics.current_ratio < 1.0:
-        reasons.append("illiquid")
+    # NOTE: current_ratio is intentionally NOT a hard gate — many strong firms (WMT, CSCO)
+    # run current_ratio < 1; it stays a Safety *ranking* factor instead.
     present = sum(1 for k in _CORE_METRICS if getattr(metrics, k) is not None)
     if present < criteria.min_metrics_present:
         reasons.append("insufficient_data")

@@ -48,6 +48,30 @@ def test_map_metrics_alternate_field_spellings() -> None:
     assert fm.total_equity == 2.0e9 and fm.price == 30.0
 
 
+def test_map_metrics_real_stable_field_names() -> None:
+    # field names verified against live FMP /stable/ responses (June 2026)
+    fm = map_metrics(
+        ratios={
+            "priceToEarningsRatioTTM": 11.0, "priceToSalesRatioTTM": 2.0,
+            "priceToBookRatioTTM": 3.0, "priceToEarningsGrowthRatioTTM": 1.5,
+            "netProfitMarginTTM": 0.15, "currentRatioTTM": 1.4, "quickRatioTTM": 1.0,
+            "cashRatioTTM": 0.4, "debtToEquityRatioTTM": 0.7,
+        },
+        # ROE/ROA/ROIC live in key-metrics-ttm, not ratios-ttm (verified live)
+        key_metrics={
+            "returnOnEquityTTM": 0.3, "returnOnAssetsTTM": 0.12,
+            "returnOnInvestedCapitalTTM": 0.2, "netDebtToEBITDATTM": 1.1,
+        },
+        income={"eps": 6.0, "ebitda": 2.0e9},
+        balance={"totalStockholdersEquity": 8.0e9},
+        dcf={"dcf": 70.0, "Stock Price": 60.0},
+    )
+    assert fm.pe == 11.0 and fm.peg == 1.5 and fm.debt_to_equity == 0.7
+    assert fm.roe == 0.3 and fm.roa == 0.12 and fm.roi == 0.2
+    assert fm.net_debt_to_ebitda == 1.1
+    assert fm.eps == 6.0 and fm.total_equity == 8.0e9 and fm.price == 60.0
+
+
 def test_map_earnings_keeps_earliest_and_skips_bad() -> None:
     e = map_earnings([
         {"symbol": "AAA", "date": "2026-08-01"},

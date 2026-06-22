@@ -57,9 +57,10 @@ chain pull; the user-facing sort is **yield**, and a human verifies. So the obje
 1. **Sanitize** — domain guards: drop PE/PEG when EPS≤0, PB & Debt/Equity when equity≤0,
    NetDebt/EBITDA when EBITDA≤0 (net cash retained); compute the DCF gap (price/intrinsic).
 2. **Hard gates** (never-trade kills, not averaged): negative equity, loss-maker (EPS≤0 / negative
-   margin), negative ROE, excess leverage (NetDebt/EBITDA > `max_leverage`, default 4), illiquid
-   (current ratio < 1), insufficient coverage (< `min_metrics_present`). Plus the earnings blackout.
-   Lenient by design — gates protect recall into the funnel, they don't pick winners.
+   margin), negative ROE, excess leverage (NetDebt/EBITDA > `max_leverage`, default 4), insufficient
+   coverage (< `min_metrics_present`). Plus the earnings blackout. Lenient by design — gates protect
+   recall into the funnel, they don't pick winners. (current_ratio is a Safety *ranking* factor, not
+   a hard gate — verified live that <1 over-filters strong names like WMT/CSCO.)
 3. **Cross-sectional percentile** of survivors per metric, collapsed into three factors:
    **Value** {PE, PS, PB, PEG, DCF-gap} (universe-wide so absolute cheapness survives),
    **Quality** {ROE, ROA, ROI, ROS}, **Safety** {leverage + liquidity} (both sector-neutral, with a
@@ -168,9 +169,9 @@ CBOE weeklys flag (`available_weeklys/get_csv_download/`) · greeks fallback `py
 
 ## 8. Stack
 
-`uv` · `pydantic v2` + `pydantic-settings` · `httpx` async + `tenacity` + `hishel` cache ·
-per-provider rate limiter · `Typer` · `polars` · `pytest` + `respx` (unit) + `vcr.py` cassettes
-(offline integration) · `ruff`.
+`uv` · `pydantic v2` + `pydantic-settings` · `httpx` + `tenacity` + a TTL'd on-disk `DiskCache`
+(hishel was dropped — its 1.x API churned and we control our endpoints) · per-provider rate limiter ·
+`Typer` · `polars` · `pytest` + `respx` · `ruff`.
 
 ## 9. Module tree
 

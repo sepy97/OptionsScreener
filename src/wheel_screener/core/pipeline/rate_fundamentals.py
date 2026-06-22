@@ -73,19 +73,27 @@ def rate_and_rank(
     today: date,
 ) -> list[Underlying]:
     """Two-phase: cheap bulk pre-rank over the whole universe, then a deep fetch for the
-    pre-rank survivors only (keeps the expensive per-name calls bounded)."""
-    # Phase 1 — cheap bulk pre-rank.
-    bulk = provider.bulk_metrics([u.symbol for u in universe])
-    for u in universe:
-        u.metrics = bulk.get(u.symbol)
-    prelim = rank_by_fundamentals(
-        [u for u in universe if u.metrics is not None],
-        criteria.factor_weights,
-        criteria.stock_profile,
-    )
-    keep = prelim[: criteria.prerank_keep]
+    pre-rank survivors only (keeps the expensive per-name calls bounded).
 
-    # Phase 2 — deep fetch (sign inputs + DCF) for survivors, then gate + final rank.
+    When the bulk endpoints aren't in the FMP subscription (lower tiers), fall back to a
+    market-cap-capped deep fetch of ``universe_limit`` names.
+    """
+    bulk = provider.bulk_metrics([u.symbol for u in universe])
+    if bulk:
+        for u in universe:
+            u.metrics = bulk.get(u.symbol)
+        prelim = rank_by_fundamentals(
+            [u for u in universe if u.metrics is not None],
+            criteria.factor_weights,
+            criteria.stock_profile,
+        )
+        keep = prelim[: criteria.prerank_keep]
+    else:
+        keep = sorted(universe, key=lambda u: u.market_cap or 0.0, reverse=True)[
+            : criteria.universe_limit
+        ]
+
+    # Deep fetch (sign inputs + DCF) for survivors, then gate + final rank.
     deep = provider.fetch_metrics([u.symbol for u in keep])
     for u in keep:
         if u.symbol in deep:

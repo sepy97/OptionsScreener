@@ -6,6 +6,8 @@ import httpx
 import respx
 from pydantic import SecretStr
 
+from wheel_screener.adapters.cache import DiskCache
+from wheel_screener.adapters.fmp.client import FmpClient
 from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
 from wheel_screener.config import FmpSettings
 from wheel_screener.core.models import ScreenCriteria
@@ -13,8 +15,13 @@ from wheel_screener.core.models import ScreenCriteria
 BASE = "https://financialmodelingprep.com/stable"
 
 
+def _settings() -> FmpSettings:
+    # cache_enabled=False so tests use a plain injected httpx.Client (respx-intercepted)
+    return FmpSettings(api_key=SecretStr("test-key"), cache_enabled=False)
+
+
 def _provider() -> FmpFundamentalsProvider:
-    return FmpFundamentalsProvider(FmpSettings(api_key=SecretStr("test-key")))
+    return FmpFundamentalsProvider(_settings())
 
 
 @respx.mock
@@ -83,6 +90,27 @@ def test_bulk_metrics_maps_partial_universe() -> None:
     assert set(metrics) == {"AAA", "BBB"}  # CCC absent from bulk
     assert metrics["AAA"].pe == 10.0 and metrics["AAA"].roi == 0.22
     assert metrics["AAA"].eps is None  # sign inputs come from the deep fetch only
+
+
+@respx.mock
+def test_in_run_cache_dedupes_identical_gets() -> None:
+    route = respx.get(f"{BASE}/ratios-ttm").mock(return_value=httpx.Response(200, json=[{"x": 1}]))
+    client = FmpClient(_settings(), client=httpx.Client())
+    first = client.get("ratios-ttm", {"symbol": "AAPL"})
+    second = client.get("ratios-ttm", {"symbol": "AAPL"})
+    assert first == second
+    assert route.call_count == 1  # second call served from the in-run cache
+
+
+@respx.mock
+def test_disk_cache_serves_across_clients(tmp_path) -> None:
+    route = respx.get(f"{BASE}/ratios-ttm").mock(return_value=httpx.Response(200, json=[{"x": 1}]))
+    c1 = FmpClient(_settings(), client=httpx.Client(), disk=DiskCache(str(tmp_path), 3600))
+    c1.get("ratios-ttm", {"symbol": "AAPL"})
+    # a fresh client (new run) with an empty in-run cache but the same disk dir hits disk
+    c2 = FmpClient(_settings(), client=httpx.Client(), disk=DiskCache(str(tmp_path), 3600))
+    c2.get("ratios-ttm", {"symbol": "AAPL"})
+    assert route.call_count == 1  # second client served from the on-disk cache
 
 
 @respx.mock

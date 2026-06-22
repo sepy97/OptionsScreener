@@ -44,25 +44,28 @@ def map_metrics(
     ratios: dict, key_metrics: dict, income: dict, balance: dict, dcf: dict
 ) -> FundamentalMetrics:
     r, k, inc, bal, d = ratios or {}, key_metrics or {}, income or {}, balance or {}, dcf or {}
+    # ROE/ROA/ROIC live in key-metrics-ttm; PE/PS/PB/margins/liquidity in ratios-ttm — merge
+    # so a field is found regardless of which endpoint carries it.
+    rk = {**r, **k}
     return FundamentalMetrics(
-        # value
-        pe=_num(_pick(r, "peRatioTTM", "priceEarningsRatioTTM", "peTTM")),
-        ps=_num(_pick(r, "priceToSalesRatioTTM", "priceSalesRatioTTM")),
-        pb=_num(_pick(r, "priceToBookRatioTTM", "priceBookValueRatioTTM", "pbRatioTTM")),
-        peg=_num(_pick(r, "priceEarningsToGrowthRatioTTM", "pegRatioTTM")),
+        # value (first key in each list is the verified live /stable/ field name)
+        pe=_num(_pick(rk, "priceToEarningsRatioTTM", "peRatioTTM", "priceEarningsRatioTTM")),
+        ps=_num(_pick(rk, "priceToSalesRatioTTM", "priceSalesRatioTTM")),
+        pb=_num(_pick(rk, "priceToBookRatioTTM", "priceBookValueRatioTTM", "pbRatioTTM")),
+        peg=_num(_pick(rk, "priceToEarningsGrowthRatioTTM", "pegRatioTTM")),
         dcf=_num(_pick(d, "dcf")),
         price=_num(_pick(d, "Stock Price", "stockPrice", "price")),
         # efficiency
-        roe=_num(_pick(r, "returnOnEquityTTM")),
-        roa=_num(_pick(r, "returnOnAssetsTTM")),
-        ros=_num(_pick(r, "netProfitMarginTTM", "netIncomePerRevenueTTM")),
-        roi=_num(_pick(k, "roicTTM", "returnOnInvestedCapitalTTM")),
-        debt_to_equity=_num(_pick(r, "debtEquityRatioTTM", "debtToEquityTTM")),
-        net_debt_to_ebitda=_num(_pick(k, "netDebtToEBITDATTM", "netDebtToEbitdaTTM")),
+        roe=_num(_pick(rk, "returnOnEquityTTM")),
+        roa=_num(_pick(rk, "returnOnAssetsTTM")),
+        ros=_num(_pick(rk, "netProfitMarginTTM", "netIncomePerRevenueTTM")),
+        roi=_num(_pick(rk, "returnOnInvestedCapitalTTM", "roicTTM")),
+        debt_to_equity=_num(_pick(rk, "debtToEquityRatioTTM", "debtEquityRatioTTM")),
+        net_debt_to_ebitda=_num(_pick(rk, "netDebtToEBITDATTM", "netDebtToEbitdaTTM")),
         # liquidity
-        current_ratio=_num(_pick(r, "currentRatioTTM")),
-        quick_ratio=_num(_pick(r, "quickRatioTTM")),
-        cash_ratio=_num(_pick(r, "cashRatioTTM")),
+        current_ratio=_num(_pick(rk, "currentRatioTTM")),
+        quick_ratio=_num(_pick(rk, "quickRatioTTM")),
+        cash_ratio=_num(_pick(rk, "cashRatioTTM")),
         # sign inputs for the gates
         eps=_num(_pick(inc, "eps", "epsdiluted", "epsDiluted")),
         total_equity=_num(_pick(bal, "totalStockholdersEquity", "totalEquity")),

@@ -34,6 +34,7 @@ class FmpFundamentalsProvider:
             "marketCapMoreThan": int(criteria.min_market_cap),
             "exchange": ",".join(criteria.exchanges),
             "isFund": "false",
+            "isEtf": "false",
             "isActivelyTrading": "true",
             "limit": 3000,
         }
@@ -51,11 +52,15 @@ class FmpFundamentalsProvider:
         """Cheap pre-rank metrics for the whole universe via the *-ttm-bulk endpoints
         (no sign inputs / DCF — those come from the deep ``fetch_metrics``).
 
-        NOTE: the exact bulk response shape/tier (JSON vs CSV, `part` pagination) is
-        unverified against live FMP; this assumes a JSON array keyed by `symbol`.
+        Returns {} when the bulk endpoints aren't in the account's subscription
+        (verified: lower tiers return HTTP 402) so the caller can fall back to a
+        capped per-name deep fetch.
         """
-        ratios = self._bulk("ratios-ttm-bulk")
-        key_metrics = self._bulk("key-metrics-ttm-bulk")
+        try:
+            ratios = self._bulk("ratios-ttm-bulk")
+            key_metrics = self._bulk("key-metrics-ttm-bulk")
+        except httpx.HTTPError:
+            return {}
         out: dict[str, FundamentalMetrics] = {}
         for sym in symbols:
             if sym in ratios or sym in key_metrics:
