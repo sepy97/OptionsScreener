@@ -15,6 +15,7 @@ class SchwabSettings(BaseModel):
     client_secret: SecretStr = SecretStr("")
     callback_url: str = "https://127.0.0.1:8182"
     token_path: str = ".secrets/schwab_token.json"
+    calls_per_minute: int = 110  # client-side throttle (Schwab ~120/min)
 
 
 class FmpSettings(BaseModel):

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from wheel_screener.adapters.http import RateLimiter
 from wheel_screener.adapters.schwab.mapper import parse_chain
 from wheel_screener.config import SchwabSettings
 from wheel_screener.core.models import ChainFilter, ChainSnapshot, ProviderCaps
@@ -16,6 +17,7 @@ class SchwabChainProvider:
     def __init__(self, settings: SchwabSettings) -> None:
         self._settings = settings
         self._client = None
+        self._limiter = RateLimiter(settings.calls_per_minute)
 
     def _get_client(self):
         if self._client is None:
@@ -27,6 +29,7 @@ class SchwabChainProvider:
     def get_chain(self, symbol: str, filt: ChainFilter) -> ChainSnapshot:
         from schwab.client import Client
 
+        self._limiter.acquire()
         today = date.today()
         resp = self._get_client().get_option_chain(
             symbol,

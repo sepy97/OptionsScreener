@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from wheel_screener.core.models import (
     CandidateResult,
@@ -16,8 +16,7 @@ from wheel_screener.core.pipeline.rank import rank
 from wheel_screener.core.pipeline.select_strike import select_put
 from wheel_screener.core.service import ScreenerService
 
-EXP35 = date(2026, 7, 27)
-EXP40 = date(2026, 8, 1)
+_BASE = date(2026, 6, 22)
 
 
 def _put(strike, delta, dte, bid, oi=500, spread=0.02):
@@ -25,7 +24,7 @@ def _put(strike, delta, dte, bid, oi=500, spread=0.02):
         underlying_symbol="AAA",
         option_symbol=f"AAA-{dte}-{int(strike)}",
         option_type=OptionType.PUT,
-        expiration=EXP40 if dte == 40 else EXP35,
+        expiration=_BASE + timedelta(days=dte),  # distinct expiry per DTE
         strike=strike,
         dte=dte,
         delta=delta,
@@ -53,9 +52,18 @@ def test_select_put_applies_gates():
     crit = ScreenCriteria()  # min_oi=100, max_spread=0.10, max_abs_delta=0.30, dte 30-45
     assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=50)]), crit) is None      # low OI
     assert select_put(_chain([_put(90, -0.20, 40, 1.5, spread=0.5)]), crit) is None  # wide spread
-    assert select_put(_chain([_put(90, -0.40, 40, 1.5)]), crit) is None             # |delta|>0.30
-    assert select_put(_chain([_put(90, -0.20, 20, 1.5)]), crit) is None             # DTE<30
+    assert select_put(_chain([_put(90, -0.40, 40, 1.5)]), crit) is None  # |delta|>0.30
+    assert select_put(_chain([_put(90, -0.20, 10, 1.5)]), crit) is None  # DTE below window
     assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # bid 0 = unsellable
+
+
+def test_select_put_prefers_in_band_then_nearest_monthly():
+    crit = ScreenCriteria()  # target band 30-45, dte_tolerance 10 -> window 20-55
+    # in-band (35 DTE) wins over an out-of-band 25-DTE even with a richer raw yield
+    both = _chain([_put(90, -0.20, 25, 3.0), _put(90, -0.20, 35, 1.0)])
+    assert select_put(both, crit).dte == 35
+    # monthly-only: nothing in 30-45 -> nearest monthly within tolerance is taken
+    assert select_put(_chain([_put(90, -0.20, 25, 1.5)]), crit).dte == 25
 
 
 def test_rank_orders_by_yield():

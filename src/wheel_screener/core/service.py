@@ -41,8 +41,10 @@ class ScreenerService:
         survivors = self.screen_fundamentals(criteria, today)
         filt = ChainFilter(
             option_type=OptionType.PUT,
-            min_dte=criteria.min_dte,
-            max_dte=criteria.max_dte,
+            # pull a padded window so monthly-only names (no expiry exactly in [min,max])
+            # still surface their nearest monthly; select_put prefers in-band expiries.
+            min_dte=max(criteria.min_dte - criteria.dte_tolerance, 1),
+            max_dte=criteria.max_dte + criteria.dte_tolerance,
             min_open_interest=criteria.min_open_interest,
             target_delta=criteria.target_delta,
         )

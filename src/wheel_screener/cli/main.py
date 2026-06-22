@@ -41,7 +41,7 @@ def _write_csv(names: list[Underlying], path: str) -> None:
 def screen(
     min_price: float = typer.Option(20.0, help="Minimum share price."),
     max_price: float = typer.Option(200.0, help="Maximum share price."),
-    min_market_cap: float = typer.Option(2_000_000_000.0, help="Minimum market cap."),
+    min_market_cap: float = typer.Option(0.0, help="Minimum market cap (0 = off)."),
     top_n: int = typer.Option(50, help="Keep the top N by fundamental rank."),
     source: str = typer.Option("local", help="Source: 'local' (bulk CSVs) or 'live' (FMP)."),
     output: str = typer.Option("candidates.csv", help="CSV output path."),
@@ -118,8 +118,8 @@ def auth_login() -> None:
 def candidates(
     min_price: float = typer.Option(20.0, help="Minimum share price."),
     max_price: float = typer.Option(200.0, help="Maximum share price."),
-    min_market_cap: float = typer.Option(2_000_000_000.0, help="Minimum market cap."),
-    top_n: int = typer.Option(50, help="Fundamental survivors to pull chains for."),
+    min_market_cap: float = typer.Option(0.0, help="Minimum market cap (0 = off)."),
+    top_n: int = typer.Option(250, help="Fundamental survivors to pull chains for."),
     min_yield: float = typer.Option(0.0, help="Drop candidates below this annualized yield."),
     output: str = typer.Option("candidates.csv", help="CSV output path."),
 ) -> None:

@@ -38,16 +38,19 @@ def put_yield(c: OptionContract) -> float | None:
 def select_put(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> OptionContract | None:
     """Best cash-secured put for this underlying, or None if nothing qualifies.
 
-    Gates: PUT, has delta, DTE in [min,max], |delta| <= max_abs_delta, open interest >=
-    min, a real sellable bid (bid > 0), and a computable bid/ask spread within the limit.
-    Among the per-expiry nearest-to-target-delta puts, pick the highest annualized yield.
+    Gates: PUT, has delta, |delta| <= max_abs_delta, open interest >= min, a real sellable
+    bid (bid > 0), and a computable bid/ask spread within the limit. DTE in [min,max] is a
+    *target*: expiries within ±dte_tolerance are eligible, but in-band expiries are
+    preferred; only if none land in-band do we fall back to the nearest monthly. Among the
+    chosen expiries' per-expiry nearest-to-target-delta puts, pick the highest yield.
     """
+    lo, hi, tol = criteria.min_dte, criteria.max_dte, criteria.dte_tolerance
     eligible = [
         c
         for c in snapshot.contracts
         if c.option_type == OptionType.PUT
         and c.delta is not None
-        and criteria.min_dte <= c.dte <= criteria.max_dte
+        and (lo - tol) <= c.dte <= (hi + tol)
         and abs(c.delta) <= criteria.max_abs_delta
         and (c.open_interest or 0) >= criteria.min_open_interest
         and c.bid is not None
@@ -68,4 +71,6 @@ def select_put(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> OptionContr
     priced = [c for c in best_per_expiry.values() if put_yield(c) is not None]
     if not priced:
         return None
-    return max(priced, key=lambda c: put_yield(c) or 0.0)
+    in_band = [c for c in priced if lo <= c.dte <= hi]
+    pool = in_band if in_band else priced  # prefer 30-45; else the nearest monthly
+    return max(pool, key=lambda c: put_yield(c) or 0.0)
