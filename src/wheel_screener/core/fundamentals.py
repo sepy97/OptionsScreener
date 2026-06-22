@@ -14,8 +14,8 @@ Flow (the cross-sectional parts are pure given a list of Underlyings):
                           net-debt/EBITDA when EBITDA<=0; compute the DCF gap)
   gate_reasons          — hard never-trade kills (negative equity, loss-maker, excess
                           leverage, illiquid, insufficient coverage)
-  rank_by_fundamentals  — within-sector percentile per metric -> Value/Quality/Safety
-                          factors -> weighted composite (durability tilt by default)
+  rank_by_fundamentals  — within-sector percentile per metric -> valuation/efficiency/
+                          sustainability factors -> weighted composite (durability tilt)
 """
 
 from __future__ import annotations
@@ -31,18 +31,19 @@ from wheel_screener.core.models import (
 )
 
 # Default factor weights: tilt to durability — the wheel's real risk is being assigned
-# and holding a value trap / balance-sheet blowup, so Quality+Safety outweigh cheapness.
-DURABILITY_TILT = {"value": 0.20, "quality": 0.45, "safety": 0.35}
+# and holding a value trap / balance-sheet blowup, so efficiency + sustainability outweigh
+# cheapness. Factors use fundamental-analysis vocabulary (cf. pythonBot categories).
+DURABILITY_TILT = {"valuation": 0.20, "efficiency": 0.45, "sustainability": 0.35}
 
-# factor -> (sector_neutral?, [(metric, orientation)]). Value is ranked universe-wide so
-# absolute cheapness survives; Quality/Safety are sector-neutral (peer-relative).
+# factor -> (sector_neutral?, [(metric, orientation)]). Valuation is ranked universe-wide so
+# absolute cheapness survives; efficiency/sustainability are sector-neutral (peer-relative).
 _FACTORS: dict[str, tuple[bool, list[tuple[str, str]]]] = {
-    "value": (
+    "valuation": (
         False,
         [("pe", "low"), ("ps", "low"), ("pb", "low"), ("peg", "low"), ("dcf_gap", "low")],
     ),
-    "quality": (True, [("roe", "high"), ("roa", "high"), ("roi", "high"), ("ros", "high")]),
-    "safety": (True, [
+    "efficiency": (True, [("roe", "high"), ("roa", "high"), ("roi", "high"), ("ros", "high")]),
+    "sustainability": (True, [
         ("debt_to_equity", "low"),
         ("net_debt_to_ebitda", "low"),
         ("current_ratio", "high"),
@@ -110,8 +111,8 @@ def gate_reasons(metrics: FundamentalMetrics | None, criteria: ScreenCriteria) -
         and metrics.net_debt_to_ebitda > criteria.max_leverage
     ):
         reasons.append("excess_leverage")
-    if metrics.current_ratio is not None and metrics.current_ratio < 1.0:
-        reasons.append("illiquid")
+    # NOTE: current_ratio is intentionally NOT a hard gate — many strong firms (WMT, CSCO)
+    # run current_ratio < 1; it stays a Safety *ranking* factor instead.
     present = sum(1 for k in _CORE_METRICS if getattr(metrics, k) is not None)
     if present < criteria.min_metrics_present:
         reasons.append("insufficient_data")

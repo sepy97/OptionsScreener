@@ -20,6 +20,11 @@ class SchwabSettings(BaseModel):
 class FmpSettings(BaseModel):
     api_key: SecretStr = SecretStr("")
     base_url: str = "https://financialmodelingprep.com/stable"
+    calls_per_minute: int = 250  # client-side throttle (Starter ~300/min; Free is far lower)
+    # persistent HTTP cache (hishel): fundamentals change slowly, so a ~1-day TTL slashes calls
+    cache_enabled: bool = True
+    cache_dir: str = ".cache/fmp"
+    cache_ttl_seconds: int = 86_400
 
 
 class IvRankSettings(BaseModel):
@@ -39,3 +44,7 @@ class Settings(BaseSettings):
     schwab: SchwabSettings = Field(default_factory=SchwabSettings)
     fmp: FmpSettings = Field(default_factory=FmpSettings)
     iv_rank: IvRankSettings = Field(default_factory=IvRankSettings)
+
+    # fundamentals source: "local" reads the bulk CSV store; "live" hits FMP per-symbol
+    fundamentals_source: str = "local"
+    data_dir: str = "data/fundamentals"

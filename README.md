@@ -1,7 +1,7 @@
 # wheel-screener
 
 A cash-secured-put / wheel options screener. Ranks a stock universe on **fundamentals** (FMP —
-valuation, efficiency/returns, liquidity), pulls option chains with greeks/IV for the best
+valuation, efficiency, sustainability), pulls option chains with greeks/IV for the best
 names (Schwab), selects the put nearest **−0.20 delta** at **30–45 DTE**, and ranks the shortlist
 by **annualized yield** (per-contract IV shown as a column; an earnings blackout removes event-risk
 names). Output is a list of **candidates to verify**, not signals.

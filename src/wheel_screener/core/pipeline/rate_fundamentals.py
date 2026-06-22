@@ -72,13 +72,31 @@ def rate_and_rank(
     criteria: ScreenCriteria,
     today: date,
 ) -> list[Underlying]:
-    """Fetch fundamentals + earnings for the universe, then ``select_top``.
+    """Two-phase: cheap bulk pre-rank over the whole universe, then a deep fetch for the
+    pre-rank survivors only (keeps the expensive per-name calls bounded).
 
-    TODO(M1): add the cheap TTM-bulk pre-rank to trim the universe before the deep
-    ``fetch_metrics`` call, to stay inside FMP rate limits.
+    When the bulk endpoints aren't in the FMP subscription (lower tiers), fall back to a
+    market-cap-capped deep fetch of ``universe_limit`` names.
     """
-    metrics = provider.fetch_metrics([u.symbol for u in universe])
-    for u in universe:
-        u.metrics = metrics.get(u.symbol)
+    bulk = provider.bulk_metrics([u.symbol for u in universe])
+    if bulk:
+        for u in universe:
+            u.metrics = bulk.get(u.symbol)
+        prelim = rank_by_fundamentals(
+            [u for u in universe if u.metrics is not None],
+            criteria.factor_weights,
+            criteria.stock_profile,
+        )
+        keep = prelim[: criteria.prerank_keep]
+    else:
+        keep = sorted(universe, key=lambda u: u.market_cap or 0.0, reverse=True)[
+            : criteria.universe_limit
+        ]
+
+    # Deep fetch (sign inputs + DCF) for survivors, then gate + final rank.
+    deep = provider.fetch_metrics([u.symbol for u in keep])
+    for u in keep:
+        if u.symbol in deep:
+            u.metrics = deep[u.symbol]
     earnings = provider.earnings_calendar(today, today + timedelta(days=criteria.max_dte))
-    return select_top(universe, criteria, earnings, today)
+    return select_top(keep, criteria, earnings, today)

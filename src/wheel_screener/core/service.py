@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 
-from wheel_screener.core.models import CandidateResult, ScreenCriteria
+from wheel_screener.core.models import CandidateResult, ScreenCriteria, Underlying
+from wheel_screener.core.pipeline.rate_fundamentals import rate_and_rank
+from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
 
 
@@ -12,17 +15,23 @@ from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
 class ScreenerService:
     """Use-case entry point. Wires the pipeline over injected ports.
 
-    Both delivery layers (CLI now, FastAPI later) call ``run_screen`` — no
-    pipeline logic is duplicated anywhere else.
+    Both delivery layers (CLI now, FastAPI later) call these methods — no pipeline
+    logic is duplicated anywhere else.
     """
 
     fundamentals: FundamentalsProvider
     chains: ChainProvider
 
-    def run_screen(self, criteria: ScreenCriteria) -> list[CandidateResult]:
-        """Run universe -> fundamental rating -> chain pull -> strike select -> rank.
+    def screen_fundamentals(
+        self, criteria: ScreenCriteria, today: date
+    ) -> list[Underlying]:
+        """M1: universe -> fundamental gate + cross-sectional rank -> ranked names."""
+        universe = build_universe(self.fundamentals, criteria)
+        return rate_and_rank(self.fundamentals, universe, criteria, today)
 
-        Wiring completes incrementally as the stages land (M1 universe+fundamentals
-        -> M2 chains+contract selection -> M3 ranking/output).
+    def run_screen(self, criteria: ScreenCriteria) -> list[CandidateResult]:
+        """Full pipeline (adds chain pull -> strike select -> yield rank).
+
+        TODO(M2): build on ``screen_fundamentals`` with the Schwab chain stages.
         """
-        raise NotImplementedError("Pipeline wiring completes across M1-M3")
+        raise NotImplementedError("Full candidate pipeline completes in M2")

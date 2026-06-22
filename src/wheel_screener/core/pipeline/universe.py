@@ -7,8 +7,9 @@ from wheel_screener.core.ports import FundamentalsProvider
 
 
 def build_universe(provider: FundamentalsProvider, criteria: ScreenCriteria) -> list[Underlying]:
-    """Return the price/market-cap/exchange-filtered universe (FMP company-screener).
+    """Return the full price/market-cap/exchange-filtered universe (FMP company-screener).
 
-    TODO(M1): delegate to the FMP adapter's ``screen_universe``.
+    No truncation here — stage 2 either bulk-pre-ranks the whole universe or (when bulk
+    is unavailable) caps the deep fetch by market cap.
     """
-    raise NotImplementedError("Stage 1 (universe) lands in M1")
+    return provider.screen_universe(criteria)

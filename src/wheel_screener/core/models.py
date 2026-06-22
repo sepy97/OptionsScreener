@@ -41,6 +41,8 @@ class ScreenCriteria(BaseModel):
     max_price: float = 200.0
     min_market_cap: float = 2_000_000_000.0
     exchanges: list[str] = Field(default_factory=lambda: ["nasdaq", "nyse"])
+    prerank_keep: int = 150  # names kept after the cheap bulk pre-rank, for the deep fetch
+    universe_limit: int = 50  # deep-fetch cap (by market cap) when bulk pre-rank is unavailable
     # fundamentals
     stock_profile: StockProfile = StockProfile.STALWART
     top_n: int = 50  # keep the top N (by cross-sectional rank) for the chain pull
@@ -49,7 +51,7 @@ class ScreenCriteria(BaseModel):
     max_leverage: float = 4.0  # hard gate: net-debt/EBITDA ceiling
     min_metrics_present: int = 6  # coverage gate: min core metrics required
     factor_weights: dict[str, float] = Field(
-        default_factory=lambda: {"value": 0.20, "quality": 0.45, "safety": 0.35}
+        default_factory=lambda: {"valuation": 0.20, "efficiency": 0.45, "sustainability": 0.35}
     )
     # options target
     target_delta: float = -0.20

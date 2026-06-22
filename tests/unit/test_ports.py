@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
+from wheel_screener.adapters.local.provider import LocalFundamentalsProvider
 from wheel_screener.adapters.schwab.provider import SchwabChainProvider
 from wheel_screener.composition import build_service
 from wheel_screener.config import FmpSettings, SchwabSettings, Settings
@@ -10,6 +11,7 @@ from wheel_screener.core.service import ScreenerService
 
 def test_adapters_satisfy_ports() -> None:
     assert isinstance(FmpFundamentalsProvider(FmpSettings()), FundamentalsProvider)
+    assert isinstance(LocalFundamentalsProvider("data/fundamentals"), FundamentalsProvider)
     assert isinstance(SchwabChainProvider(SchwabSettings()), ChainProvider)
 
 
@@ -19,8 +21,13 @@ def test_schwab_capabilities() -> None:
     assert caps.supports_batch_underlyings is False
 
 
-def test_build_service_default_wiring() -> None:
-    service = build_service(Settings())
+def test_build_service_local_is_default() -> None:
+    service = build_service(Settings())  # default fundamentals_source == "local"
     assert isinstance(service, ScreenerService)
-    assert isinstance(service.fundamentals, FmpFundamentalsProvider)
+    assert isinstance(service.fundamentals, LocalFundamentalsProvider)
     assert isinstance(service.chains, SchwabChainProvider)
+
+
+def test_build_service_live_source() -> None:
+    service = build_service(Settings(fundamentals_source="live"))
+    assert isinstance(service.fundamentals, FmpFundamentalsProvider)

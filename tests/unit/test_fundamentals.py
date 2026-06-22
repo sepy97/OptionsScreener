@@ -73,8 +73,9 @@ def test_gate_excess_leverage() -> None:
     assert "excess_leverage" in reasons
 
 
-def test_gate_illiquid() -> None:
-    assert "illiquid" in gate_reasons(_healthy(current_ratio=0.8), ScreenCriteria())
+def test_low_current_ratio_does_not_hard_gate() -> None:
+    # current_ratio<1 is a Safety ranking signal, not a never-trade gate (e.g. WMT/CSCO)
+    assert gate_reasons(_healthy(current_ratio=0.8), ScreenCriteria()) == []
 
 
 def test_gate_insufficient_data() -> None:
@@ -100,7 +101,7 @@ def test_rank_is_monotonic() -> None:
 
 def test_rank_sets_factor_breakdown() -> None:
     ranked = rank_by_fundamentals([_u("A"), _u("B", roe=0.05)])
-    assert set(ranked[0].rating.category_scores) == {"value", "quality", "safety"}
+    assert set(ranked[0].rating.category_scores) == {"valuation", "efficiency", "sustainability"}
 
 
 def test_rank_is_deterministic() -> None:
