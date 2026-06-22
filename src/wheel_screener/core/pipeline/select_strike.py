@@ -38,9 +38,9 @@ def put_yield(c: OptionContract) -> float | None:
 def select_put(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> OptionContract | None:
     """Best cash-secured put for this underlying, or None if nothing qualifies.
 
-    Gates: PUT, has delta, DTE in [min,max], |delta| <= max_abs_delta, open interest and
-    bid/ask spread within limits. Among the per-expiry nearest-to-target-delta puts, pick
-    the highest annualized yield.
+    Gates: PUT, has delta, DTE in [min,max], |delta| <= max_abs_delta, open interest >=
+    min, a real sellable bid (bid > 0), and a computable bid/ask spread within the limit.
+    Among the per-expiry nearest-to-target-delta puts, pick the highest annualized yield.
     """
     eligible = [
         c
@@ -50,7 +50,10 @@ def select_put(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> OptionContr
         and criteria.min_dte <= c.dte <= criteria.max_dte
         and abs(c.delta) <= criteria.max_abs_delta
         and (c.open_interest or 0) >= criteria.min_open_interest
-        and (c.spread_pct is None or c.spread_pct <= criteria.max_bid_ask_spread_pct)
+        and c.bid is not None
+        and c.bid > 0  # must be actually sellable (a 0 bid = no buyer)
+        and c.spread_pct is not None
+        and c.spread_pct <= criteria.max_bid_ask_spread_pct
     ]
     if not eligible:
         return None

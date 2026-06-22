@@ -55,6 +55,7 @@ def test_select_put_applies_gates():
     assert select_put(_chain([_put(90, -0.20, 40, 1.5, spread=0.5)]), crit) is None  # wide spread
     assert select_put(_chain([_put(90, -0.40, 40, 1.5)]), crit) is None             # |delta|>0.30
     assert select_put(_chain([_put(90, -0.20, 20, 1.5)]), crit) is None             # DTE<30
+    assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # bid 0 = unsellable
 
 
 def test_rank_orders_by_yield():
