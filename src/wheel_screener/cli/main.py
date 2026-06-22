@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 from datetime import date
+from pathlib import Path
 
 import typer
 
@@ -42,9 +43,7 @@ def screen(
     max_price: float = typer.Option(200.0, help="Maximum share price."),
     min_market_cap: float = typer.Option(2_000_000_000.0, help="Minimum market cap."),
     top_n: int = typer.Option(50, help="Keep the top N by fundamental rank."),
-    universe_limit: int = typer.Option(
-        50, help="Deep-fetch cap (by market cap) when bulk pre-rank is unavailable."
-    ),
+    source: str = typer.Option("local", help="Source: 'local' (bulk CSVs) or 'live' (FMP)."),
     output: str = typer.Option("candidates.csv", help="CSV output path."),
 ) -> None:
     """Rank the universe on fundamentals and write the ranked names to CSV.
@@ -52,16 +51,27 @@ def screen(
     (M1 — fundamentals only; option selection by yield arrives in M2.)
     """
     settings = Settings()
-    if not settings.fmp.api_key.get_secret_value():
-        typer.echo("error: set FMP__API_KEY in your environment or .env first.")
-        raise typer.Exit(code=1)
+    settings.fundamentals_source = source
+
+    if source == "live":
+        if not settings.fmp.api_key.get_secret_value():
+            typer.echo("error: --source live needs FMP__API_KEY in your environment or .env.")
+            raise typer.Exit(code=1)
+        prerank_keep = 150  # bound the expensive per-symbol deep fetch
+    else:  # local
+        if not list(Path(settings.data_dir).glob("profile-bulk_part*.csv")):
+            typer.echo(f"error: no bulk store in {settings.data_dir}; run tools/fmp_bulk_import.py")
+            raise typer.Exit(code=1)
+        if not settings.fmp.api_key.get_secret_value():
+            typer.echo("note: no FMP__API_KEY → earnings blackout disabled.")
+        prerank_keep = 1_000_000  # local is free; rank the whole filtered universe
 
     criteria = ScreenCriteria(
         min_price=min_price,
         max_price=max_price,
         min_market_cap=min_market_cap,
         top_n=top_n,
-        universe_limit=universe_limit,
+        prerank_keep=prerank_keep,
     )
     ranked = build_service(settings).screen_fundamentals(criteria, date.today())
     _write_csv(ranked, output)

@@ -81,7 +81,7 @@ def fetch_to(url: str, dest: Path, label: str, retries: int = 6, base_wait: int 
             tmp.unlink(missing_ok=True)
             if e.code in RETRY_CODES and attempt < retries:
                 wait = base_wait * (attempt + 1)
-                print(f"   . {label}: HTTP {e.code}; backing off {wait}s (retry {attempt + 1}/{retries})")
+                print(f"   . {label}: HTTP {e.code}; retry {attempt + 1}/{retries} in {wait}s")
                 time.sleep(wait)
                 continue
             body = e.read()[:120].decode("utf-8", "replace").replace("\n", " ")
@@ -102,7 +102,7 @@ def _is_empty_csv(path: Path) -> bool:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", action="append", required=True, help="output dir (repeatable)")
-    ap.add_argument("--years", default="2015-2025", help="inclusive fiscal-year range, e.g. 2015-2025")
+    ap.add_argument("--years", default="2015-2025", help="inclusive FY range e.g. 2015-2025")
     ap.add_argument("--period", default="annual", choices=["annual", "quarter"])
     ap.add_argument("--api-key")
     ap.add_argument("--env", default=".env")

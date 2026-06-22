@@ -44,3 +44,7 @@ class Settings(BaseSettings):
     schwab: SchwabSettings = Field(default_factory=SchwabSettings)
     fmp: FmpSettings = Field(default_factory=FmpSettings)
     iv_rank: IvRankSettings = Field(default_factory=IvRankSettings)
+
+    # fundamentals source: "local" reads the bulk CSV store; "live" hits FMP per-symbol
+    fundamentals_source: str = "local"
+    data_dir: str = "data/fundamentals"
