@@ -1,4 +1,4 @@
-"""Stage 2 — pull 30-45 DTE option chains for the pre-filter survivors."""
+"""Stage 3 — pull 30-45 DTE option chains for the fundamental survivors."""
 
 from __future__ import annotations
 
@@ -9,9 +9,14 @@ from wheel_screener.core.ports import ChainProvider
 def pull_chains(
     provider: ChainProvider, survivors: list[Underlying], filt: ChainFilter
 ) -> dict[str, ChainSnapshot]:
-    """Fetch chains for survivors only, throttled within the provider's limits.
+    """Fetch a chain per survivor (one request per underlying; the adapter throttles).
 
-    TODO(M2): bounded-concurrency fan-out via the Schwab adapter (one request per
-    underlying, ~120 req/min), honoring ``provider.capabilities()``.
+    A symbol whose chain can't be fetched is simply omitted.
     """
-    raise NotImplementedError("Stage 2 (chain pull) lands in M2")
+    out: dict[str, ChainSnapshot] = {}
+    for u in survivors:
+        try:
+            out[u.symbol] = provider.get_chain(u.symbol, filt)
+        except Exception:  # noqa: BLE001 - one bad symbol shouldn't sink the whole scan
+            continue
+    return out

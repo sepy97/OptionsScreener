@@ -39,7 +39,7 @@ class ScreenCriteria(BaseModel):
     # universe / price
     min_price: float = 20.0
     max_price: float = 200.0
-    min_market_cap: float = 2_000_000_000.0
+    min_market_cap: float = 0.0  # off by default — option open interest is the real liquidity gate
     exchanges: list[str] = Field(default_factory=lambda: ["nasdaq", "nyse"])
     prerank_keep: int = 150  # names kept after the cheap bulk pre-rank, for the deep fetch
     universe_limit: int = 50  # deep-fetch cap (by market cap) when bulk pre-rank is unavailable
@@ -58,6 +58,7 @@ class ScreenCriteria(BaseModel):
     max_abs_delta: float = 0.30
     min_dte: int = 30
     max_dte: int = 45
+    dte_tolerance: int = 10  # accept nearest expiry within ±tol when none lands in [min,max]
     # ranking / liquidity gates
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
     min_open_interest: int = 100

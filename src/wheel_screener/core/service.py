@@ -5,8 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-from wheel_screener.core.models import CandidateResult, ScreenCriteria, Underlying
+from wheel_screener.core.models import (
+    CandidateResult,
+    ChainFilter,
+    OptionType,
+    ScreenCriteria,
+    Underlying,
+)
+from wheel_screener.core.pipeline.pull_chains import pull_chains
+from wheel_screener.core.pipeline.rank import rank
 from wheel_screener.core.pipeline.rate_fundamentals import rate_and_rank
+from wheel_screener.core.pipeline.select_strike import put_yield, select_put
 from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
 
@@ -22,16 +31,49 @@ class ScreenerService:
     fundamentals: FundamentalsProvider
     chains: ChainProvider
 
-    def screen_fundamentals(
-        self, criteria: ScreenCriteria, today: date
-    ) -> list[Underlying]:
-        """M1: universe -> fundamental gate + cross-sectional rank -> ranked names."""
+    def screen_fundamentals(self, criteria: ScreenCriteria, today: date) -> list[Underlying]:
+        """Universe -> fundamental gate + cross-sectional rank -> ranked names."""
         universe = build_universe(self.fundamentals, criteria)
         return rate_and_rank(self.fundamentals, universe, criteria, today)
 
-    def run_screen(self, criteria: ScreenCriteria) -> list[CandidateResult]:
-        """Full pipeline (adds chain pull -> strike select -> yield rank).
+    def run_screen(self, criteria: ScreenCriteria, today: date) -> list[CandidateResult]:
+        """Full pipeline: fundamentals -> chain pull -> ~target-delta put -> yield rank."""
+        survivors = self.screen_fundamentals(criteria, today)
+        filt = ChainFilter(
+            option_type=OptionType.PUT,
+            # pull a padded window so monthly-only names (no expiry exactly in [min,max])
+            # still surface their nearest monthly; select_put prefers in-band expiries.
+            min_dte=max(criteria.min_dte - criteria.dte_tolerance, 1),
+            max_dte=criteria.max_dte + criteria.dte_tolerance,
+            min_open_interest=criteria.min_open_interest,
+            target_delta=criteria.target_delta,
+        )
+        chains = pull_chains(self.chains, survivors, filt)
 
-        TODO(M2): build on ``screen_fundamentals`` with the Schwab chain stages.
-        """
-        raise NotImplementedError("Full candidate pipeline completes in M2")
+        candidates: list[CandidateResult] = []
+        for u in survivors:
+            snapshot = chains.get(u.symbol)
+            if snapshot is None:
+                continue
+            put = select_put(snapshot, criteria)
+            if put is None:
+                continue
+            premium = put.mid if put.mid else put.bid
+            candidates.append(
+                CandidateResult(
+                    symbol=u.symbol,
+                    contract=put,
+                    fundamental_score=u.fundamental_score,
+                    annualized_yield=put_yield(put),
+                    premium=premium,
+                    collateral=put.strike * 100,
+                    pct_of_high=u.pct_of_high,
+                    next_earnings=u.next_earnings,
+                    has_weeklys=u.has_weeklys,
+                )
+            )
+
+        if criteria.min_annualized_yield is not None:
+            floor = criteria.min_annualized_yield
+            candidates = [c for c in candidates if (c.annualized_yield or 0.0) >= floor]
+        return rank(candidates)
