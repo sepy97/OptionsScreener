@@ -1510,6 +1510,7 @@ dependencies = [
     { name = "polars" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "schwab-py" },
     { name = "tenacity" },
     { name = "typer" },
 ]
@@ -1524,9 +1525,6 @@ fmp = [
 ]
 greeks = [
     { name = "py-vollib-vectorized" },
-]
-schwab = [
-    { name = "schwab-py" },
 ]
 
 [package.dev-dependencies]
@@ -1546,12 +1544,12 @@ requires-dist = [
     { name = "py-vollib-vectorized", marker = "extra == 'greeks'", specifier = ">=0.1.1" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pydantic-settings", specifier = ">=2.3" },
-    { name = "schwab-py", marker = "extra == 'schwab'", specifier = ">=1.3" },
+    { name = "schwab-py", specifier = ">=1.5" },
     { name = "tenacity", specifier = ">=8.4" },
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.30" },
 ]
-provides-extras = ["schwab", "fmp", "greeks", "api"]
+provides-extras = ["fmp", "greeks", "api"]
 
 [package.metadata.requires-dev]
 dev = [
