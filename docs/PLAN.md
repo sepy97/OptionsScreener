@@ -61,13 +61,13 @@ chain pull; the user-facing sort is **yield**, and a human verifies. So the obje
    coverage (< `min_metrics_present`). Plus the earnings blackout. Lenient by design — gates protect
    recall into the funnel, they don't pick winners. (current_ratio is a Safety *ranking* factor, not
    a hard gate — verified live that <1 over-filters strong names like WMT/CSCO.)
-3. **Cross-sectional percentile** of survivors per metric, collapsed into three factors:
-   **Value** {PE, PS, PB, PEG, DCF-gap} (universe-wide so absolute cheapness survives),
-   **Quality** {ROE, ROA, ROI, ROS}, **Safety** {leverage + liquidity} (both sector-neutral, with a
-   universe-wide fallback for thin sectors).
-4. **Weighted composite** with a **durability tilt** (default Quality 0.45 / Safety 0.35 /
-   Value 0.20, DCF≈0): the wheel's real risk is being assigned and holding a value trap / blowup, so
-   durability beats cheapness. Weights are a config knob (`ScreenCriteria.factor_weights`;
+3. **Cross-sectional percentile** of survivors per metric, collapsed into three factors named in
+   fundamental-analysis terms: **valuation** {PE, PS, PB, PEG, DCF-gap} (universe-wide so absolute
+   cheapness survives), **efficiency** {ROE, ROA, ROIC, net margin}, **sustainability**
+   {leverage + liquidity} (both sector-neutral, with a universe-wide fallback for thin sectors).
+4. **Weighted composite** with a **durability tilt** (default efficiency 0.45 / sustainability 0.35 /
+   valuation 0.20, DCF≈0): the wheel's real risk is being assigned and holding a value trap / blowup,
+   so durability beats cheapness. Weights are a config knob (`ScreenCriteria.factor_weights`;
    equal-weight is one flag away).
 5. **Median-impute** residual missing metrics to the 0.5 (neutral) percentile, never 0.
 6. **Truncate** to `top_n` (optional per-sector cap to bound assignment clustering) → chain pull.

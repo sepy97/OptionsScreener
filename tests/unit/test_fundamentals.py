@@ -101,7 +101,7 @@ def test_rank_is_monotonic() -> None:
 
 def test_rank_sets_factor_breakdown() -> None:
     ranked = rank_by_fundamentals([_u("A"), _u("B", roe=0.05)])
-    assert set(ranked[0].rating.category_scores) == {"value", "quality", "safety"}
+    assert set(ranked[0].rating.category_scores) == {"valuation", "efficiency", "sustainability"}
 
 
 def test_rank_is_deterministic() -> None:

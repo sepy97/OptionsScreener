@@ -51,7 +51,7 @@ class ScreenCriteria(BaseModel):
     max_leverage: float = 4.0  # hard gate: net-debt/EBITDA ceiling
     min_metrics_present: int = 6  # coverage gate: min core metrics required
     factor_weights: dict[str, float] = Field(
-        default_factory=lambda: {"value": 0.20, "quality": 0.45, "safety": 0.35}
+        default_factory=lambda: {"valuation": 0.20, "efficiency": 0.45, "sustainability": 0.35}
     )
     # options target
     target_delta: float = -0.20

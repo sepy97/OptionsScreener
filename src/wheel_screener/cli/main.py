@@ -23,16 +23,16 @@ def _write_csv(names: list[Underlying], path: str) -> None:
         writer = csv.writer(f)
         writer.writerow(
             ["rank", "symbol", "sector", "price", "market_cap",
-             "fundamental_score", "value", "quality", "safety"]
+             "fundamental_score", "valuation", "efficiency", "sustainability"]
         )
         for i, u in enumerate(names, start=1):
             cats = u.rating.category_scores if u.rating else {}
             writer.writerow([
                 i, u.symbol, u.sector or "", u.price or "", u.market_cap or "",
                 round(u.fundamental_score or 0.0, 4),
-                round(cats.get("value", 0.0), 4),
-                round(cats.get("quality", 0.0), 4),
-                round(cats.get("safety", 0.0), 4),
+                round(cats.get("valuation", 0.0), 4),
+                round(cats.get("efficiency", 0.0), 4),
+                round(cats.get("sustainability", 0.0), 4),
             ])
 
 
