@@ -6,6 +6,7 @@ per-run in-memory cache to dedupe identical GETs within a single screen.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections import deque
 from collections.abc import Callable
@@ -28,17 +29,19 @@ class RateLimiter:
         self._monotonic = monotonic
         self._sleep = sleep
         self._calls: deque[float] = deque()
+        self._lock = threading.Lock()  # concurrent chain pulls share one limiter
 
     def acquire(self) -> None:
         if self._max <= 0:
             return
-        self._evict(self._monotonic())
-        if len(self._calls) >= self._max:
-            wait = 60.0 - (self._monotonic() - self._calls[0])
-            if wait > 0:
-                self._sleep(wait)
+        with self._lock:
             self._evict(self._monotonic())
-        self._calls.append(self._monotonic())
+            if len(self._calls) >= self._max:
+                wait = 60.0 - (self._monotonic() - self._calls[0])
+                if wait > 0:
+                    self._sleep(wait)
+                self._evict(self._monotonic())
+            self._calls.append(self._monotonic())
 
     def _evict(self, now: float) -> None:
         while self._calls and now - self._calls[0] >= 60.0:

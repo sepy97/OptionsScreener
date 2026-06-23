@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from wheel_screener.config import SchwabSettings
+from wheel_screener.core.errors import AuthExpiredError
 
 
 def _creds(s: SchwabSettings) -> tuple[str, str, str, str]:
@@ -33,5 +34,5 @@ def load_client(settings: SchwabSettings):
 
     client_id, secret, _callback, token_path = _creds(settings)
     if not Path(token_path).expanduser().exists():
-        raise RuntimeError(f"no Schwab token at {token_path}; run `wheel-screener auth-login`")
+        raise AuthExpiredError(f"no Schwab token at {token_path}; run `wheel-screener auth-login`")
     return client_from_token_file(token_path, client_id, secret)

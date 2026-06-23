@@ -16,6 +16,9 @@ class SchwabSettings(BaseModel):
     callback_url: str = "https://127.0.0.1:8182"
     token_path: str = ".secrets/schwab_token.json"
     calls_per_minute: int = 110  # client-side throttle (Schwab ~120/min)
+    chain_cache_enabled: bool = True
+    chain_cache_dir: str = ".cache/schwab"
+    chain_cache_ttl_seconds: int = 300  # short TTL: quotes drift, but re-screens stay fast
 
 
 class FmpSettings(BaseModel):

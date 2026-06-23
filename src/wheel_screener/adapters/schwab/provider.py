@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+from wheel_screener.adapters.cache import DiskCache
+from wheel_screener.adapters.errors import map_http_error
 from wheel_screener.adapters.http import RateLimiter
 from wheel_screener.adapters.schwab.mapper import parse_chain
 from wheel_screener.config import SchwabSettings
+from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
 from wheel_screener.core.models import ChainFilter, ChainSnapshot, ProviderCaps
 
 
@@ -18,6 +21,11 @@ class SchwabChainProvider:
         self._settings = settings
         self._client = None
         self._limiter = RateLimiter(settings.calls_per_minute)
+        self._cache: DiskCache | None = (
+            DiskCache(settings.chain_cache_dir, settings.chain_cache_ttl_seconds)
+            if settings.chain_cache_enabled
+            else None
+        )
 
     def _get_client(self):
         if self._client is None:
@@ -27,19 +35,41 @@ class SchwabChainProvider:
         return self._client
 
     def get_chain(self, symbol: str, filt: ChainFilter) -> ChainSnapshot:
+        import httpx
         from schwab.client import Client
 
-        self._limiter.acquire()
         today = date.today()
-        resp = self._get_client().get_option_chain(
-            symbol,
-            contract_type=Client.Options.ContractType.PUT,
-            from_date=today + timedelta(days=filt.min_dte or 0),
-            to_date=today + timedelta(days=filt.max_dte or 60),
-            strike_count=filt.strike_count or 50,
-        )
-        resp.raise_for_status()
-        return parse_chain(resp.json())
+        from_date = today + timedelta(days=filt.min_dte or 0)
+        to_date = today + timedelta(days=filt.max_dte or 60)
+        strike_count = filt.strike_count or 50
+        cache_key = f"chain:{symbol}:{from_date}:{to_date}:{strike_count}:PUT"
+
+        if self._cache is not None:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return parse_chain(cached)
+
+        self._limiter.acquire()
+        try:
+            resp = self._get_client().get_option_chain(
+                symbol,
+                contract_type=Client.Options.ContractType.PUT,
+                from_date=from_date,
+                to_date=to_date,
+                strike_count=strike_count,
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        except ProviderError:
+            raise  # e.g. AuthExpiredError from token load — never mask it
+        except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            raise map_http_error(e) from e
+        except Exception as e:  # vendor/authlib failure: surface as a provider problem
+            raise ProviderUnavailableError(f"schwab chain fetch failed for {symbol}: {e}") from e
+
+        if self._cache is not None:
+            self._cache.set(cache_key, payload)
+        return parse_chain(payload)
 
     def capabilities(self) -> ProviderCaps:
         return ProviderCaps(

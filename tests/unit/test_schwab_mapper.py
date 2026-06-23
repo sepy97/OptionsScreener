@@ -14,7 +14,7 @@ _PAYLOAD = {
         "2026-07-25:33": {
             "90.0": [{
                 "putCall": "PUT", "symbol": "AAA  260725P00090000", "strikePrice": 90.0,
-                "daysToExpiration": 33, "bid": 1.40, "ask": 1.50, "last": 1.45, "mark": 1.45,
+                "daysToExpiration": 33, "bid": 1.40, "ask": 1.50, "last": 1.45, "mark": 1.49,
                 "bidSize": 10, "askSize": 12, "totalVolume": 200, "openInterest": 800,
                 "delta": -0.20, "gamma": 0.03, "theta": -0.04, "vega": 0.10,
                 "volatility": 34.5, "rho": -0.01, "timeValue": 1.45,
@@ -42,7 +42,8 @@ def test_parse_chain_maps_fields_and_sentinels():
     assert p90.expiration == date(2026, 7, 25) and p90.dte == 33
     assert p90.delta == -0.20 and p90.open_interest == 800 and p90.bid == 1.40
     assert abs(p90.implied_volatility - 0.345) < 1e-9  # 34.5% -> 0.345 fraction
-    assert p90.mid == 1.45
+    # mid is the true midpoint (bid+ask)/2 == 1.45, NOT Schwab's "mark" (1.49, kept in raw)
+    assert p90.mid == 1.45 and p90.raw["mark"] == 1.49
 
     p85 = by_strike[85.0]
     assert p85.theta is None and p85.vega is None and p85.implied_volatility is None  # -999 -> None
