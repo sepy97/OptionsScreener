@@ -78,6 +78,20 @@ def test_fetch_metrics_maps_and_coalesces_latest_year(store: Path) -> None:
     assert fm.total_equity == 2.0e9
 
 
+def test_overlay_overrides_bulk_metrics(store: Path) -> None:
+    from wheel_screener.adapters.local.overlay import write_overlay
+    from wheel_screener.core.models import FundamentalMetrics
+
+    # bulk says GOOD.pe == 10; a fresh post-earnings refresh writes pe == 7.5
+    write_overlay(str(store), {"GOOD": FundamentalMetrics(pe=7.5, roe=0.30, fcf_yield=0.08)})
+    fm = LocalFundamentalsProvider(str(store)).fetch_metrics(["GOOD"])["GOOD"]
+    assert fm.pe == 7.5 and fm.roe == 0.30 and fm.fcf_yield == 0.08  # overlay wins over bulk
+
+
+def test_known_symbols(store: Path) -> None:
+    assert "GOOD" in LocalFundamentalsProvider(str(store)).known_symbols()
+
+
 def test_earnings_calendar_empty_without_provider(store: Path) -> None:
     p = LocalFundamentalsProvider(str(store))
     assert p.earnings_calendar(date(2026, 6, 22), date(2026, 8, 6)) == {}

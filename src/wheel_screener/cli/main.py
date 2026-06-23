@@ -127,6 +127,37 @@ def refresh_earnings(
     typer.echo(f"Wrote {len(calendar)} symbols' next earnings to {path}")
 
 
+@app.command("refresh-fundamentals")
+def refresh_fundamentals(
+    days: int = typer.Option(7, help="Refresh names that reported in the last N days."),
+) -> None:
+    """Re-fetch TTM fundamentals for names that just reported (per the FMP earnings calendar)
+    into the local overlay — a cheap incremental alternative to a full bulk reload."""
+    from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
+    from wheel_screener.adapters.local.overlay import write_overlay
+    from wheel_screener.adapters.local.provider import LocalFundamentalsProvider
+
+    settings = Settings()
+    if not settings.fmp.api_key.get_secret_value():
+        typer.echo("error: set FMP__API_KEY in .env first.")
+        raise typer.Exit(code=1)
+    if not list(Path(settings.data_dir).glob("profile-bulk_part*.csv")):
+        typer.echo(f"error: no bulk store in {settings.data_dir}; run tools/fmp_bulk_import.py")
+        raise typer.Exit(code=1)
+
+    today = date.today()
+    fmp = FmpFundamentalsProvider(settings.fmp)
+    reporters = fmp.earnings_calendar(today - timedelta(days=days), today)
+    targets = sorted(set(reporters) & LocalFundamentalsProvider(settings.data_dir).known_symbols())
+    if not targets:
+        typer.echo("no recent reporters found in the local store; nothing to refresh.")
+        return
+    typer.echo(f"Refreshing {len(targets)} reporters from the last {days}d…")
+    fresh = fmp.fetch_metrics(targets)
+    total = write_overlay(settings.data_dir, fresh)
+    typer.echo(f"Refreshed {len(fresh)} symbols into the overlay ({total} rows total).")
+
+
 @app.command("auth-login")
 def auth_login() -> None:
     """Run the Schwab OAuth login in your browser (refresh token expires every 7 days)."""

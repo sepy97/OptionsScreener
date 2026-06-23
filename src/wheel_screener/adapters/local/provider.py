@@ -14,6 +14,7 @@ from typing import Protocol
 
 import polars as pl
 
+from wheel_screener.adapters.local.overlay import read_overlay
 from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
 
 # FundamentalMetrics field -> source bulk column
@@ -55,6 +56,7 @@ class LocalFundamentalsProvider:
         self._earnings = earnings_provider
         self._profiles: pl.DataFrame | None = None
         self._metrics: pl.DataFrame | None = None  # one row per symbol, FundamentalMetrics columns
+        self._overlay: dict[str, FundamentalMetrics] | None = None  # fresh per-symbol refreshes
 
     # --- loading -------------------------------------------------------------
     def _read(self, name: str) -> pl.DataFrame:
@@ -162,13 +164,22 @@ class LocalFundamentalsProvider:
             if r["symbol"]
         ]
 
+    def known_symbols(self) -> set[str]:
+        """Every symbol in the bulk store (used by refresh-fundamentals to scope reporters)."""
+        self._ensure_loaded()
+        return set(self._profiles.get_column("symbol").to_list())
+
     def _metrics_for(self, symbols: list[str]) -> dict[str, FundamentalMetrics]:
         self._ensure_loaded()
+        if self._overlay is None:
+            self._overlay = read_overlay(str(self._dir))
         wanted = set(symbols)
         fields = set(FundamentalMetrics.model_fields)
         out: dict[str, FundamentalMetrics] = {}
         for r in self._metrics.filter(pl.col("symbol").is_in(wanted)).iter_rows(named=True):
             out[r["symbol"]] = FundamentalMetrics(**{k: v for k, v in r.items() if k in fields})
+        for sym in wanted & self._overlay.keys():
+            out[sym] = self._overlay[sym]  # fresh per-symbol refresh wins over the bulk snapshot
         return out
 
     def bulk_metrics(self, symbols: list[str]) -> dict[str, FundamentalMetrics]:
