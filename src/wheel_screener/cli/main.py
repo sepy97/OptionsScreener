@@ -83,7 +83,8 @@ def _write_candidates_csv(results, path: str) -> None:
         writer = csv.writer(f)
         writer.writerow([
             "rank", "symbol", "strike", "expiration", "dte", "delta", "iv", "bid",
-            "open_interest", "premium", "annualized_yield", "collateral", "fundamental_score",
+            "open_interest", "premium", "annualized_yield", "collateral",
+            "fundamental_score", "score",
         ])
         for i, r in enumerate(results, start=1):
             c = r.contract
@@ -97,6 +98,7 @@ def _write_candidates_csv(results, path: str) -> None:
                 round(r.annualized_yield, 4) if r.annualized_yield else "",
                 r.collateral or "",
                 round(r.fundamental_score, 4) if r.fundamental_score is not None else "",
+                round(r.score, 4) if r.score is not None else "",
             ])
 
 
@@ -121,9 +123,12 @@ def candidates(
     min_market_cap: float = typer.Option(0.0, help="Minimum market cap (0 = off)."),
     top_n: int = typer.Option(250, help="Fundamental survivors to pull chains for."),
     min_yield: float = typer.Option(0.0, help="Drop candidates below this annualized yield."),
+    fundamental_weight: float = typer.Option(
+        0.5, help="Rank blend: 1.0 = all fundamentals, 0.0 = all yield."
+    ),
     output: str = typer.Option("candidates.csv", help="CSV output path."),
 ) -> None:
-    """Full pipeline: fundamentals (local store) → Schwab chains → ~−0.20Δ put → yield rank."""
+    """Full pipeline: fundamentals (local store) → Schwab chains → ~−0.20Δ put → blended rank."""
     settings = Settings()  # local fundamentals + Schwab chains
     if not list(Path(settings.data_dir).glob("profile-bulk_part*.csv")):
         typer.echo(f"error: no bulk store in {settings.data_dir}; run tools/fmp_bulk_import.py")
@@ -136,6 +141,7 @@ def candidates(
         min_price=min_price, max_price=max_price, min_market_cap=min_market_cap,
         top_n=top_n, prerank_keep=1_000_000,
         min_annualized_yield=(min_yield if min_yield > 0 else None),
+        fundamental_weight=fundamental_weight,
     )
     results = build_service(settings).run_screen(criteria, date.today())
     _write_candidates_csv(results, output)

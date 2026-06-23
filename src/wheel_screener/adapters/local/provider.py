@@ -33,6 +33,7 @@ _KEY_METRICS = {
     "roa": "returnOnAssetsTTM",
     "roi": "returnOnInvestedCapitalTTM",
     "net_debt_to_ebitda": "netDebtToEBITDATTM",
+    "fcf_yield": "freeCashFlowYieldTTM",
 }
 _STATEMENT_YEARS = 3  # latest N fiscal years scanned for sign inputs (coalesced per symbol)
 

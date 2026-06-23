@@ -14,7 +14,7 @@ from wheel_screener.core.pipeline.rate_fundamentals import apply_earnings_blacko
 def _healthy(**kw) -> FundamentalMetrics:
     base = dict(
         pe=12, ps=2, pb=2, roe=0.20, roa=0.10, ros=0.10, roi=0.20,
-        debt_to_equity=0.5, net_debt_to_ebitda=1.0, ebitda=100.0,
+        debt_to_equity=0.5, net_debt_to_ebitda=1.0, ebitda=100.0, fcf_yield=0.05,
         current_ratio=1.5, quick_ratio=1.0, cash_ratio=0.5,
         eps=4.0, total_equity=1000.0,
     )
@@ -71,6 +71,11 @@ def test_gate_negative_equity() -> None:
 def test_gate_excess_leverage() -> None:
     reasons = gate_reasons(_healthy(net_debt_to_ebitda=6, ebitda=100), ScreenCriteria())
     assert "excess_leverage" in reasons
+
+
+def test_gate_negative_fcf() -> None:
+    assert "negative_fcf" in gate_reasons(_healthy(fcf_yield=-0.03), ScreenCriteria())
+    assert "negative_fcf" not in gate_reasons(_healthy(fcf_yield=0.04), ScreenCriteria())
 
 
 def test_low_current_ratio_does_not_hard_gate() -> None:

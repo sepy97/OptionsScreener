@@ -104,6 +104,8 @@ def gate_reasons(metrics: FundamentalMetrics | None, criteria: ScreenCriteria) -
         reasons.append("loss_maker")
     if metrics.roe is not None and metrics.roe < 0:
         reasons.append("negative_roe")
+    if metrics.fcf_yield is not None and metrics.fcf_yield <= 0:
+        reasons.append("negative_fcf")
     if (
         metrics.net_debt_to_ebitda is not None
         and metrics.ebitda is not None

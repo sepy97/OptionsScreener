@@ -62,6 +62,7 @@ def map_metrics(
         roi=_num(_pick(rk, "returnOnInvestedCapitalTTM", "roicTTM")),
         debt_to_equity=_num(_pick(rk, "debtToEquityRatioTTM", "debtEquityRatioTTM")),
         net_debt_to_ebitda=_num(_pick(rk, "netDebtToEBITDATTM", "netDebtToEbitdaTTM")),
+        fcf_yield=_num(_pick(rk, "freeCashFlowYieldTTM")),
         # liquidity
         current_ratio=_num(_pick(rk, "currentRatioTTM")),
         quick_ratio=_num(_pick(rk, "quickRatioTTM")),
