@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import csv
+import functools
+from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
+from typing import TypeVar
 
 import typer
 
@@ -12,6 +15,8 @@ from wheel_screener.composition import build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import AuthExpiredError, ProviderError, RateLimitedError
 from wheel_screener.core.models import ScreenCriteria, Underlying
+
+_F = TypeVar("_F", bound=Callable[..., object])
 
 
 def _provider_error_exit(e: ProviderError) -> None:
@@ -23,6 +28,22 @@ def _provider_error_exit(e: ProviderError) -> None:
     else:
         typer.echo(f"error: data-provider failure: {e}")
     raise typer.Exit(code=1)
+
+
+def handle_provider_errors(func: _F) -> _F:
+    """Wrap a command so any ProviderError becomes a friendly message + exit (not a trace).
+
+    ``functools.wraps`` preserves the signature so Typer still sees the command's options.
+    """
+
+    @functools.wraps(func)
+    def wrapper(*args: object, **kwargs: object) -> object:
+        try:
+            return func(*args, **kwargs)
+        except ProviderError as e:
+            _provider_error_exit(e)
+
+    return wrapper  # type: ignore[return-value]
 
 app = typer.Typer(
     help="Cash-secured-put / wheel options screener.",
@@ -50,6 +71,7 @@ def _write_csv(names: list[Underlying], path: str) -> None:
 
 
 @app.command()
+@handle_provider_errors
 def screen(
     min_price: float = typer.Option(20.0, help="Minimum share price."),
     max_price: float = typer.Option(200.0, help="Maximum share price."),
@@ -85,10 +107,7 @@ def screen(
         top_n=top_n,
         prerank_keep=prerank_keep,
     )
-    try:
-        ranked = build_service(settings).screen_fundamentals(criteria, date.today())
-    except ProviderError as e:
-        _provider_error_exit(e)
+    ranked = build_service(settings).screen_fundamentals(criteria, date.today())
     _write_csv(ranked, output)
     typer.echo(f"Wrote {len(ranked)} ranked names to {output}")
 
@@ -117,6 +136,7 @@ def _write_candidates_csv(results, path: str) -> None:
 
 
 @app.command("refresh-earnings")
+@handle_provider_errors
 def refresh_earnings(
     days: int = typer.Option(120, help="Days ahead to fetch earnings for."),
 ) -> None:
@@ -142,6 +162,7 @@ def refresh_earnings(
 
 
 @app.command("refresh-fundamentals")
+@handle_provider_errors
 def refresh_fundamentals(
     days: int = typer.Option(7, help="Refresh names that reported in the last N days."),
 ) -> None:
@@ -187,6 +208,7 @@ def auth_login() -> None:
 
 
 @app.command()
+@handle_provider_errors
 def candidates(
     min_price: float = typer.Option(20.0, help="Minimum share price."),
     max_price: float = typer.Option(200.0, help="Maximum share price."),
@@ -213,10 +235,7 @@ def candidates(
         min_annualized_yield=(min_yield if min_yield > 0 else None),
         fundamental_weight=fundamental_weight,
     )
-    try:
-        results = build_service(settings).run_screen(criteria, date.today())
-    except ProviderError as e:
-        _provider_error_exit(e)
+    results = build_service(settings).run_screen(criteria, date.today())
     _write_candidates_csv(results, output)
     typer.echo(f"Wrote {len(results)} candidates to {output}")
 
