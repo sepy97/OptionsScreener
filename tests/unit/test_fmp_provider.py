@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 
 import httpx
+import pytest
 import respx
 from pydantic import SecretStr
 
@@ -10,6 +11,7 @@ from wheel_screener.adapters.cache import DiskCache
 from wheel_screener.adapters.fmp.client import FmpClient
 from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
 from wheel_screener.config import FmpSettings
+from wheel_screener.core.errors import AuthExpiredError
 from wheel_screener.core.models import ScreenCriteria
 
 BASE = "https://financialmodelingprep.com/stable"
@@ -90,6 +92,28 @@ def test_bulk_metrics_maps_partial_universe() -> None:
     assert set(metrics) == {"AAA", "BBB"}  # CCC absent from bulk
     assert metrics["AAA"].pe == 10.0 and metrics["AAA"].roi == 0.22
     assert metrics["AAA"].eps is None  # sign inputs come from the deep fetch only
+
+
+@respx.mock
+def test_bulk_metrics_empty_on_subscription_code() -> None:
+    # 402 (not in subscription) -> {} so the caller falls back to the deep fetch
+    respx.get(f"{BASE}/ratios-ttm-bulk").mock(return_value=httpx.Response(402))
+    assert _provider().bulk_metrics(["AAA"]) == {}
+
+
+@respx.mock
+def test_bulk_metrics_raises_on_auth_failure() -> None:
+    # 401 must NOT be masked as an empty ranking
+    respx.get(f"{BASE}/ratios-ttm-bulk").mock(return_value=httpx.Response(401))
+    with pytest.raises(AuthExpiredError):
+        _provider().bulk_metrics(["AAA"])
+
+
+@respx.mock
+def test_fetch_metrics_raises_on_auth_failure() -> None:
+    respx.get(f"{BASE}/ratios-ttm").mock(return_value=httpx.Response(401))
+    with pytest.raises(AuthExpiredError):
+        _provider().fetch_metrics(["AAA"])
 
 
 @respx.mock

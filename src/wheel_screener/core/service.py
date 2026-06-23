@@ -15,7 +15,7 @@ from wheel_screener.core.models import (
 from wheel_screener.core.pipeline.pull_chains import pull_chains
 from wheel_screener.core.pipeline.rank import rank
 from wheel_screener.core.pipeline.rate_fundamentals import rate_and_rank
-from wheel_screener.core.pipeline.select_strike import put_yield, select_put
+from wheel_screener.core.pipeline.select_strike import credited_premium, put_yield, select_put
 from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
 
@@ -58,16 +58,14 @@ class ScreenerService:
             put = select_put(snapshot, criteria)
             if put is None:
                 continue
-            premium = put.mid if put.mid else put.bid
             candidates.append(
                 CandidateResult(
                     symbol=u.symbol,
                     contract=put,
                     fundamental_score=u.fundamental_score,
                     annualized_yield=put_yield(put),
-                    premium=premium,
+                    premium=credited_premium(put),  # conservative: the bid
                     collateral=put.strike * 100,
-                    pct_of_high=u.pct_of_high,
                     next_earnings=u.next_earnings,
                     has_weeklys=u.has_weeklys,
                 )

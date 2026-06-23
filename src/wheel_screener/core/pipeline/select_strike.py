@@ -23,14 +23,17 @@ def nearest_to_delta(
     return min(candidates, key=lambda c: abs(c.delta - target_delta))
 
 
-def _premium(c: OptionContract) -> float | None:
-    """Credit per share for selling the put — prefer mid, fall back to bid."""
-    return c.mid if c.mid else c.bid
+def credited_premium(c: OptionContract) -> float | None:
+    """Conservative credit per share for selling the put: the BID (a price you can
+    actually be filled at by hitting the bid). The midpoint is reported separately for
+    reference but never credited, so the headline yield isn't optimistic vs. a real fill.
+    """
+    return c.bid
 
 
 def put_yield(c: OptionContract) -> float | None:
-    prem = _premium(c)
-    if not prem or c.strike <= 0 or c.dte <= 0:
+    prem = credited_premium(c)
+    if not prem or prem <= 0 or c.strike <= 0 or c.dte <= 0:
         return None
     return annualized_csp_yield(prem, c.strike, c.dte)
 

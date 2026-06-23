@@ -10,6 +10,8 @@ dist/
 .python-version
 .pytest_cache/
 .ruff_cache/
+.coverage
+htmlcov/
 
 # Secrets & local data
 .env

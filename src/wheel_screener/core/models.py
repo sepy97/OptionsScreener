@@ -65,8 +65,6 @@ class ScreenCriteria(BaseModel):
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
     min_open_interest: int = 100
     max_bid_ask_spread_pct: float = 0.10
-    # price-trend gate: drop names within (1 - max_pct_of_high) of the high
-    max_pct_of_high: float = 0.95
     # earnings blackout (also our stand-in for "abnormal IV = event")
     exclude_earnings_in_window: bool = True
 
@@ -123,10 +121,6 @@ class Underlying(BaseModel):
     metrics: FundamentalMetrics | None = None
     rating: FundamentalRating | None = None
     fundamental_score: float | None = None
-    # price-trend
-    year_high: float | None = None
-    all_time_high: float | None = None
-    pct_of_high: float | None = None
     # calendar
     next_earnings: date | None = None
     has_weeklys: bool | None = None
@@ -185,9 +179,8 @@ class CandidateResult(BaseModel):
     contract: OptionContract
     fundamental_score: float | None = None
     annualized_yield: float | None = None
-    premium: float | None = None
+    premium: float | None = None  # conservative credit (the bid)
     collateral: float | None = None
-    pct_of_high: float | None = None
     next_earnings: date | None = None
     has_weeklys: bool | None = None
     score: float | None = None

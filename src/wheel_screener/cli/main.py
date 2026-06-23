@@ -10,7 +10,19 @@ import typer
 
 from wheel_screener.composition import build_service
 from wheel_screener.config import Settings
+from wheel_screener.core.errors import AuthExpiredError, ProviderError, RateLimitedError
 from wheel_screener.core.models import ScreenCriteria, Underlying
+
+
+def _provider_error_exit(e: ProviderError) -> None:
+    """Map a data-provider failure to a clear CLI message + non-zero exit."""
+    if isinstance(e, AuthExpiredError):
+        typer.echo("error: Schwab auth missing/expired — run `wheel-screener auth-login`.")
+    elif isinstance(e, RateLimitedError):
+        typer.echo("error: data-provider rate limit hit — wait a minute and retry.")
+    else:
+        typer.echo(f"error: data-provider failure: {e}")
+    raise typer.Exit(code=1)
 
 app = typer.Typer(
     help="Cash-secured-put / wheel options screener.",
@@ -73,7 +85,10 @@ def screen(
         top_n=top_n,
         prerank_keep=prerank_keep,
     )
-    ranked = build_service(settings).screen_fundamentals(criteria, date.today())
+    try:
+        ranked = build_service(settings).screen_fundamentals(criteria, date.today())
+    except ProviderError as e:
+        _provider_error_exit(e)
     _write_csv(ranked, output)
     typer.echo(f"Wrote {len(ranked)} ranked names to {output}")
 
@@ -82,9 +97,8 @@ def _write_candidates_csv(results, path: str) -> None:
     with open(path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow([
-            "rank", "symbol", "strike", "expiration", "dte", "delta", "iv", "bid",
-            "open_interest", "premium", "annualized_yield", "collateral",
-            "fundamental_score", "score",
+            "rank", "symbol", "strike", "expiration", "dte", "delta", "iv", "bid", "mid",
+            "open_interest", "annualized_yield", "collateral", "fundamental_score", "score",
         ])
         for i, r in enumerate(results, start=1):
             c = r.contract
@@ -92,9 +106,9 @@ def _write_candidates_csv(results, path: str) -> None:
                 i, r.symbol, c.strike, c.expiration.isoformat() if c.expiration else "", c.dte,
                 round(c.delta, 3) if c.delta is not None else "",
                 round(c.implied_volatility, 3) if c.implied_volatility is not None else "",
-                c.bid if c.bid is not None else "",
+                c.bid if c.bid is not None else "",  # credited (conservative)
+                round(c.mid, 2) if c.mid is not None else "",  # midpoint, reference only
                 c.open_interest if c.open_interest is not None else "",
-                round(r.premium, 2) if r.premium else "",
                 round(r.annualized_yield, 4) if r.annualized_yield else "",
                 r.collateral or "",
                 round(r.fundamental_score, 4) if r.fundamental_score is not None else "",
@@ -199,7 +213,10 @@ def candidates(
         min_annualized_yield=(min_yield if min_yield > 0 else None),
         fundamental_weight=fundamental_weight,
     )
-    results = build_service(settings).run_screen(criteria, date.today())
+    try:
+        results = build_service(settings).run_screen(criteria, date.today())
+    except ProviderError as e:
+        _provider_error_exit(e)
     _write_candidates_csv(results, output)
     typer.echo(f"Wrote {len(results)} candidates to {output}")
 

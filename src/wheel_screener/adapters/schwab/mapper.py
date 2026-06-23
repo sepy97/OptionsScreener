@@ -40,6 +40,10 @@ def _contract(o: dict, opt_type: OptionType, exp: date, underlying: str, und_pri
     if strike is None:
         return None
     iv = _num(o.get("volatility"))  # Schwab IV is in percent (e.g. 33.77)
+    bid = _num(o.get("bid"))
+    ask = _num(o.get("ask"))
+    # true midpoint (NOT Schwab's "mark", which is a model price); mark is kept in raw
+    mid = (bid + ask) / 2 if bid is not None and ask is not None else None
     return OptionContract(
         underlying_symbol=underlying,
         option_symbol=o.get("symbol") or "",
@@ -47,10 +51,10 @@ def _contract(o: dict, opt_type: OptionType, exp: date, underlying: str, und_pri
         expiration=exp,
         strike=strike,
         dte=_int(o.get("daysToExpiration")) or 0,
-        bid=_num(o.get("bid")),
-        ask=_num(o.get("ask")),
+        bid=bid,
+        ask=ask,
         last=_num(o.get("last")),
-        mid=_num(o.get("mark")),
+        mid=mid,
         bid_size=_int(o.get("bidSize")),
         ask_size=_int(o.get("askSize")),
         volume=_int(o.get("totalVolume")),
@@ -64,7 +68,7 @@ def _contract(o: dict, opt_type: OptionType, exp: date, underlying: str, und_pri
         greeks_source=GreeksSource.VENDOR_DEFAULT,
         raw={
             k: o.get(k)
-            for k in ("rho", "timeValue", "theoreticalOptionValue", "intrinsicValue")
+            for k in ("mark", "rho", "timeValue", "theoreticalOptionValue", "intrinsicValue")
             if k in o
         },
     )
