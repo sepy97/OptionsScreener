@@ -43,7 +43,10 @@ def test_decorator_preserves_signature() -> None:
 
 
 def test_decorated_commands_still_expose_options() -> None:
-    assert runner.invoke(app, ["--help"]).exit_code == 0
-    out = runner.invoke(app, ["candidates", "--help"])
-    assert out.exit_code == 0 and "--top-n" in out.output
-    assert runner.invoke(app, ["refresh-fundamentals", "--help"]).exit_code == 0
+    # introspect the registered commands' params (robust vs. rich-rendered help text)
+    from typer.main import get_command
+
+    commands = get_command(app).commands  # name -> click Command
+    assert "top_n" in {p.name for p in commands["candidates"].params}
+    assert "days" in {p.name for p in commands["refresh-fundamentals"].params}
+    assert runner.invoke(app, ["--help"]).exit_code == 0  # app still builds + renders
