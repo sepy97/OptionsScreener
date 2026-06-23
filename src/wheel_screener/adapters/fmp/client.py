@@ -11,15 +11,8 @@ import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from wheel_screener.adapters.cache import DiskCache
-from wheel_screener.adapters.http import RateLimiter
+from wheel_screener.adapters.http import RateLimiter, is_retryable
 from wheel_screener.config import FmpSettings
-
-
-def _is_retryable(exc: BaseException) -> bool:
-    if isinstance(exc, httpx.HTTPStatusError):
-        code = exc.response.status_code
-        return code == 429 or code >= 500
-    return isinstance(exc, httpx.TransportError)
 
 
 class FmpClient:
@@ -65,7 +58,7 @@ class FmpClient:
         reraise=True,
         stop=stop_after_attempt(4),
         wait=wait_exponential(multiplier=1, max=30),
-        retry=retry_if_exception(_is_retryable),
+        retry=retry_if_exception(is_retryable),
     )
     def _fetch(self, path: str, params: dict | None) -> object:
         self._limiter.acquire()

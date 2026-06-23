@@ -10,6 +10,41 @@ import threading
 import time
 from collections import deque
 from collections.abc import Callable
+from typing import TypeVar
+
+import httpx
+from tenacity import Retrying, retry_if_exception, stop_after_attempt, wait_exponential
+
+_T = TypeVar("_T")
+
+
+def is_retryable(exc: BaseException) -> bool:
+    """A transient HTTP failure worth retrying: 429, any 5xx, or a transport error."""
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        return code == 429 or code >= 500
+    return isinstance(exc, httpx.TransportError)
+
+
+def run_with_retry(
+    fn: Callable[[], _T],
+    *,
+    max_attempts: int = 4,
+    multiplier: float = 1.0,
+    max_wait: float = 30.0,
+) -> _T:
+    """Call ``fn`` with exponential-backoff retry on transient HTTP failures.
+
+    Re-raises the final exception when attempts are exhausted (so the caller maps it).
+    ``multiplier=0`` disables the backoff wait (used in tests).
+    """
+    retryer: Retrying = Retrying(
+        reraise=True,
+        stop=stop_after_attempt(max_attempts),
+        wait=wait_exponential(multiplier=multiplier, max=max_wait),
+        retry=retry_if_exception(is_retryable),
+    )
+    return retryer(fn)
 
 
 class RateLimiter:

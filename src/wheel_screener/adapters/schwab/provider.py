@@ -6,7 +6,7 @@ from datetime import date, timedelta
 
 from wheel_screener.adapters.cache import DiskCache
 from wheel_screener.adapters.errors import map_http_error
-from wheel_screener.adapters.http import RateLimiter
+from wheel_screener.adapters.http import RateLimiter, run_with_retry
 from wheel_screener.adapters.schwab.mapper import parse_chain
 from wheel_screener.config import SchwabSettings
 from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
@@ -34,9 +34,22 @@ class SchwabChainProvider:
             self._client = load_client(self._settings)
         return self._client
 
+    def _fetch_payload(self, symbol: str, from_date: date, to_date: date, strike_count: int):
+        from schwab.client import Client
+
+        self._limiter.acquire()  # re-acquired per attempt so retries respect the rate limit
+        resp = self._get_client().get_option_chain(
+            symbol,
+            contract_type=Client.Options.ContractType.PUT,
+            from_date=from_date,
+            to_date=to_date,
+            strike_count=strike_count,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
     def get_chain(self, symbol: str, filt: ChainFilter) -> ChainSnapshot:
         import httpx
-        from schwab.client import Client
 
         today = date.today()
         from_date = today + timedelta(days=filt.min_dte or 0)
@@ -49,21 +62,16 @@ class SchwabChainProvider:
             if cached is not None:
                 return parse_chain(cached)
 
-        self._limiter.acquire()
         try:
-            resp = self._get_client().get_option_chain(
-                symbol,
-                contract_type=Client.Options.ContractType.PUT,
-                from_date=from_date,
-                to_date=to_date,
-                strike_count=strike_count,
+            payload = run_with_retry(
+                lambda: self._fetch_payload(symbol, from_date, to_date, strike_count),
+                max_attempts=self._settings.max_retries + 1,
+                multiplier=self._settings.retry_backoff_multiplier,
             )
-            resp.raise_for_status()
-            payload = resp.json()
         except ProviderError:
-            raise  # e.g. AuthExpiredError from token load — never mask it
+            raise  # e.g. AuthExpiredError from token load — never mask it (and never retried)
         except (httpx.HTTPStatusError, httpx.TransportError) as e:
-            raise map_http_error(e) from e
+            raise map_http_error(e) from e  # transient kinds already retried + exhausted
         except Exception as e:  # vendor/authlib failure: surface as a provider problem
             raise ProviderUnavailableError(f"schwab chain fetch failed for {symbol}: {e}") from e
 
