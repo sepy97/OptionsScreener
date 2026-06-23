@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import csv
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import typer
@@ -100,6 +100,31 @@ def _write_candidates_csv(results, path: str) -> None:
                 round(r.fundamental_score, 4) if r.fundamental_score is not None else "",
                 round(r.score, 4) if r.score is not None else "",
             ])
+
+
+@app.command("refresh-earnings")
+def refresh_earnings(
+    days: int = typer.Option(120, help="Days ahead to fetch earnings for."),
+) -> None:
+    """Refresh the local earnings calendar from FMP (one cheap call) — powers the blackout."""
+    from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
+
+    settings = Settings()
+    if not settings.fmp.api_key.get_secret_value():
+        typer.echo("error: set FMP__API_KEY in .env first.")
+        raise typer.Exit(code=1)
+    today = date.today()
+    calendar = FmpFundamentalsProvider(settings.fmp).earnings_calendar(
+        today, today + timedelta(days=days)
+    )
+    path = Path(settings.earnings_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["symbol", "date"])
+        for symbol, when in sorted(calendar.items()):
+            writer.writerow([symbol, when.isoformat()])
+    typer.echo(f"Wrote {len(calendar)} symbols' next earnings to {path}")
 
 
 @app.command("auth-login")

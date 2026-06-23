@@ -122,3 +122,19 @@ def test_earnings_calendar_parses() -> None:
     ]))
     earnings = _provider().earnings_calendar(date(2026, 6, 21), date(2026, 8, 5))
     assert earnings == {"AAA": date(2026, 7, 1)}
+
+
+@respx.mock
+def test_earnings_calendar_splits_window_when_capped() -> None:
+    capped = [{"symbol": f"S{i}", "date": "2026-12-31"} for i in range(4000)]  # cap hit
+    near = [{"symbol": "AAA", "date": "2026-07-01"}]  # real near-term row
+
+    def handler(request):
+        frm = date.fromisoformat(request.url.params["from"])
+        to = date.fromisoformat(request.url.params["to"])
+        return httpx.Response(200, json=capped if (to - frm).days > 15 else near)
+
+    respx.get(f"{BASE}/earnings-calendar").mock(side_effect=handler)
+    cal = _provider().earnings_calendar(date(2026, 6, 22), date(2026, 8, 6))  # 45d -> must split
+    assert cal.get("AAA") == date(2026, 7, 1)  # found only by splitting below the cap
+    assert "S0" not in cal  # capped wide-window rows are discarded, not used

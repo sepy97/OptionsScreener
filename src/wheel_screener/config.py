@@ -49,3 +49,4 @@ class Settings(BaseSettings):
     # fundamentals source: "local" reads the bulk CSV store; "live" hits FMP per-symbol
     fundamentals_source: str = "local"
     data_dir: str = "data/fundamentals"
+    earnings_path: str = "data/earnings_calendar.csv"  # local calendar (refresh-earnings job)
