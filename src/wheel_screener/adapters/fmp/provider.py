@@ -6,7 +6,7 @@ this adapter only fetches + maps FMP JSON into the core models.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import httpx
 
@@ -14,6 +14,8 @@ from wheel_screener.adapters.fmp.client import FmpClient
 from wheel_screener.adapters.fmp.mapper import map_earnings, map_metrics, map_universe_row
 from wheel_screener.config import FmpSettings
 from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
+
+_EARNINGS_ROW_CAP = 4000  # FMP earnings-calendar returns at most this many rows (then clips)
 
 
 def _first(payload: object) -> dict:
@@ -84,8 +86,19 @@ class FmpFundamentalsProvider:
             out[sym] = map_metrics(ratios, key_metrics, income, balance, dcf)
         return out
 
-    def earnings_calendar(self, start: date, end: date) -> dict[str, date]:
-        rows = self._client.get(
+    def _earnings_rows(self, start: date, end: date) -> list[dict]:
+        """Fetch raw earnings rows, splitting the window when FMP's 4000-row cap is hit
+        (a wide window returns only the latest 4000, dropping near-term earnings)."""
+        payload = self._client.get(
             "earnings-calendar", {"from": start.isoformat(), "to": end.isoformat()}
         )
-        return map_earnings(rows if isinstance(rows, list) else [])
+        rows = payload if isinstance(payload, list) else []
+        if len(rows) >= _EARNINGS_ROW_CAP and end > start:
+            mid = start + timedelta(days=(end - start).days // 2)
+            return self._earnings_rows(start, mid) + self._earnings_rows(
+                mid + timedelta(days=1), end
+            )
+        return rows
+
+    def earnings_calendar(self, start: date, end: date) -> dict[str, date]:
+        return map_earnings(self._earnings_rows(start, end))
