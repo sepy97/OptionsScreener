@@ -66,12 +66,22 @@ def test_select_put_prefers_in_band_then_nearest_monthly():
     assert select_put(_chain([_put(90, -0.20, 25, 1.5)]), crit).dte == 25
 
 
-def test_rank_orders_by_yield():
-    a = CandidateResult(symbol="A", contract=_put(90, -0.2, 40, 1.0), annualized_yield=0.10)
-    b = CandidateResult(symbol="B", contract=_put(90, -0.2, 40, 2.0), annualized_yield=0.25)
-    ordered = rank([a, b])
-    assert [c.symbol for c in ordered] == ["B", "A"]
-    assert ordered[0].score == 0.25
+def test_rank_equal_fundamentals_orders_by_yield():
+    a = CandidateResult(symbol="A", contract=_put(90, -0.2, 40, 1.0),
+                        fundamental_score=0.5, annualized_yield=0.10)
+    b = CandidateResult(symbol="B", contract=_put(90, -0.2, 40, 2.0),
+                        fundamental_score=0.5, annualized_yield=0.25)
+    assert [c.symbol for c in rank([a, b])] == ["B", "A"]  # equal fundamentals -> yield decides
+
+
+def test_rank_blends_fundamentals_and_yield_by_weight():
+    # X: strong fundamentals, low yield.  Y: weak fundamentals, high yield.
+    x = CandidateResult(symbol="X", contract=_put(90, -0.2, 40, 1.0),
+                        fundamental_score=0.9, annualized_yield=0.10)
+    y = CandidateResult(symbol="Y", contract=_put(90, -0.2, 40, 2.0),
+                        fundamental_score=0.2, annualized_yield=0.30)
+    assert rank([x, y], fundamental_weight=0.8)[0].symbol == "X"  # quality-weighted
+    assert rank([x, y], fundamental_weight=0.2)[0].symbol == "Y"  # yield-weighted
 
 
 def _good() -> FundamentalMetrics:

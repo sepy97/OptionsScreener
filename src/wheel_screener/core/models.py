@@ -53,6 +53,8 @@ class ScreenCriteria(BaseModel):
     factor_weights: dict[str, float] = Field(
         default_factory=lambda: {"valuation": 0.20, "efficiency": 0.45, "sustainability": 0.35}
     )
+    # final rank blends fundamental quality + yield (1 = all fundamentals, 0 = all yield)
+    fundamental_weight: float = 0.5
     # options target
     target_delta: float = -0.20
     max_abs_delta: float = 0.30
@@ -90,6 +92,7 @@ class FundamentalMetrics(BaseModel):
     roi: float | None = None  # roic
     debt_to_equity: float | None = None
     net_debt_to_ebitda: float | None = None
+    fcf_yield: float | None = None  # TTM free-cash-flow yield (gate requires > 0)
     # liquidity
     current_ratio: float | None = None
     quick_ratio: float | None = None

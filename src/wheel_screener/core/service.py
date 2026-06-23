@@ -76,4 +76,4 @@ class ScreenerService:
         if criteria.min_annualized_yield is not None:
             floor = criteria.min_annualized_yield
             candidates = [c for c in candidates if (c.annualized_yield or 0.0) >= floor]
-        return rank(candidates)
+        return rank(candidates, criteria.fundamental_weight)
