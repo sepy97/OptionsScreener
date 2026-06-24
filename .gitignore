@@ -23,6 +23,8 @@ data/
 
 # Output / logs
 candidates.csv
+out.csv
+*.csv.tmp
 logs/
 
 # OS
