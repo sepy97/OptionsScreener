@@ -8,13 +8,14 @@ earnings blackout still works on the cheap Starter key; without one, blackout is
 from __future__ import annotations
 
 import os
+import threading
 from datetime import date
 from pathlib import Path
 from typing import Protocol
 
 import polars as pl
 
-from wheel_screener.adapters.local.overlay import read_overlay
+from wheel_screener.adapters.local.overlay import OVERLAY_FILENAME, read_overlay
 from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
 
 # FundamentalMetrics field -> source bulk column
@@ -57,6 +58,8 @@ class LocalFundamentalsProvider:
         self._profiles: pl.DataFrame | None = None
         self._metrics: pl.DataFrame | None = None  # one row per symbol, FundamentalMetrics columns
         self._overlay: dict[str, FundamentalMetrics] | None = None  # fresh per-symbol refreshes
+        self._overlay_mtime: float | None = None
+        self._lock = threading.Lock()  # guards lazy load + overlay reload when shared (web)
 
     # --- loading -------------------------------------------------------------
     def _read(self, name: str) -> pl.DataFrame:
@@ -83,6 +86,11 @@ class LocalFundamentalsProvider:
     def _ensure_loaded(self) -> None:
         if self._metrics is not None:
             return
+        with self._lock:  # only one thread loads the store; concurrent first-touch requests wait
+            if self._metrics is None:
+                self._load()
+
+    def _load(self) -> None:
         parts = sorted(self._dir.glob("profile-bulk_part*.csv"))
         if not parts:
             raise FileNotFoundError(
@@ -169,17 +177,29 @@ class LocalFundamentalsProvider:
         self._ensure_loaded()
         return set(self._profiles.get_column("symbol").to_list())
 
+    def _current_overlay(self) -> dict[str, FundamentalMetrics]:
+        """The overlay, reloaded if overlay_metrics.csv changed — so a long-lived server
+        picks up a refresh-fundamentals run without a restart."""
+        try:
+            mtime: float | None = (self._dir / OVERLAY_FILENAME).stat().st_mtime
+        except OSError:
+            mtime = None
+        with self._lock:
+            if self._overlay is None or mtime != self._overlay_mtime:
+                self._overlay = read_overlay(str(self._dir))
+                self._overlay_mtime = mtime
+            return self._overlay
+
     def _metrics_for(self, symbols: list[str]) -> dict[str, FundamentalMetrics]:
         self._ensure_loaded()
-        if self._overlay is None:
-            self._overlay = read_overlay(str(self._dir))
+        overlay = self._current_overlay()
         wanted = set(symbols)
         fields = set(FundamentalMetrics.model_fields)
         out: dict[str, FundamentalMetrics] = {}
         for r in self._metrics.filter(pl.col("symbol").is_in(wanted)).iter_rows(named=True):
             out[r["symbol"]] = FundamentalMetrics(**{k: v for k, v in r.items() if k in fields})
-        for sym in wanted & self._overlay.keys():
-            out[sym] = self._overlay[sym]  # fresh per-symbol refresh wins over the bulk snapshot
+        for sym in wanted & overlay.keys():
+            out[sym] = overlay[sym]  # fresh per-symbol refresh wins over the bulk snapshot
         return out
 
     def bulk_metrics(self, symbols: list[str]) -> dict[str, FundamentalMetrics]:
