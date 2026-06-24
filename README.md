@@ -1,52 +1,184 @@
 # wheel-screener
 
-A cash-secured-put / wheel options screener. Ranks a stock universe on **fundamentals** (FMP —
-valuation, efficiency, sustainability), pulls option chains with greeks/IV for the best
-names (Schwab), selects the put nearest **−0.20 delta** at **30–45 DTE**, and ranks the shortlist
-by **annualized yield** (per-contract IV shown as a column; an earnings blackout removes event-risk
-names). Output is a list of **candidates to verify**, not signals.
+A command-line **cash-secured-put / wheel options screener**. It finds financially-sound common
+stocks you'd be happy to own, then surfaces the cash-secured puts on them actually worth selling —
+liquid, ~**−0.20 delta**, ~**30–45 DTE**, ranked by a blend of fundamental quality and annualized
+yield, with earnings-risk names filtered out. The output is a **shortlist to verify, not trade
+signals**.
 
 > Full design, data-source facts, and roadmap: **[docs/PLAN.md](docs/PLAN.md)**.
 
-## Status
+## How it works (in plain terms)
 
-**M0 — scaffold.** Architecture, domain models, provider ports, config/DI wiring, CLI shell, and
-tests are in place. Pipeline stages and provider adapters (FMP/Schwab fetching) are stubs
-(`NotImplementedError`) landing across M1–M3. The pure pieces are implemented + tested: the
-fundamental rating (`core/fundamentals.py`, criteria reused from `pythonBot`), annualized-yield
-math, nearest-delta selection, and the earnings blackout.
+It's a **manual command-line tool** — you run it when you want a screen; **nothing runs in the
+background**. One command, `candidates`, does the whole thing and writes a CSV.
 
-## Architecture (ports & adapters)
+Each run is a pipeline:
 
-A framework-free `core/` (models, ports, pipeline, ranking, service) wrapped by thin delivery layers
-(`cli/` today, `api/` FastAPI later — both call the *same* `ScreenerService`). Concrete providers
-live in `adapters/` behind `core/ports.py` Protocols and are wired in `composition.py`. Swapping a
-provider = one line.
+1. **Universe** — read a local store of whole-market fundamentals (downloaded once) and keep common
+   stocks priced $20–200 on NASDAQ/NYSE.
+2. **Filter out the bad** — drop names that are insolvent, unprofitable, over-leveraged, or
+   cash-flow-negative (hard gates), plus anything reporting earnings inside the trade window.
+3. **Rank the survivors** — a cross-sectional score across valuation / efficiency / sustainability.
+4. **Pull option chains** — for the survivors, fetch live put chains from Schwab (concurrent,
+   rate-limited, cached, with retry on transient hiccups).
+5. **Pick the put** — the ~−0.20Δ put nearest 30–45 DTE that's genuinely liquid (open interest,
+   tight spread, a real sellable bid).
+6. **Rank the shortlist** — by a configurable blend of fundamental quality and (conservative,
+   bid-based) annualized yield → CSV.
+
+**Two data sources:**
+
+- **FMP** (Financial Modeling Prep) — fundamentals + the earnings calendar. The whole market is
+  downloaded **once** into a local store, so screens are instant and quota-free; small refresh jobs
+  keep it current on a cheap key.
+- **Schwab** — live option chains with greeks/IV (OAuth; the only piece that needs a weekly
+  re-login).
+
+**Nothing is scheduled for you.** You run the screen on demand and run the small data-refresh
+commands periodically — by hand, or wire them into your own `cron` (examples below).
+
+## What you need
+
+- [uv](https://docs.astral.sh/uv/) and Python 3.11+ (uv fetches Python for you).
+- An **FMP API key** (Starter tier covers the refresh jobs + earnings) and, for the one-time
+  whole-market download, a separate **bulk key** (Ultimate tier — only needed briefly).
+- A **Schwab "Market Data Production" app** (OAuth) — register at https://developer.schwab.com
+  **early**; approval takes a few days.
+
+## One-time setup
+
+```bash
+# 1. install (creates the venv + installs everything; uv fetches Python 3.11)
+uv sync
+
+# 2. configure secrets
+cp .env.example .env          # then fill in the keys (see below)
+
+# 3. load the local fundamentals store (one-time, ~2 GB; uses the bulk FMP key)
+FMP_BULK_API_KEY=your-bulk-key python3 tools/fmp_bulk_import.py \
+    --out data/fundamentals --years 2015-2025
+
+# 4. build the local earnings calendar (for the earnings blackout)
+uv run wheel-screener refresh-earnings
+
+# 5. log in to Schwab (opens a browser; the token lasts 7 days)
+uv run wheel-screener auth-login
+```
+
+`.env` keys: `FMP__API_KEY` (fundamentals + earnings) and `SCHWAB__CLIENT_ID` /
+`SCHWAB__CLIENT_SECRET` (chains). `FMP_BULK_API_KEY` is used only by the importer (env var,
+`--api-key`, or `.env`). All of `.env`, `.secrets/`, and `data/` are gitignored.
+
+## Running a screen
+
+```bash
+uv run wheel-screener candidates --top-n 250 --output candidates.csv
+```
+
+Runs the full pipeline live and writes a ranked CSV. Handy flags:
+
+- `--top-n N` — how many fundamental survivors to pull chains for (more = broader, slower).
+- `--fundamental-weight 0..1` — final-rank blend (1 = pure fundamentals, 0 = pure yield; default 0.5).
+- `--min-yield`, `--min-market-cap` — optional floors.
+- `--timeout SECONDS` — wall-clock budget for the chain pull (returns partial results if exceeded).
+
+**Output columns:**
+
+| Column | Meaning |
+|---|---|
+| `rank` | position in the shortlist (by blended `score`) |
+| `symbol` `strike` `expiration` `dte` | the put to sell |
+| `delta` | ~−0.20 target |
+| `iv` | per-contract implied volatility |
+| `bid` | **credited premium** — the conservative, fillable price |
+| `mid` | `(bid+ask)/2`, reference only (not credited) |
+| `open_interest` | option liquidity |
+| `annualized_yield` | `(bid/strike) × (365/dte)` — computed off the bid |
+| `collateral` | `strike × 100` (the cash you set aside) |
+| `fundamental_score` | 0–1 cross-sectional fundamental composite |
+| `score` | final blended rank score |
+
+> `screen` (fundamentals-only, no chains, no Schwab needed) ranks the universe by fundamentals
+> alone — a quick, free check.
+
+## Keeping the data fresh (you run these)
+
+The local store goes stale as companies report. Nothing refreshes it automatically — run these
+periodically:
+
+| Cadence | Command | Why |
+|---|---|---|
+| **Weekly** | `uv run wheel-screener auth-login` | Schwab's refresh token expires every 7 days |
+| Daily / weekly | `uv run wheel-screener refresh-earnings` | refresh the earnings-blackout calendar (cheap) |
+| Daily / weekly | `uv run wheel-screener refresh-fundamentals` | re-fetch fundamentals for names that just reported |
+| Occasionally | `python3 tools/fmp_bulk_import.py --out data/fundamentals --years 2015-2025` | full rebuild if the store drifts too far |
+
+Want it hands-off? Add the refresh jobs to your own `cron` (the screen stays manual; `auth-login`
+can't be automated — it needs a browser):
+
+```cron
+# example — adjust paths
+0  6 * * *  cd ~/dev/OptionsScreener && ~/.local/bin/uv run wheel-screener refresh-earnings
+30 6 * * *  cd ~/dev/OptionsScreener && ~/.local/bin/uv run wheel-screener refresh-fundamentals
+```
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `candidates` | full screen → ranked candidate CSV (fundamentals + live chains) |
+| `screen` | fundamentals-only ranking → CSV (no Schwab needed) |
+| `auth-login` | Schwab OAuth browser login (run weekly) |
+| `refresh-earnings` | rebuild the local earnings calendar from FMP |
+| `refresh-fundamentals` | incremental fundamentals refresh for recent reporters |
+
+Add `--debug` before any command to see a full traceback on an unexpected error.
+
+## Logging & troubleshooting
+
+- Results and **errors** print to the console. Data-provider problems — an expired Schwab login,
+  a rate limit, an outage — produce a clear, actionable message and a non-zero exit, **never a
+  silently empty result**.
+- Internal **warnings** (a skipped illiquid symbol, a partial/timed-out run, a cache hiccup) are
+  emitted via Python `logging` to **stderr**.
+- For a full traceback on an unexpected failure, re-run with `--debug`.
+- *(Configurable verbosity / per-step progress logging is a planned improvement — see
+  [docs/TODO.md](docs/TODO.md).)*
+
+## How it's built
+
+Hexagonal **ports & adapters**: a framework-free `core/` (models, pipeline, ranking,
+`ScreenerService`) wrapped by thin delivery layers (`cli/` today, `api/` FastAPI later — both call
+the *same* service). Concrete providers live in `adapters/` behind `core/ports.py` Protocols and are
+wired in `composition.py`; swapping a provider is a one-line change.
 
 ```
 src/wheel_screener/
-  core/      models.py · ports.py · fundamentals.py · ranking.py · service.py
+  core/      models · ports · fundamentals · ranking · errors · service
              pipeline/ (universe · rate_fundamentals · pull_chains · select_strike · rank)
-  adapters/  fmp/ · schwab/ · http.py · cache.py
-  cli/  api/  jobs/   config.py   composition.py
+  adapters/  fmp/ · schwab/ · local/ · http.py · cache.py · errors.py
+  cli/  api/   config.py   composition.py
+tools/   fmp_bulk_import.py     # one-time whole-market bulk loader
+docs/    PLAN.md · TODO.md
 ```
 
-## Quickstart
-
-Requires [uv](https://docs.astral.sh/uv/) and Python 3.11+.
+## Development
 
 ```bash
-uv sync --all-extras          # create venv + install deps (uv fetches Python 3.11)
-uv run ruff check .           # lint
-uv run pytest                 # tests
-uv run wheel-screener --help  # CLI shell
+uv run ruff check .     # lint
+uv run pytest           # tests
 ```
 
-Copy `.env.example` to `.env` and fill provider keys (see comments there). Register a Schwab
-"Market Data Production" app at https://developer.schwab.com **early** — approval takes a few days,
-and the OAuth refresh token must be renewed weekly (`uv run wheel-screener auth-login`, M2).
+CI (GitHub Actions) runs ruff + pytest on Python 3.11 and 3.12 for every push and pull request.
+`main` is **protected** — changes land via a PR with green CI. Deferred / optional work is tracked
+in [docs/TODO.md](docs/TODO.md).
 
-## Configuration
+## Status
 
-Typed via `pydantic-settings`; env vars use a `__` nesting delimiter, e.g. `SCHWAB__CLIENT_ID`,
-`FMP__API_KEY`, `IV_RANK__SOURCE`. See `.env.example`.
+**Working end-to-end and live-validated:** local fundamentals → Schwab chains → ranked CSP shortlist,
+with the earnings blackout, conservative bid-based yields, and a blended fundamental+yield ranking.
+Hardened for real-world failures — typed provider errors, retry/backoff, run timeout + cancellation
++ partial results, no silent masking, and no raw tracebacks. The web (FastAPI) and Swift front-ends
+are the next, optional layers; the service already exposes the `cancel` / `max_runtime_seconds` seam
+they'll use.
