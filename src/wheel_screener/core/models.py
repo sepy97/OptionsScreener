@@ -65,6 +65,8 @@ class ScreenCriteria(BaseModel):
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
     min_open_interest: int = 100
     max_bid_ask_spread_pct: float = 0.10
+    # wall-clock budget for the chain-pull stage (None = unbounded); past it, partial results
+    max_runtime_seconds: float | None = None
     # earnings blackout (also our stand-in for "abnormal IV = event")
     exclude_earnings_in_window: bool = True
 

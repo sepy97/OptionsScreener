@@ -226,6 +226,9 @@ def candidates(
     fundamental_weight: float = typer.Option(
         0.5, help="Rank blend: 1.0 = all fundamentals, 0.0 = all yield."
     ),
+    timeout: float = typer.Option(
+        0.0, help="Wall-clock budget (s) for the chain pull; 0 = unbounded. Partial on timeout."
+    ),
     output: str = typer.Option("candidates.csv", help="CSV output path."),
 ) -> None:
     """Full pipeline: fundamentals (local store) → Schwab chains → ~−0.20Δ put → blended rank."""
@@ -242,6 +245,7 @@ def candidates(
         top_n=top_n, prerank_keep=1_000_000,
         min_annualized_yield=(min_yield if min_yield > 0 else None),
         fundamental_weight=fundamental_weight,
+        max_runtime_seconds=(timeout if timeout > 0 else None),
     )
     results = build_service(settings).run_screen(criteria, date.today())
     _write_candidates_csv(results, output)
