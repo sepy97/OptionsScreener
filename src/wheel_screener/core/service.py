@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from dataclasses import dataclass
 from datetime import date
 
@@ -36,8 +38,18 @@ class ScreenerService:
         universe = build_universe(self.fundamentals, criteria)
         return rate_and_rank(self.fundamentals, universe, criteria, today)
 
-    def run_screen(self, criteria: ScreenCriteria, today: date) -> list[CandidateResult]:
-        """Full pipeline: fundamentals -> chain pull -> ~target-delta put -> yield rank."""
+    def run_screen(
+        self,
+        criteria: ScreenCriteria,
+        today: date,
+        *,
+        cancel: threading.Event | None = None,
+    ) -> list[CandidateResult]:
+        """Full pipeline: fundamentals -> chain pull -> ~target-delta put -> yield rank.
+
+        Bounded by ``criteria.max_runtime_seconds`` and an optional ``cancel`` event (for a
+        web layer to abort on client disconnect); both yield partial, ranked results.
+        """
         survivors = self.screen_fundamentals(criteria, today)
         filt = ChainFilter(
             option_type=OptionType.PUT,
@@ -48,7 +60,12 @@ class ScreenerService:
             min_open_interest=criteria.min_open_interest,
             target_delta=criteria.target_delta,
         )
-        chains = pull_chains(self.chains, survivors, filt)
+        deadline = (
+            time.monotonic() + criteria.max_runtime_seconds
+            if criteria.max_runtime_seconds is not None
+            else None
+        )
+        chains = pull_chains(self.chains, survivors, filt, deadline=deadline, cancel=cancel)
 
         candidates: list[CandidateResult] = []
         for u in survivors:
