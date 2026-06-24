@@ -6,10 +6,10 @@ Framework-free: no httpx/typer/fastapi imports. Keep it that way.
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from enum import StrEnum
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
 
 class OptionType(StrEnum):
@@ -155,13 +155,16 @@ class OptionContract(BaseModel):
     implied_volatility: float | None = None  # per-contract IV (shown as a column)
 
     underlying_price: float | None = None
-    quote_ts: datetime | None = None
     greeks_source: GreeksSource = GreeksSource.VENDOR_DEFAULT
-    raw: dict = Field(default_factory=dict)  # vendor-specific extras
+    # vendor-specific extras kept for internal/debug use; excluded from the serialized contract
+    raw: dict = Field(default_factory=dict, exclude=True)
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def spread_pct(self) -> float | None:
-        """Bid/ask spread as a fraction of the mid, or None if unpriced."""
+        """Bid/ask spread as a fraction of the mid, or None if unpriced.
+
+        A real liquidity signal (also a selection gate), so it's part of the serialized output."""
         if self.bid and self.ask and (self.ask + self.bid) > 0:
             return (self.ask - self.bid) / ((self.ask + self.bid) / 2)
         return None
@@ -170,7 +173,6 @@ class OptionContract(BaseModel):
 class ChainSnapshot(BaseModel):
     underlying_symbol: str
     underlying_price: float | None = None
-    fetched_at: datetime | None = None
     contracts: list[OptionContract] = Field(default_factory=list)
 
 
