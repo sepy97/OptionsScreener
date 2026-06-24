@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass
@@ -20,6 +21,8 @@ from wheel_screener.core.pipeline.rate_fundamentals import rate_and_rank
 from wheel_screener.core.pipeline.select_strike import credited_premium, put_yield, select_put
 from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -91,4 +94,8 @@ class ScreenerService:
         if criteria.min_annualized_yield is not None:
             floor = criteria.min_annualized_yield
             candidates = [c for c in candidates if (c.annualized_yield or 0.0) >= floor]
+        logger.info(
+            "candidates: %d with a tradeable put · ranked by fundamental_weight=%.2f",
+            len(candidates), criteria.fundamental_weight,
+        )
         return rank(candidates, criteria.fundamental_weight)

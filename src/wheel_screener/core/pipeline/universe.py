@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import logging
+
 from wheel_screener.core.models import ScreenCriteria, Underlying
 from wheel_screener.core.ports import FundamentalsProvider
+
+logger = logging.getLogger(__name__)
 
 
 def build_universe(provider: FundamentalsProvider, criteria: ScreenCriteria) -> list[Underlying]:
@@ -12,4 +16,9 @@ def build_universe(provider: FundamentalsProvider, criteria: ScreenCriteria) -> 
     No truncation here — stage 2 either bulk-pre-ranks the whole universe or (when bulk
     is unavailable) caps the deep fetch by market cap.
     """
-    return provider.screen_universe(criteria)
+    universe = provider.screen_universe(criteria)
+    logger.info(
+        "universe: %d names ($%g-%g, %s)",
+        len(universe), criteria.min_price, criteria.max_price, "/".join(criteria.exchanges),
+    )
+    return universe

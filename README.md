@@ -137,14 +137,21 @@ Add `--debug` before any command to see a full traceback on an unexpected error.
 
 ## Logging & troubleshooting
 
-- Results and **errors** print to the console. Data-provider problems — an expired Schwab login,
-  a rate limit, an outage — produce a clear, actionable message and a non-zero exit, **never a
-  silently empty result**.
-- Internal **warnings** (a skipped illiquid symbol, a partial/timed-out run, a cache hiccup) are
-  emitted via Python `logging` to **stderr**.
-- For a full traceback on an unexpected failure, re-run with `--debug`.
-- *(Configurable verbosity / per-step progress logging is a planned improvement — see
-  [docs/TODO.md](docs/TODO.md).)*
+Results and the table print to **stdout**; everything diagnostic goes to **stderr**, so
+`candidates -v > out.csv` keeps the CSV clean while you watch progress.
+
+- **Console verbosity** — quiet by default (only warnings + errors). Add `-v` for per-stage
+  progress (universe → fundamentals funnel → chains → candidates), or `-vv` for per-symbol detail:
+  ```bash
+  uv run wheel-screener -v candidates --top-n 250
+  ```
+- **Always-on log file** — every run also writes to a **rotating file at `logs/wheel-screener.log`**
+  (INFO and up, regardless of console verbosity; ~1 MB × 5 files). This is what makes a cron'd
+  refresh recoverable — the history is on disk even with no console attached. Tune via
+  `LOG__DIR`, `LOG__FILE_LEVEL`, `LOG__MAX_BYTES`, `LOG__BACKUP_COUNT`, or `LOG__ENABLE_FILE=false`.
+- **Errors** — data-provider problems (expired Schwab login, rate limit, outage) print a clear,
+  actionable message and exit non-zero — **never a silently empty result**. For a full traceback on
+  an *unexpected* failure, re-run with `--debug`.
 
 ## How it's built
 

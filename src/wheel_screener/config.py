@@ -40,6 +40,18 @@ class IvRankSettings(BaseModel):
     orats_token: SecretStr = SecretStr("")
 
 
+class LogSettings(BaseModel):
+    """Diagnostic logging. The console level follows -v/-vv; the rotating file always
+    captures ``file_level`` and up, so cron'd runs leave a recoverable history."""
+
+    dir: str = "logs"
+    file: str = "wheel-screener.log"
+    file_level: str = "INFO"  # INFO | DEBUG | WARNING | ...
+    enable_file: bool = True
+    max_bytes: int = 1_000_000  # ~1 MB per file before it rotates
+    backup_count: int = 5  # keep this many rotated files
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -50,6 +62,7 @@ class Settings(BaseSettings):
     schwab: SchwabSettings = Field(default_factory=SchwabSettings)
     fmp: FmpSettings = Field(default_factory=FmpSettings)
     iv_rank: IvRankSettings = Field(default_factory=IvRankSettings)
+    log: LogSettings = Field(default_factory=LogSettings)
 
     # fundamentals source: "local" reads the bulk CSV store; "live" hits FMP per-symbol
     fundamentals_source: str = "local"
