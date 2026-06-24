@@ -21,8 +21,9 @@ data/
 *.sqlite
 *.sqlite3
 
-# Output
+# Output / logs
 candidates.csv
+logs/
 
 # OS
 .DS_Store

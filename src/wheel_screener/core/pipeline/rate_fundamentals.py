@@ -11,12 +11,15 @@ unit-testable without a provider; ``rate_and_rank`` adds the provider fetches.
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from datetime import date, timedelta
 
 from wheel_screener.core.fundamentals import gate_reasons, rank_by_fundamentals
 from wheel_screener.core.models import ScreenCriteria, Underlying
 from wheel_screener.core.ports import FundamentalsProvider
+
+logger = logging.getLogger(__name__)
 
 
 def apply_earnings_blackout(
@@ -55,15 +58,20 @@ def select_top(
 
     Pure and deterministic given Underlyings with ``.metrics`` populated.
     """
-    survivors = [u for u in names if not gate_reasons(u.metrics, criteria)]
-    survivors = apply_earnings_blackout(survivors, earnings, today, criteria.max_dte)
+    gated = [u for u in names if not gate_reasons(u.metrics, criteria)]
+    survivors = apply_earnings_blackout(gated, earnings, today, criteria.max_dte)
     ranked = rank_by_fundamentals(survivors, criteria.factor_weights, criteria.stock_profile)
     if criteria.min_fundamental_score is not None:
         floor = criteria.min_fundamental_score
         ranked = [u for u in ranked if (u.fundamental_score or 0.0) >= floor]
     if criteria.max_per_sector is not None:
         ranked = _cap_per_sector(ranked, criteria.max_per_sector)
-    return ranked[: criteria.top_n]
+    kept = ranked[: criteria.top_n]
+    logger.info(
+        "fundamentals: %d/%d passed gates · %d blacked out (earnings ≤%dd) · top %d kept",
+        len(gated), len(names), len(gated) - len(survivors), criteria.max_dte, len(kept),
+    )
+    return kept
 
 
 def rate_and_rank(

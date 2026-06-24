@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import logging
 
 import pytest
 import typer
@@ -15,6 +16,17 @@ from wheel_screener.cli.main import (
 from wheel_screener.core.errors import AuthExpiredError, ProviderUnavailableError
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _restore_pkg_logger():
+    """Keep the callback's configure_logging from leaking handlers into other tests."""
+    lg = logging.getLogger("wheel_screener")
+    snap = (lg.level, lg.propagate, lg.handlers[:])
+    yield
+    lg.setLevel(snap[0])
+    lg.propagate = snap[1]
+    lg.handlers[:] = snap[2]
 
 
 def test_decorator_maps_auth_error_to_friendly_exit(capsys) -> None:
@@ -54,7 +66,8 @@ def test_decorated_commands_still_expose_options() -> None:
     commands = get_command(app).commands  # name -> click Command
     assert "top_n" in {p.name for p in commands["candidates"].params}
     assert "days" in {p.name for p in commands["refresh-fundamentals"].params}
-    assert runner.invoke(app, ["--help"]).exit_code == 0  # app still builds + renders
+    result = runner.invoke(app, ["--help"], env={"LOG__ENABLE_FILE": "false"})
+    assert result.exit_code == 0  # app still builds + renders
 
 
 def test_report_unexpected_clean_exit(capsys) -> None:
@@ -90,7 +103,8 @@ def test_main_passes_through_system_exit(monkeypatch) -> None:
     assert ei.value.code == 2  # Typer/Click exits are not swallowed or remapped
 
 
-def test_debug_is_a_global_option() -> None:
+def test_debug_and_verbose_are_global_options() -> None:
     from typer.main import get_command
 
-    assert "debug" in {p.name for p in get_command(app).params}
+    params = {p.name for p in get_command(app).params}
+    assert "debug" in params and "verbose" in params

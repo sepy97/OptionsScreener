@@ -54,7 +54,7 @@ def pull_chains(
                 try:
                     out[symbol] = fut.result()
                 except ProviderDataError as e:
-                    logger.warning("dropping %s: malformed chain (%s)", symbol, e)
+                    logger.debug("dropping %s: malformed/empty chain (%s)", symbol, e)  # routine
                 except ProviderError:
                     raise  # systemic (auth/rate/outage) — surface it, don't mask
                 except Exception as e:  # noqa: BLE001 - unexpected per-symbol issue: skip
@@ -64,4 +64,5 @@ def pull_chains(
         finally:
             for f in futures:
                 f.cancel()  # cancel any not-yet-started pulls
+    logger.info("chains: %d/%d survivors returned a chain", len(out), len(survivors))
     return out

@@ -15,6 +15,7 @@ from wheel_screener.composition import build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import AuthExpiredError, ProviderError, RateLimitedError
 from wheel_screener.core.models import ScreenCriteria, Underlying
+from wheel_screener.logging_config import configure_logging
 
 _F = TypeVar("_F", bound=Callable[..., object])
 _state = {"debug": False}  # set by the --debug global flag; read by the top-level catch-all
@@ -55,9 +56,13 @@ app = typer.Typer(
 
 @app.callback()
 def _main_callback(
+    verbose: int = typer.Option(
+        0, "--verbose", "-v", count=True, help="-v progress, -vv per-symbol debug."
+    ),
     debug: bool = typer.Option(False, "--debug", help="Show full tracebacks on unexpected errors."),
 ) -> None:
     _state["debug"] = debug
+    configure_logging(verbose, Settings().log)
 
 
 def _write_csv(names: list[Underlying], path: str) -> None:
