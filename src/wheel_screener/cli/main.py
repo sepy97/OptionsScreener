@@ -17,6 +17,7 @@ from wheel_screener.core.errors import AuthExpiredError, ProviderError, RateLimi
 from wheel_screener.core.models import ScreenCriteria, Underlying
 
 _F = TypeVar("_F", bound=Callable[..., object])
+_state = {"debug": False}  # set by the --debug global flag; read by the top-level catch-all
 
 
 def _provider_error_exit(e: ProviderError) -> None:
@@ -50,6 +51,13 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=False,
 )
+
+
+@app.callback()
+def _main_callback(
+    debug: bool = typer.Option(False, "--debug", help="Show full tracebacks on unexpected errors."),
+) -> None:
+    _state["debug"] = debug
 
 
 def _write_csv(names: list[Underlying], path: str) -> None:
@@ -240,8 +248,22 @@ def candidates(
     typer.echo(f"Wrote {len(results)} candidates to {output}")
 
 
+def _report_unexpected(e: Exception, *, debug: bool) -> None:
+    """Top-level safety net: turn an unexpected error into a one-line message + exit 1
+    (no raw traceback), unless --debug asked to see it."""
+    typer.echo(f"error: unexpected failure: {e}", err=True)
+    if debug:
+        raise e
+    raise SystemExit(1)
+
+
 def main() -> None:
-    app()
+    try:
+        app()
+    except (KeyboardInterrupt, SystemExit):
+        raise  # normal control flow / Typer exits — let them through unchanged
+    except Exception as e:  # noqa: BLE001 - deliberate top-level catch-all (no raw tracebacks)
+        _report_unexpected(e, debug=_state["debug"])
 
 
 if __name__ == "__main__":
