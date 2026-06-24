@@ -133,7 +133,8 @@ can't be automated — it needs a browser):
 | `refresh-earnings` | rebuild the local earnings calendar from FMP |
 | `refresh-fundamentals` | incremental fundamentals refresh for recent reporters |
 
-Add `--debug` before any command to see a full traceback on an unexpected error.
+Global flags go *before* the command: `-v` / `-vv` for progress / per-symbol logging, and
+`--debug` for a full traceback on an unexpected error — e.g. `wheel-screener -v candidates …`.
 
 ## Logging & troubleshooting
 
@@ -165,7 +166,7 @@ src/wheel_screener/
   core/      models · ports · fundamentals · ranking · errors · service
              pipeline/ (universe · rate_fundamentals · pull_chains · select_strike · rank)
   adapters/  fmp/ · schwab/ · local/ · http.py · cache.py · errors.py
-  cli/  api/   config.py   composition.py
+  cli/  api/   config.py   composition.py   logging_config.py
 tools/   fmp_bulk_import.py     # one-time whole-market bulk loader
 docs/    PLAN.md · TODO.md
 ```
@@ -186,6 +187,7 @@ in [docs/TODO.md](docs/TODO.md).
 **Working end-to-end and live-validated:** local fundamentals → Schwab chains → ranked CSP shortlist,
 with the earnings blackout, conservative bid-based yields, and a blended fundamental+yield ranking.
 Hardened for real-world failures — typed provider errors, retry/backoff, run timeout + cancellation
-+ partial results, no silent masking, and no raw tracebacks. The web (FastAPI) and Swift front-ends
++ partial results, no silent masking, no raw tracebacks, and verbosity-controlled logging with an
+always-on rotating log file. The web (FastAPI) and Swift front-ends
 are the next, optional layers; the service already exposes the `cancel` / `max_runtime_seconds` seam
 they'll use.
