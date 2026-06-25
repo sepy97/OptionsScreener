@@ -35,15 +35,23 @@ class _FakeFundamentals:
         return {"AAA"}
 
 
-def _candidate() -> CandidateResult:
+def _candidate(
+    symbol: str = "AAA", yld: float = 0.2, score: float = 0.5, fund: float | None = None
+) -> CandidateResult:
     contract = OptionContract(
-        underlying_symbol="AAA", option_symbol="AAA80P", option_type=OptionType.PUT,
+        underlying_symbol=symbol, option_symbol=f"{symbol}80P", option_type=OptionType.PUT,
         expiration=date(2026, 8, 15), strike=80.0, dte=40, bid=1.0, ask=1.1, raw={"mark": 1.05},
     )
     return CandidateResult(
-        symbol="AAA", contract=contract, annualized_yield=0.2, premium=1.0,
-        collateral=8000.0, score=0.5,
+        symbol=symbol, contract=contract, annualized_yield=yld, premium=1.0,
+        collateral=8000.0, score=score, fundamental_score=fund,
     )
+
+
+def _done_job(runner: JobRunner, *cands: CandidateResult) -> str:
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done", result=[c.model_dump(mode="json") for c in cands])
+    return "j"
 
 
 class _FakeService:
@@ -276,6 +284,53 @@ def test_dashboard_shows_latest_results(tmp_path) -> None:
     r = client.get("/")
     assert r.status_code == 200 and "AAA" in r.text and "Latest results" in r.text
     assert "just now" in r.text and "may be stale" not in r.text  # fresh snapshot
+
+
+def test_results_sort_by_column(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA", yld=0.1), _candidate("BBB", yld=0.9))
+    client = _client(runner)
+    desc = client.get("/runs/j/results?sort=yield&order=desc")
+    assert desc.status_code == 200 and desc.text.index("BBB") < desc.text.index("AAA")
+    asc = client.get("/runs/j/results?sort=symbol&order=asc").text
+    assert asc.index("AAA") < asc.index("BBB")
+    assert "/runs/j/results?sort=" in desc.text  # headers are sortable links
+
+
+def test_candidate_detail_fragment(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA"))
+    client = _client(runner)
+    r = client.get("/runs/j/candidates/AAA")
+    assert r.status_code == 200 and "AAA80P" in r.text and "collateral" in r.text.lower()
+    assert client.get("/runs/j/candidates/NOPE").status_code == 404
+
+
+def test_results_table_has_detail_links(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA"))
+    r = _client(runner).get("/runs/j/results")
+    assert "/runs/j/candidates/AAA" in r.text and 'id="d-j-1"' in r.text  # index-based DOM id
+
+
+def test_detail_target_selector_safe_for_dotted_symbols(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("BRK.B"))  # share-class ticker — a dot is invalid in a CSS #id
+    client = _client(runner)
+    r = client.get("/runs/j/results")
+    assert 'id="d-j-1"' in r.text and 'hx-target="#d-j-1"' in r.text  # row index, not the symbol
+    assert "d-j-BRK.B" not in r.text  # never emits a CSS-unsafe id/target
+    assert "/runs/j/candidates/BRK.B" in r.text  # real symbol stays in the URL
+    assert client.get("/runs/j/candidates/BRK.B").status_code == 200  # and the route resolves it
+
+
+def test_sort_handles_nulls_and_nested_columns(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA", fund=None), _candidate("BBB", fund=0.9))
+    client = _client(runner)
+    desc = client.get("/runs/j/results?sort=fund&order=desc")  # _num(-inf) path, no TypeError
+    assert desc.status_code == 200 and desc.text.index("BBB") < desc.text.index("AAA")  # null sinks
+    assert client.get("/runs/j/results?sort=strike&order=asc").status_code == 200  # nested key
 
 
 def test_humanize_age() -> None:
