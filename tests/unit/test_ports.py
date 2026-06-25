@@ -21,6 +21,11 @@ def test_schwab_capabilities() -> None:
     assert caps.supports_batch_underlyings is False
 
 
+def test_schwab_concurrency_is_configurable() -> None:
+    caps = SchwabChainProvider(SchwabSettings(max_concurrency=5)).capabilities()
+    assert caps.max_concurrency == 5  # pull_chains uses this to size its thread pool
+
+
 def test_build_service_local_is_default() -> None:
     service = build_service(Settings())  # default fundamentals_source == "local"
     assert isinstance(service, ScreenerService)

@@ -83,7 +83,7 @@ class SchwabChainProvider:
         return ProviderCaps(
             name="schwab",
             supports_batch_underlyings=False,
-            max_concurrency=2,
+            max_concurrency=self._settings.max_concurrency,
             server_side_filters=["contractType", "strikeCount", "fromDate", "toDate", "range"],
             realtime=True,
         )
