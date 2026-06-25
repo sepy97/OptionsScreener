@@ -107,3 +107,52 @@ backend is `curl`-able clean JSON with job polling.
 ### Out of scope (later milestones)
 HTML / templates / styling (M3.2); login + Schwab-on-server OAuth (M3.3); containerization &
 deployment (M3.5).
+
+---
+
+## M3.2 — HTMX web UI
+
+**Goal:** a private, server-rendered web app on the M3.1 API — see the latest candidates, run a
+new screen with **live progress**, and drill into a candidate. No auth/deploy (M3.3 / M3.5).
+
+**Stack:** FastAPI + **Jinja2** templates + **HTMX** (HTML elements issue requests and swap in HTML
+fragments — no SPA, no build step) + **Pico.css** (classless styling). htmx + pico are **vendored**
+under `api/static/` (self-contained, no CDN at deploy). HTML routes call the in-process
+`JobRunner`/`JobStore` directly (per Architecture & boundaries) — no HTTP self-calls; the JSON API
+stays for programmatic/Swift use.
+
+**Routes (HTML):**
+- `GET /` — dashboard: the run-screen form + the latest completed run's results (or empty state).
+- `POST /runs` — form → `ScreenRequest` → `runner.start` → return the **progress panel** fragment
+  (begins polling); 409 → "a screen is already running".
+- `GET /runs/{id}/progress` — HTMX poll target: running → re-render the funnel & keep polling; done
+  → return the **results table** (stops polling); failed/cancelled → error/partial fragment.
+- `POST /runs/{id}/cancel` — cancel → updated fragment.
+- `GET /runs/{id}/candidates/{i}` — candidate **detail** fragment (row-expand) *(PR-D)*.
+
+`JobStore.latest_done()` feeds the dashboard.
+
+**HTMX run-flow:** `POST /runs` returns a `<div hx-get="/runs/{id}/progress" hx-trigger="load, every
+2s" hx-swap="outerHTML">`; it polls itself, re-rendering the funnel while running, then **replaces
+itself** with the results table when done (or an error/partial fragment). A Cancel button
+`hx-post`s the cancel route. Standard "poll-until-done, then swap in the result" pattern — no custom JS.
+
+**Templates:** `base.html`, `dashboard.html`, partials `_form` / `_progress` / `_results` /
+`_candidate` / `_error`. Results table ranked by `score` (bid/mid/yield/score/OI/delta/IV); column
+**sort** via HTMX (`?sort=` re-renders from the stored result) — PR-D.
+
+**Tests:** `TestClient` + fake runner/service via `dependency_overrides`; assert key HTML substrings
+(form present; `POST /runs` fragment carries the poll `hx-get`; a done job's `/progress` contains the
+candidate symbol; a failed job renders the typed error).
+
+### PR breakdown
+- **PR C — UI foundation + run flow:** jinja2/static deps + packaging, base layout, dashboard
+  (form + latest results), `POST /runs` → progress poll → results table, cancel. The working app.
+- **PR D — polish:** column sort, candidate-detail row-expand, empty/loading/error states, light
+  styling, optional quick-filter.
+
+### Acceptance criteria
+- `GET /` shows the form (+ latest results if any); submitting runs a screen with a funnel that
+  updates ~every 2s, then renders the results table; cancel works; a failed run shows an actionable
+  message. Fully server-rendered; htmx/pico vendored (no external network for assets); `TestClient`
+  coverage of the routes/fragments.
