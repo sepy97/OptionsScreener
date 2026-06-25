@@ -11,20 +11,26 @@ from wheel_screener.core.models import ScreenCriteria
 _FILES = {
     "profile-bulk_part0.csv": (
         "symbol,price,marketCap,beta,companyName,exchange,sector,industry,"
-        "fullTimeEmployees,isEtf,isFund,isAdr,isActivelyTrading\n"
-        "GOOD,100,5000000000,1.1,Good Inc,NASDAQ,Technology,Software,5000,false,false,false,true\n"
-        "ETFX,50,1000000000,1.0,ETF X,NASDAQ,,Asset Management,0,true,false,false,true\n"
-        "FRGN,80,9000000000,1.0,Foreign Co,LSE,Technology,Software,100,false,false,false,true\n"
-        "SMALL,5,3000000000,1.0,Small Co,NYSE,Industrials,Manufacturing,50,false,false,false,true\n"
+        "fullTimeEmployees,isEtf,isFund,isAdr,isActivelyTrading,averageVolume\n"
+        "GOOD,100,5000000000,1.1,Good Inc,NASDAQ,Technology,Software,5000,"
+        "false,false,false,true,1000000\n"
+        "ETFX,50,1000000000,1.0,ETF X,NASDAQ,,Asset Management,0,true,false,false,true,1000000\n"
+        "FRGN,80,9000000000,1.0,Foreign Co,LSE,Technology,Software,100,"
+        "false,false,false,true,1000000\n"
+        "SMALL,5,3000000000,1.0,Small Co,NYSE,Industrials,Manufacturing,50,"
+        "false,false,false,true,1000000\n"
         "NOTEX,25,3000000000,1.0,Acme 6.00% Notes due 2026,NASDAQ,Financial Services,"
-        "Asset Management,11,false,false,false,true\n"
+        "Asset Management,11,false,false,false,true,1000000\n"
         "CEFX,50,3000000000,1.0,Some Closed Fund Limited,NYSE,Financial Services,"
-        "Asset Management,0,false,false,false,true\n"
+        "Asset Management,0,false,false,false,true,1000000\n"
         # IMPP (common) + IMPPP (preferred, same name): dedup keeps the shorter ticker
         "IMPP,30,3000000000,1.0,Imperial Petroleum Inc.,NASDAQ,Energy,Oil & Gas E&P,74,"
-        "false,false,false,true\n"
+        "false,false,false,true,2000000\n"
         "IMPPP,26,3000000000,1.0,Imperial Petroleum Inc.,NASDAQ,Energy,Oil & Gas E&P,74,"
-        "false,false,false,true\n"
+        "false,false,false,true,2000000\n"
+        # common stock, passes every other filter, but only $5M/day -> dropped by the volume floor
+        "THIN,50,3000000000,1.0,Thin Co,NYSE,Industrials,Manufacturing,50,"
+        "false,false,false,true,100000\n"
     ),
     "ratios-ttm-bulk.csv": (
         "symbol,priceToEarningsRatioTTM,priceToSalesRatioTTM,priceToBookRatioTTM,"
@@ -63,9 +69,20 @@ def test_screen_universe_filters(store: Path) -> None:
     )}
     # kept: GOOD (common) and IMPP (common). Excluded: ETFX (isEtf), FRGN (LSE),
     # SMALL (price<20), NOTEX (baby-bond name), CEFX (closed-end fund),
-    # IMPPP (preferred — same name as IMPP, longer ticker -> dedup drops it).
+    # IMPPP (preferred — same name as IMPP, longer ticker -> dedup drops it),
+    # THIN ($5M/day < the $25M default dollar-volume floor).
     assert universe == {"GOOD", "IMPP"}
     assert "IMPPP" not in universe and "NOTEX" not in universe and "CEFX" not in universe
+
+
+def test_min_dollar_volume_prefilter(store: Path) -> None:
+    p = LocalFundamentalsProvider(str(store))
+    off = {u.symbol for u in p.screen_universe(
+        ScreenCriteria(min_market_cap=2e9, min_dollar_volume=0))}
+    on = {u.symbol for u in p.screen_universe(
+        ScreenCriteria(min_market_cap=2e9, min_dollar_volume=25_000_000))}
+    assert "THIN" in off  # $5M/day survives with the filter off
+    assert "THIN" not in on and "GOOD" in on  # dropped at $25M; liquid names survive
 
 
 def test_fetch_metrics_maps_and_coalesces_latest_year(store: Path) -> None:

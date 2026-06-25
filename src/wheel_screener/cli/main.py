@@ -226,6 +226,9 @@ def candidates(
     min_price: float = typer.Option(20.0, help="Minimum share price."),
     max_price: float = typer.Option(200.0, help="Maximum share price."),
     min_market_cap: float = typer.Option(0.0, help="Minimum market cap (0 = off)."),
+    min_dollar_volume: float = typer.Option(
+        25_000_000.0, help="Skip stocks below this avg daily $-volume (0 = off)."
+    ),
     top_n: int = typer.Option(250, help="Fundamental survivors to pull chains for."),
     min_yield: float = typer.Option(0.0, help="Drop candidates below this annualized yield."),
     fundamental_weight: float = typer.Option(
@@ -247,6 +250,7 @@ def candidates(
 
     criteria = ScreenCriteria(
         min_price=min_price, max_price=max_price, min_market_cap=min_market_cap,
+        min_dollar_volume=min_dollar_volume,
         top_n=top_n, prerank_keep=1_000_000,
         min_annualized_yield=(min_yield if min_yield > 0 else None),
         fundamental_weight=fundamental_weight,

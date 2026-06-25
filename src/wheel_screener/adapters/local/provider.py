@@ -163,6 +163,11 @@ class LocalFundamentalsProvider:
             & (pl.col("price") <= criteria.max_price)
             & (pl.col("marketCap") >= criteria.min_market_cap)
         )
+        if criteria.min_dollar_volume > 0 and "averageVolume" in df.columns:
+            # skip stocks too thin to have tradeable options (they'd fail the OI/spread gates
+            # after a wasted chain call) — the cheap win against the Schwab rate limit
+            dvol = pl.col("price") * pl.col("averageVolume").cast(pl.Float64, strict=False)
+            df = df.filter(dvol.fill_null(0.0) >= criteria.min_dollar_volume)
         return [
             Underlying(
                 symbol=r["symbol"], name=r.get("companyName"),
