@@ -258,6 +258,17 @@ def test_invalid_form_renders_422(tmp_path) -> None:
     assert r.status_code == 422 and "invalid input" in r.text
 
 
+def test_screen_request_maps_min_dollar_volume() -> None:
+    from wheel_screener.api.schemas import ScreenRequest
+
+    assert ScreenRequest(min_dollar_volume=10_000_000).to_criteria().min_dollar_volume == 10_000_000
+
+
+def test_dashboard_form_exposes_min_dollar_volume(tmp_path) -> None:
+    r = _client(_runner(_FakeService(result=[]), tmp_path)).get("/")
+    assert r.status_code == 200 and 'name="min_dollar_volume"' in r.text
+
+
 def test_dashboard_shows_latest_results(tmp_path) -> None:
     runner = _runner(_FakeService(result=[_candidate()]), tmp_path)
     client = _client(runner)

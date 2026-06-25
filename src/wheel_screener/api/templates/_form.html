@@ -9,6 +9,10 @@
     </label>
   </div>
   <div class="grid">
+    <label>Min $-volume/day
+      <input type="number" name="min_dollar_volume" value="{{ defaults.min_dollar_volume }}"
+             step="1000000" min="0">
+    </label>
     <label>Min yield (e.g. 0.15)
       <input type="number" name="min_yield" step="0.01" placeholder="(none)">
     </label>
