@@ -40,6 +40,9 @@ class ScreenCriteria(BaseModel):
     min_price: float = 20.0
     max_price: float = 200.0
     min_market_cap: float = 0.0  # off by default — option open interest is the real liquidity gate
+    # skip stocks too thin to have tradeable options (price × avg daily volume); the cheap
+    # lever against the chain-pull rate limit — fewer wasted calls on names that can't qualify
+    min_dollar_volume: float = 25_000_000.0
     exchanges: list[str] = Field(default_factory=lambda: ["nasdaq", "nyse"])
     prerank_keep: int = 150  # names kept after the cheap bulk pre-rank, for the deep fetch
     universe_limit: int = 50  # deep-fetch cap (by market cap) when bulk pre-rank is unavailable
