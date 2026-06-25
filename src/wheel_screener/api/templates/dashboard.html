@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+  <section>
+    <h2>Run a screen</h2>
+    {% include "_form.html" %}
+  </section>
+
+  <section id="run"></section>
+
+  {% if latest %}
+  <section>
+    <h2>Latest results <small>({{ latest.created_at[:16].replace("T", " ") }} UTC)</small></h2>
+    {% with job = latest %}{% include "_results.html" %}{% endwith %}
+  </section>
+  {% endif %}
+{% endblock %}

@@ -13,8 +13,11 @@ import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response
+from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from pydantic import ValidationError
 
 from wheel_screener.api.deps import get_job_runner, get_service, get_settings
 from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
@@ -61,6 +64,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Wheel Screener API", version="0.1.0", lifespan=lifespan)
+
+_HERE = Path(__file__).parent
+templates = Jinja2Templates(directory=str(_HERE / "templates"))
+app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
+
+
+def _opt_float(raw: str) -> float | None:
+    raw = (raw or "").strip()
+    return float(raw) if raw else None
 
 
 @app.exception_handler(ProviderError)
@@ -130,3 +142,72 @@ def cancel_screen(
     runner.cancel(job_id)
     response.status_code = 202
     return {"job_id": job_id, "status": "cancelling"}
+
+
+# --- HTML (HTMX) UI -------------------------------------------------------------------------
+
+
+@app.get("/")
+def dashboard(request: Request, runner: JobRunner = Depends(get_job_runner)):
+    return templates.TemplateResponse(
+        request, "dashboard.html",
+        {"defaults": ScreenRequest(), "latest": runner.store.latest_done()},
+    )
+
+
+@app.post("/runs")
+def start_run(
+    request: Request,
+    top_n: int = Form(250),
+    fundamental_weight: float = Form(0.5),
+    min_yield: str = Form(""),
+    min_dte: int = Form(30),
+    max_dte: int = Form(45),
+    timeout_seconds: str = Form(""),
+    runner: JobRunner = Depends(get_job_runner),
+):
+    try:
+        req = ScreenRequest(
+            top_n=top_n, fundamental_weight=fundamental_weight, min_yield=_opt_float(min_yield),
+            min_dte=min_dte, max_dte=max_dte, timeout_seconds=_opt_float(timeout_seconds),
+        )
+    except (ValidationError, ValueError) as e:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": f"invalid input: {e}"}, status_code=422
+        )
+    try:
+        job_id = runner.start(req.to_criteria())
+    except JobBusyError as e:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": str(e)}, status_code=409
+        )
+    job = {"job_id": job_id, "status": "running", "progress": []}
+    return templates.TemplateResponse(request, "_progress.html", {"job": job})
+
+
+@app.get("/runs/{job_id}/progress")
+def run_progress(request: Request, job_id: str, runner: JobRunner = Depends(get_job_runner)):
+    job = runner.get(job_id)
+    if job is None:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "unknown run"}, status_code=404
+        )
+    if job["status"] == "running":
+        return templates.TemplateResponse(request, "_progress.html", {"job": job})
+    if job["status"] == "failed":
+        err = job.get("error") or {}
+        message = f"{err.get('type', 'error')}: {err.get('detail', '')}"
+        return templates.TemplateResponse(request, "_error.html", {"message": message})
+    return templates.TemplateResponse(request, "_results.html", {"job": job})  # done / cancelled
+
+
+@app.post("/runs/{job_id}/cancel")
+def cancel_run(request: Request, job_id: str, runner: JobRunner = Depends(get_job_runner)):
+    job = runner.get(job_id)
+    if job is None:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "unknown run"}, status_code=404
+        )
+    if job["status"] == "running":
+        runner.cancel(job_id)
+    return templates.TemplateResponse(request, "_progress.html", {"job": runner.get(job_id)})

@@ -90,14 +90,8 @@ class JobStore:
             ),
         )
 
-    def get(self, job_id: str) -> dict | None:
-        conn = self._connect()
-        try:
-            row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
-        finally:
-            conn.close()
-        if row is None:
-            return None
+    @staticmethod
+    def _row(row: sqlite3.Row) -> dict:
         return {
             "job_id": row["id"],
             "status": row["status"],
@@ -106,6 +100,26 @@ class JobStore:
             "error": json.loads(row["error"]) if row["error"] else None,
             "created_at": row["created_at"],
         }
+
+    def get(self, job_id: str) -> dict | None:
+        conn = self._connect()
+        try:
+            row = conn.execute("SELECT * FROM jobs WHERE id=?", (job_id,)).fetchone()
+        finally:
+            conn.close()
+        return self._row(row) if row is not None else None
+
+    def latest_done(self) -> dict | None:
+        """Most recent completed/cancelled job — powers the dashboard's 'latest results'."""
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE status IN ('done', 'cancelled') "
+                "ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+        return self._row(row) if row is not None else None
 
 
 class _ProgressHandler(logging.Handler):
