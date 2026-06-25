@@ -9,7 +9,12 @@
 
   {% if latest %}
   <section>
-    <h2>Latest results <small>({{ latest.created_at[:16].replace("T", " ") }} UTC)</small></h2>
+    <h2>Latest results
+      <small>as of {{ latest.created_at[:16].replace("T", " ") }} UTC ({{ latest_age }})</small>
+      {% if latest_stale %}
+      <small><mark>&#9888; may be stale &mdash; re-run for live prices</mark></small>
+      {% endif %}
+    </h2>
     {% with job = latest %}{% include "_results.html" %}{% endwith %}
   </section>
   {% endif %}
