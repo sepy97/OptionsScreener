@@ -19,6 +19,26 @@ client remains possible. See [PLAN.md](PLAN.md) for the overall product design.
   host cron.** Chosen over App Platform (the data store is stateful) and over AWS/Azure (simpler,
   and matches existing experience).
 
+## Architecture & boundaries
+
+**Decision: one repo; the web UI is an in-process delivery layer over the shared core — not a
+separate repo/service, and it must never shell out to the CLI.**
+
+- The engine is `ScreenerService` (core + adapters, framework-free). The CLI (`cli/`) and the web
+  (`api/`) are **sibling delivery layers** that call `ScreenerService` directly (in-process Python
+  calls). The CLI is **not** the web's backend.
+- **One repo for now:** with FastAPI + HTMX (server-rendered), the UI *is* the FastAPI process —
+  there's no network boundary to gain from a split, and it co-deploys (same droplet, data volume,
+  Schwab token). A split would only add cross-repo versioning + a second pipeline for no benefit.
+- **Do not** run the CLI as a subprocess from the web: it reloads the store per call (throws away
+  the singleton), parses CSV, and loses the shared rate-limiter / progress / cancellation.
+- **Already split-ready:** `core/` imports nothing from `cli/`/`api/`; the web deps are the optional
+  `api` extra; the only seam is `ScreenerService` + the JSON contract (finalized in M3.0).
+- **Revisit a split** (extract `core`+`adapters` into a published package, or expose the engine as a
+  network service) only if one of these becomes true: multi-user / SaaS, independent scaling (a
+  worker fleet), a separate JS frontend or third-party API consumers, or independent release
+  cadences. Because the seam is clean, that would be a mechanical extraction — not a rewrite.
+
 ## Milestones
 
 | Milestone | Scope | Status |
