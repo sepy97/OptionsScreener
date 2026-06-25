@@ -124,6 +124,14 @@ def test_failed_job_records_typed_error(tmp_path) -> None:
     assert job["status"] == "failed" and job["error"]["type"] == "AuthExpiredError"
 
 
+def test_run_blocking_stores_done_result(tmp_path) -> None:
+    runner = _runner(_FakeService(result=[_candidate()]), tmp_path)
+    job_id = runner.run_blocking(ScreenCriteria())  # synchronous (CLI/cron precompute path)
+    latest = runner.store.latest_done()
+    assert latest is not None and latest["job_id"] == job_id and latest["status"] == "done"
+    assert len(latest["result"]) == 1 and latest["result"][0]["symbol"] == "AAA"
+
+
 def test_unknown_job_returns_404(tmp_path) -> None:
     assert _client(_runner(_FakeService(), tmp_path)).get("/screen/nope").status_code == 404
 

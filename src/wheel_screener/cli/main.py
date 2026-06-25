@@ -206,6 +206,30 @@ def refresh_fundamentals(
     typer.echo(f"Refreshed {len(fresh)} symbols into the overlay ({total} rows total).")
 
 
+@app.command("refresh-screen")
+@handle_provider_errors
+def refresh_screen(
+    top_n: int = typer.Option(250, help="Fundamental survivors to pull chains for."),
+    min_dollar_volume: float = typer.Option(25_000_000.0, help="Avg daily $-volume floor."),
+    fundamental_weight: float = typer.Option(0.5, help="Rank blend: 1=fundamentals, 0=yield."),
+    min_yield: float = typer.Option(0.0, help="Drop candidates below this annualized yield."),
+) -> None:
+    """Run a screen and store it where the web dashboard reads 'latest results' — so a cron'd
+    run keeps the UI instant (precompute), instead of the user waiting on a live pull."""
+    from wheel_screener.api.jobs import JobRunner, JobStore
+
+    settings = Settings()
+    criteria = ScreenCriteria(
+        top_n=top_n, prerank_keep=1_000_000, min_dollar_volume=min_dollar_volume,
+        fundamental_weight=fundamental_weight,
+        min_annualized_yield=(min_yield if min_yield > 0 else None),
+    )
+    runner = JobRunner(build_service(settings), JobStore(settings.jobs_db_path))
+    job = runner.get(runner.run_blocking(criteria))
+    n = len(job.get("result") or [])
+    typer.echo(f"Stored screen ({job['status']}, {n} candidates) — the dashboard now shows it.")
+
+
 @app.command("auth-login")
 def auth_login() -> None:
     """Run the Schwab OAuth login in your browser (refresh token expires every 7 days)."""
