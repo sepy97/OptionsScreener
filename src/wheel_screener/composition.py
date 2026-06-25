@@ -7,13 +7,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from wheel_screener.adapters.alpaca.provider import AlpacaChainProvider
 from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
 from wheel_screener.adapters.local.earnings import LocalEarningsCalendar
 from wheel_screener.adapters.local.provider import LocalFundamentalsProvider
 from wheel_screener.adapters.schwab.provider import SchwabChainProvider
 from wheel_screener.config import Settings
-from wheel_screener.core.ports import FundamentalsProvider
+from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
 from wheel_screener.core.service import ScreenerService
+
+
+def _build_chains(settings: Settings) -> ChainProvider:
+    if settings.chain_source == "alpaca":
+        return AlpacaChainProvider(settings.alpaca)
+    return SchwabChainProvider(settings.schwab)
 
 
 def _build_fundamentals(settings: Settings) -> FundamentalsProvider:
@@ -34,5 +41,5 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
     settings = settings or Settings()
     return ScreenerService(
         fundamentals=_build_fundamentals(settings),
-        chains=SchwabChainProvider(settings.schwab),
+        chains=_build_chains(settings),
     )

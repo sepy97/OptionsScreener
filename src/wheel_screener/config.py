@@ -34,6 +34,29 @@ class FmpSettings(BaseModel):
     cache_ttl_seconds: int = 86_400
 
 
+class AlpacaSettings(BaseModel):
+    """Alpaca options market data (~1000 req/min vs Schwab ~120; key/secret auth, no OAuth).
+
+    Two endpoints are merged per underlying: the data-API *snapshot* (quotes/greeks/IV) and the
+    trading-API *contracts* reference (open interest). ``feed`` is 'indicative' (free, delayed/
+    modified quotes) or 'opra' (paid real-time)."""
+
+    api_key: SecretStr = SecretStr("")
+    api_secret: SecretStr = SecretStr("")
+    feed: str = "indicative"  # indicative (free) | opra (paid, real-time OPRA)
+    data_base_url: str = "https://data.alpaca.markets"  # snapshots (quotes/greeks/IV)
+    # /v2/options/contracts (OI) is account-bound — this MUST match the api_key/api_secret
+    # environment. Paper-account users: set to https://paper-api.alpaca.markets.
+    trading_base_url: str = "https://api.alpaca.markets"
+    calls_per_minute: int = 1000  # Alpaca data API ~1000/min
+    max_concurrency: int = 16
+    max_retries: int = 3  # retry transient 429/5xx (0 = no retry)
+    retry_backoff_multiplier: float = 1.0  # exponential backoff base; 0 disables the wait
+    chain_cache_enabled: bool = True
+    chain_cache_dir: str = ".cache/alpaca"
+    chain_cache_ttl_seconds: int = 300
+
+
 class IvRankSettings(BaseModel):
     source: str = "store"  # store | orats | flashalpha
     db_path: str = "data/iv_history.sqlite"
@@ -61,9 +84,13 @@ class Settings(BaseSettings):
     )
 
     schwab: SchwabSettings = Field(default_factory=SchwabSettings)
+    alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)
     fmp: FmpSettings = Field(default_factory=FmpSettings)
     iv_rank: IvRankSettings = Field(default_factory=IvRankSettings)
     log: LogSettings = Field(default_factory=LogSettings)
+
+    # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)
+    chain_source: str = "schwab"
 
     # fundamentals source: "local" reads the bulk CSV store; "live" hits FMP per-symbol
     fundamentals_source: str = "local"

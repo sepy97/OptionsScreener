@@ -33,7 +33,11 @@ Each run is a pipeline:
   downloaded **once** into a local store, so screens are instant and quota-free; small refresh jobs
   keep it current on a cheap key.
 - **Schwab** — live option chains with greeks/IV (OAuth; the only piece that needs a weekly
-  re-login).
+  re-login). The default chain source.
+- **Alpaca** *(optional alternative)* — option chains with greeks/IV at ~1000 req/min (vs Schwab's
+  ~120) and simple key/secret auth (no weekly OAuth). Opt in with `CHAIN_SOURCE=alpaca` +
+  `ALPACA__API_KEY` / `ALPACA__API_SECRET`; `ALPACA__FEED=indicative` (free) or `opra` (paid,
+  real-time). See [Using Alpaca](#using-alpaca-for-chains).
 
 **Nothing is scheduled for you.** You run the screen on demand and run the small data-refresh
 commands periodically — by hand, or wire them into your own `cron` (examples below).
@@ -69,6 +73,26 @@ uv run wheel-screener auth-login
 `.env` keys: `FMP__API_KEY` (fundamentals + earnings) and `SCHWAB__CLIENT_ID` /
 `SCHWAB__CLIENT_SECRET` (chains). `FMP_BULK_API_KEY` is used only by the importer (env var,
 `--api-key`, or `.env`). All of `.env`, `.secrets/`, and `data/` are gitignored.
+
+### Using Alpaca for chains
+
+Alpaca is an optional drop-in alternative to Schwab for the option-chain stage — higher rate limit
+(~1000 vs ~120 req/min) and key/secret auth (no weekly OAuth login). It implements the same
+`ChainProvider` port, so nothing else changes; the composition root picks it from config:
+
+```dotenv
+CHAIN_SOURCE=alpaca
+ALPACA__API_KEY=your-key
+ALPACA__API_SECRET=your-secret
+ALPACA__FEED=indicative        # free (delayed/modified quotes); use "opra" for paid real-time
+# ALPACA__TRADING_BASE_URL=https://paper-api.alpaca.markets   # ONLY if using paper-account keys
+```
+
+It merges two Alpaca endpoints per underlying — the data-API snapshot (quotes/greeks/IV) and the
+trading-API contracts reference (open interest). The contracts host defaults to the **live** API
+(`api.alpaca.markets`); if your keys are **paper** keys, override `ALPACA__TRADING_BASE_URL` to
+`https://paper-api.alpaca.markets` (it must match the environment of your key/secret). The default
+remains `CHAIN_SOURCE=schwab`.
 
 ## Running a screen
 
