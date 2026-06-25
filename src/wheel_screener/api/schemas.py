@@ -15,6 +15,9 @@ from wheel_screener.core.models import ScreenCriteria
 class ScreenRequest(BaseModel):
     top_n: int = Field(250, ge=1, le=2000, description="Fundamental survivors to pull chains for.")
     fundamental_weight: float = Field(0.5, ge=0.0, le=1.0, description="1=quality, 0=yield.")
+    min_dollar_volume: float = Field(
+        25_000_000.0, ge=0.0, description="Skip stocks below this avg daily $-volume (0=off)."
+    )
     min_yield: float | None = Field(None, ge=0.0, description="Drop candidates below this yield.")
     min_dte: int = Field(30, ge=1, le=400)
     max_dte: int = Field(45, ge=1, le=400)
@@ -31,6 +34,7 @@ class ScreenRequest(BaseModel):
             top_n=self.top_n,
             prerank_keep=1_000_000,  # local store is free: rank the whole filtered universe
             fundamental_weight=self.fundamental_weight,
+            min_dollar_volume=self.min_dollar_volume,
             min_annualized_yield=self.min_yield,
             min_dte=self.min_dte,
             max_dte=self.max_dte,

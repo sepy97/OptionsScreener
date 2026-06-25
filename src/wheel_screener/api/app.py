@@ -160,6 +160,7 @@ def start_run(
     request: Request,
     top_n: int = Form(250),
     fundamental_weight: float = Form(0.5),
+    min_dollar_volume: float = Form(25_000_000.0),
     min_yield: str = Form(""),
     min_dte: int = Form(30),
     max_dte: int = Form(45),
@@ -168,7 +169,8 @@ def start_run(
 ):
     try:
         req = ScreenRequest(
-            top_n=top_n, fundamental_weight=fundamental_weight, min_yield=_opt_float(min_yield),
+            top_n=top_n, fundamental_weight=fundamental_weight,
+            min_dollar_volume=min_dollar_volume, min_yield=_opt_float(min_yield),
             min_dte=min_dte, max_dte=max_dte, timeout_seconds=_opt_float(timeout_seconds),
         )
     except (ValidationError, ValueError) as e:
