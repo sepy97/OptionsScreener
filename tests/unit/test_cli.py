@@ -108,3 +108,25 @@ def test_debug_and_verbose_are_global_options() -> None:
 
     params = {p.name for p in get_command(app).params}
     assert "debug" in params and "verbose" in params
+
+
+def test_refresh_screen_populates_the_dashboard_store(tmp_path, monkeypatch) -> None:
+    from datetime import date
+
+    from wheel_screener.api.jobs import JobStore
+    from wheel_screener.core.models import CandidateResult, OptionContract, OptionType
+
+    class _Svc:
+        def run_screen(self, criteria, today, *, cancel=None):
+            c = OptionContract(
+                underlying_symbol="AAA", option_symbol="x", option_type=OptionType.PUT,
+                expiration=date(2026, 8, 15), strike=80.0, dte=40, bid=1.0, ask=1.1,
+            )
+            return [CandidateResult(symbol="AAA", contract=c, score=0.5)]
+
+    monkeypatch.setenv("JOBS_DB_PATH", str(tmp_path / "jobs.sqlite"))
+    monkeypatch.setattr("wheel_screener.cli.main.build_service", lambda *a, **k: _Svc())
+    result = runner.invoke(app, ["refresh-screen", "--top-n", "5"])
+    assert result.exit_code == 0 and "candidates" in result.output
+    latest = JobStore(str(tmp_path / "jobs.sqlite")).latest_done()  # what the web dashboard reads
+    assert latest is not None and latest["result"][0]["symbol"] == "AAA"

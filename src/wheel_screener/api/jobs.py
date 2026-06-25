@@ -172,6 +172,17 @@ class JobRunner:
             raise
         return job_id
 
+    def run_blocking(self, criteria: ScreenCriteria) -> str:
+        """Run a screen synchronously and store it; returns the job id. For a one-shot caller
+        (CLI / cron precompute) that wants the result persisted for the web to serve — unlike
+        start(), no thread and no single-in-flight gate."""
+        job_id = uuid.uuid4().hex
+        cancel = threading.Event()
+        self._cancels[job_id] = cancel
+        self.store.create(job_id, datetime.now(tz=UTC).isoformat())
+        self._run(job_id, criteria, cancel)
+        return job_id
+
     def cancel(self, job_id: str) -> None:
         event = self._cancels.get(job_id)
         if event is not None:
