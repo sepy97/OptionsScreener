@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("fastapi")  # only runs when the `api` extra is installed
 
-from datetime import date  # noqa: E402
+from datetime import UTC, date, datetime  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -275,3 +275,28 @@ def test_dashboard_shows_latest_results(tmp_path) -> None:
     runner.wait(_job_id_from(client.post("/runs", data={"top_n": 10}).text))
     r = client.get("/")
     assert r.status_code == 200 and "AAA" in r.text and "Latest results" in r.text
+    assert "just now" in r.text and "may be stale" not in r.text  # fresh snapshot
+
+
+def test_humanize_age() -> None:
+    from datetime import timedelta
+
+    from wheel_screener.api.app import _humanize_age
+
+    now = datetime.now(tz=UTC)
+    assert _humanize_age(now.isoformat()) == ("just now", False)
+    label, stale = _humanize_age((now - timedelta(hours=3)).isoformat())
+    assert label == "3h ago" and stale is True
+    assert _humanize_age((now - timedelta(days=2)).isoformat())[0] == "2d ago"
+    assert _humanize_age("not-a-date") == ("", False)  # never raises
+
+
+def test_dashboard_flags_stale_snapshot(tmp_path) -> None:
+    from datetime import timedelta
+
+    runner = _runner(_FakeService(), tmp_path)
+    old = (datetime.now(tz=UTC) - timedelta(hours=5)).isoformat()
+    runner.store.create("old", old)
+    runner.store.finish("old", "done", result=[_candidate().model_dump(mode="json")])
+    r = _client(runner).get("/")
+    assert "5h ago" in r.text and "may be stale" in r.text

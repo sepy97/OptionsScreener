@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import UTC, datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
@@ -73,6 +74,31 @@ app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static"
 def _opt_float(raw: str) -> float | None:
     raw = (raw or "").strip()
     return float(raw) if raw else None
+
+
+# option prices/IV move intraday, so a precomputed snapshot older than this is flagged stale
+_STALE_AFTER_SECONDS = 3600
+
+
+def _humanize_age(created_at: str) -> tuple[str, bool]:
+    """(human age, is_stale) for a stored run's UTC ISO timestamp — so the dashboard can show
+    how old the precomputed snapshot is and warn when it's worth re-running."""
+    try:
+        created = datetime.fromisoformat(created_at)
+    except (TypeError, ValueError):
+        return ("", False)
+    if created.tzinfo is None:
+        created = created.replace(tzinfo=UTC)
+    secs = max((datetime.now(tz=UTC) - created).total_seconds(), 0.0)
+    if secs < 90:
+        label = "just now"
+    elif secs < 3600:
+        label = f"{int(secs // 60)}m ago"
+    elif secs < 86400:
+        label = f"{int(secs // 3600)}h ago"
+    else:
+        label = f"{int(secs // 86400)}d ago"
+    return (label, secs > _STALE_AFTER_SECONDS)
 
 
 @app.exception_handler(ProviderError)
@@ -149,9 +175,11 @@ def cancel_screen(
 
 @app.get("/")
 def dashboard(request: Request, runner: JobRunner = Depends(get_job_runner)):
+    latest = runner.store.latest_done()
+    age, stale = _humanize_age(latest["created_at"]) if latest else ("", False)
     return templates.TemplateResponse(
         request, "dashboard.html",
-        {"defaults": ScreenRequest(), "latest": runner.store.latest_done()},
+        {"defaults": ScreenRequest(), "latest": latest, "latest_age": age, "latest_stale": stale},
     )
 
 
