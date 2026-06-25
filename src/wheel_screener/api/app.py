@@ -101,6 +101,29 @@ def _humanize_age(created_at: str) -> tuple[str, bool]:
     return (label, secs > _STALE_AFTER_SECONDS)
 
 
+def _num(v: object) -> float:
+    # non-numeric/missing -> -inf: clusters nulls at the bottom under the default desc sort
+    # (and at the top when a column is toggled ascending). The point is a stable, no-TypeError key.
+    return float(v) if isinstance(v, (int, float)) else float("-inf")
+
+
+# sort key -> accessor over a serialized CandidateResult dict (for the sortable results table)
+_SORT_KEYS = {
+    "symbol": lambda c: c.get("symbol") or "",
+    "strike": lambda c: _num(c.get("contract", {}).get("strike")),
+    "exp": lambda c: c.get("contract", {}).get("expiration") or "",
+    "dte": lambda c: _num(c.get("contract", {}).get("dte")),
+    "delta": lambda c: _num(c.get("contract", {}).get("delta")),
+    "iv": lambda c: _num(c.get("contract", {}).get("implied_volatility")),
+    "bid": lambda c: _num(c.get("contract", {}).get("bid")),
+    "mid": lambda c: _num(c.get("contract", {}).get("mid")),
+    "oi": lambda c: _num(c.get("contract", {}).get("open_interest")),
+    "yield": lambda c: _num(c.get("annualized_yield")),
+    "fund": lambda c: _num(c.get("fundamental_score")),
+    "score": lambda c: _num(c.get("score")),
+}
+
+
 @app.exception_handler(ProviderError)
 async def _provider_error_handler(request: Request, exc: ProviderError) -> JSONResponse:
     status = 502  # an unclassified provider failure
@@ -229,6 +252,44 @@ def run_progress(request: Request, job_id: str, runner: JobRunner = Depends(get_
         message = f"{err.get('type', 'error')}: {err.get('detail', '')}"
         return templates.TemplateResponse(request, "_error.html", {"message": message})
     return templates.TemplateResponse(request, "_results.html", {"job": job})  # done / cancelled
+
+
+@app.get("/runs/{job_id}/results")
+def run_results(
+    request: Request, job_id: str, sort: str = "score", order: str = "desc",
+    runner: JobRunner = Depends(get_job_runner),
+):
+    """Re-render the results table sorted by a column (HTMX swaps it in place)."""
+    job = runner.get(job_id)
+    if job is None:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "unknown run"}, status_code=404
+        )
+    order = "asc" if order.lower() == "asc" else "desc"  # normalize so the arrow can't desync
+    results = list(job.get("result") or [])
+    keyfn = _SORT_KEYS.get(sort)
+    if keyfn is not None:
+        results.sort(key=keyfn, reverse=(order != "asc"))
+    return templates.TemplateResponse(
+        request, "_results.html",
+        {"job": {**job, "result": results}, "sort_key": sort, "sort_order": order},
+    )
+
+
+@app.get("/runs/{job_id}/candidates/{symbol}")
+def run_candidate(
+    request: Request, job_id: str, symbol: str, runner: JobRunner = Depends(get_job_runner)
+):
+    """Candidate detail fragment (row-expand) — keyed by symbol so it survives re-sorting."""
+    job = runner.get(job_id)
+    cand = None
+    if job is not None:
+        cand = next((c for c in (job.get("result") or []) if c.get("symbol") == symbol), None)
+    if cand is None:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "unknown candidate"}, status_code=404
+        )
+    return templates.TemplateResponse(request, "_candidate.html", {"c": cand})
 
 
 @app.post("/runs/{job_id}/cancel")

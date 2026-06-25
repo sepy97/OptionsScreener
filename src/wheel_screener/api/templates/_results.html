@@ -1,15 +1,28 @@
-<article>
+{% set sk = sort_key|default('score') %}
+{% set so = sort_order|default('desc') %}
+{% macro sortlink(label, key) %}
+  {% set nxt = 'asc' if (sk == key and so == 'desc') else 'desc' %}
+  <th><a href="#" hx-get="/runs/{{ job.job_id }}/results?sort={{ key }}&order={{ nxt }}"
+         hx-target="#results-{{ job.job_id }}" hx-swap="outerHTML"
+      >{{ label }}{% if sk == key %} {{ '▾' if so == 'desc' else '▴' }}{% endif %}</a></th>
+{% endmacro %}
+<article id="results-{{ job.job_id }}">
   <header>
     <strong>{{ (job.result or [])|length }} candidate(s)</strong>
     {% if job.status == "cancelled" %} <mark>cancelled — partial</mark>{% endif %}
+    {% if job.result %} <small>— click a symbol for detail, a column to sort</small>{% endif %}
   </header>
   {% if job.result %}
   <figure>
     <table>
       <thead>
         <tr>
-          <th>#</th><th>Symbol</th><th>Strike</th><th>Exp</th><th>DTE</th><th>Δ</th><th>IV</th>
-          <th>Bid</th><th>Mid</th><th>OI</th><th>Yield</th><th>Fund.</th><th>Score</th>
+          <th>#</th>
+          {{ sortlink("Symbol", "symbol") }}{{ sortlink("Strike", "strike") }}
+          {{ sortlink("Exp", "exp") }}{{ sortlink("DTE", "dte") }}{{ sortlink("Δ", "delta") }}
+          {{ sortlink("IV", "iv") }}{{ sortlink("Bid", "bid") }}{{ sortlink("Mid", "mid") }}
+          {{ sortlink("OI", "oi") }}{{ sortlink("Yield", "yield") }}
+          {{ sortlink("Fund.", "fund") }}{{ sortlink("Score", "score") }}
         </tr>
       </thead>
       <tbody>
@@ -17,7 +30,11 @@
         {% set k = c.contract %}
         <tr>
           <td>{{ loop.index }}</td>
-          <td><strong>{{ c.symbol }}</strong></td>
+          {# DOM id uses the row index, not the symbol: dotted tickers (BRK.B) are invalid in a
+             CSS #id selector — htmx resolves hx-target via querySelector. Symbol stays in the URL. #}
+          <td><a href="#" hx-get="/runs/{{ job.job_id }}/candidates/{{ c.symbol }}"
+                 hx-target="#d-{{ job.job_id }}-{{ loop.index }}" hx-swap="innerHTML"
+              ><strong>{{ c.symbol }}</strong></a></td>
           <td>{{ k.strike }}</td>
           <td>{{ k.expiration }}</td>
           <td>{{ k.dte }}</td>
@@ -30,11 +47,14 @@
           <td>{{ "%.2f"|format(c.fundamental_score) if c.fundamental_score is not none else "" }}</td>
           <td>{{ "%.2f"|format(c.score) if c.score is not none else "" }}</td>
         </tr>
+        {# detail loads here on symbol-click; the row stays collapsed (CSS) until then #}
+        <tr class="detail"><td colspan="13" id="d-{{ job.job_id }}-{{ loop.index }}"></td></tr>
         {% endfor %}
       </tbody>
     </table>
   </figure>
   {% else %}
-  <p>No candidates matched. Try a higher max-DTE, a lower min-yield, or more names.</p>
+  <p>No candidates matched. Try a higher max-DTE, a lower min-yield, a lower min&nbsp;$-volume,
+     or more names.</p>
   {% endif %}
 </article>
