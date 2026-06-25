@@ -68,3 +68,4 @@ class Settings(BaseSettings):
     fundamentals_source: str = "local"
     data_dir: str = "data/fundamentals"
     earnings_path: str = "data/earnings_calendar.csv"  # local calendar (refresh-earnings job)
+    jobs_db_path: str = "data/jobs.sqlite"  # background screen-job state (web API)

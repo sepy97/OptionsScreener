@@ -2,22 +2,23 @@
 
 Run (after ``uv sync --extra api``): ``uv run uvicorn wheel_screener.api.app:app --reload``.
 
-PR-A (serving foundation): one service built at startup (lifespan) and shared across requests,
-typed provider errors mapped to HTTP status codes, and a /health probe. The full /screen runs
-synchronously for now; M3.1 PR-B moves it behind a background job with progress polling.
+A screen takes minutes, so ``POST /screen`` starts a BACKGROUND job and returns a job id; the
+UI polls ``GET /screen/{id}`` for progress + results and can ``POST /screen/{id}/cancel``.
+One service + one job runner are built at startup (lifespan) and shared across requests.
 """
 
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from datetime import date
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
 
-from wheel_screener.api.deps import get_service, get_settings
+from wheel_screener.api.deps import get_job_runner, get_service, get_settings
+from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
+from wheel_screener.api.schemas import ScreenRequest
 from wheel_screener.composition import build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import (
@@ -27,7 +28,6 @@ from wheel_screener.core.errors import (
     ProviderUnavailableError,
     RateLimitedError,
 )
-from wheel_screener.core.models import CandidateResult, ScreenCriteria
 from wheel_screener.core.service import ScreenerService
 
 logger = logging.getLogger(__name__)
@@ -43,12 +43,14 @@ _ERROR_STATUS: list[tuple[type[ProviderError], int]] = [
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Build the service ONCE and warm the local store, so requests are fast + share one
-    rate limiter. Warming is best-effort; /health reports actual readiness."""
+    """Build the service + job runner ONCE; warm the store. Requests share them."""
     settings = Settings()
     service = build_service(settings)
     app.state.settings = settings
     app.state.service = service
+    app.state.job_runner = JobRunner(service, JobStore(settings.jobs_db_path))
+    # let pipeline INFO logs through so background jobs can capture stage progress
+    logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
     warm = getattr(service.fundamentals, "known_symbols", None)
     if warm is not None:
         try:
@@ -95,10 +97,36 @@ def health(
     }
 
 
-@app.post("/screen", response_model=list[CandidateResult])
-def screen(
-    criteria: ScreenCriteria,
-    service: ScreenerService = Depends(get_service),
-) -> list[CandidateResult]:
-    """Run a full screen (synchronous for now — PR-B moves this to a background job)."""
-    return service.run_screen(criteria, date.today())
+@app.post("/screen", status_code=202)
+def start_screen(req: ScreenRequest, runner: JobRunner = Depends(get_job_runner)) -> dict:
+    """Start a screen as a background job; returns a job id to poll. 409 if one is running."""
+    try:
+        job_id = runner.start(req.to_criteria())
+    except JobBusyError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return {"job_id": job_id, "status": "running", "poll": f"/screen/{job_id}"}
+
+
+@app.get("/screen/{job_id}")
+def get_screen(job_id: str, runner: JobRunner = Depends(get_job_runner)) -> dict:
+    """Poll a screen job: status (running/done/failed/cancelled), progress, result/error."""
+    job = runner.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    return job
+
+
+@app.post("/screen/{job_id}/cancel")
+def cancel_screen(
+    job_id: str, response: Response, runner: JobRunner = Depends(get_job_runner)
+) -> dict:
+    """Request cancellation; the run stops and returns whatever it collected (partial)."""
+    job = runner.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown job")
+    if job["status"] != "running":  # already terminal — report its real status, don't pretend
+        response.status_code = 200
+        return {"job_id": job_id, "status": job["status"]}
+    runner.cancel(job_id)
+    response.status_code = 202
+    return {"job_id": job_id, "status": "cancelling"}

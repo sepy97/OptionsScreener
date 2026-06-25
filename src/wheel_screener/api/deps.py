@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from fastapi import Request
 
+from wheel_screener.api.jobs import JobRunner
 from wheel_screener.config import Settings
 from wheel_screener.core.service import ScreenerService
 
@@ -19,3 +20,7 @@ def get_service(request: Request) -> ScreenerService:
 
 def get_settings(request: Request) -> Settings:
     return request.app.state.settings
+
+
+def get_job_runner(request: Request) -> JobRunner:
+    return request.app.state.job_runner
