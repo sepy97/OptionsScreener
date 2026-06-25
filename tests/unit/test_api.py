@@ -226,6 +226,7 @@ def test_dashboard_renders_form(tmp_path) -> None:
     r = _client(_runner(_FakeService(result=[]), tmp_path)).get("/")
     assert r.status_code == 200
     assert 'hx-post="/runs"' in r.text and "Run screen" in r.text
+    assert "Preliminary UI" in r.text  # honest about the placeholder UI (docs/UI_STATUS.md)
 
 
 def test_run_flow_polls_then_renders_results(tmp_path) -> None:
