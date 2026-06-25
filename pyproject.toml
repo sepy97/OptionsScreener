@@ -17,7 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 fmp = ["fmp-data>=2.3"]
 greeks = ["py-vollib-vectorized>=0.1.1"]
-api = ["fastapi>=0.111", "uvicorn>=0.30"]
+api = ["fastapi>=0.111", "uvicorn>=0.30", "jinja2>=3.1", "python-multipart>=0.0.9"]
 
 [project.scripts]
 wheel-screener = "wheel_screener.cli.main:main"

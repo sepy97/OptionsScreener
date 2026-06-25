@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import threading
 import time
 
@@ -197,3 +198,61 @@ def test_health_degraded_without_token(tmp_path) -> None:
     settings.schwab.token_path = str(tmp_path / "missing.json")
     body = _health_client(settings).get("/health").json()
     assert body["schwab_token"] is False and body["status"] == "degraded"
+
+
+# --- HTML (HTMX) UI ---
+
+def _job_id_from(fragment_html: str) -> str:
+    return re.search(r"/runs/([0-9a-f]+)/progress", fragment_html).group(1)
+
+
+def test_dashboard_renders_form(tmp_path) -> None:
+    r = _client(_runner(_FakeService(result=[]), tmp_path)).get("/")
+    assert r.status_code == 200
+    assert 'hx-post="/runs"' in r.text and "Run screen" in r.text
+
+
+def test_run_flow_polls_then_renders_results(tmp_path) -> None:
+    runner = _runner(_FakeService(result=[_candidate()]), tmp_path)
+    client = _client(runner)
+    started = client.post("/runs", data={"top_n": 50})
+    assert started.status_code == 200 and "/progress" in started.text and "hx-get" in started.text
+    job_id = _job_id_from(started.text)
+    runner.wait(job_id)
+    page = client.get(f"/runs/{job_id}/progress")
+    assert page.status_code == 200 and "AAA" in page.text and "candidate" in page.text.lower()
+
+
+def test_run_failure_renders_typed_error(tmp_path) -> None:
+    runner = _runner(_FakeService(error=AuthExpiredError("token gone")), tmp_path)
+    client = _client(runner)
+    job_id = _job_id_from(client.post("/runs", data={"top_n": 10}).text)
+    runner.wait(job_id)
+    assert "AuthExpiredError" in client.get(f"/runs/{job_id}/progress").text
+
+
+def test_run_busy_renders_409(tmp_path) -> None:
+    gate = threading.Event()
+    runner = _runner(_FakeService(gate=gate), tmp_path)
+    client = _client(runner)
+    first = client.post("/runs", data={"top_n": 10})
+    assert first.status_code == 200
+    busy = client.post("/runs", data={"top_n": 10})
+    assert busy.status_code == 409 and "already running" in busy.text
+    gate.set()
+    runner.wait(_job_id_from(first.text))
+
+
+def test_invalid_form_renders_422(tmp_path) -> None:
+    r = _client(_runner(_FakeService(), tmp_path)).post(
+        "/runs", data={"min_dte": 60, "max_dte": 30}
+    )
+    assert r.status_code == 422 and "invalid input" in r.text
+
+
+def test_dashboard_shows_latest_results(tmp_path) -> None:
+    runner = _runner(_FakeService(result=[_candidate()]), tmp_path)
+    client = _client(runner)
+    runner.wait(_job_id_from(client.post("/runs", data={"top_n": 10}).text))
+    r = client.get("/")
+    assert r.status_code == 200 and "AAA" in r.text and "Latest results" in r.text

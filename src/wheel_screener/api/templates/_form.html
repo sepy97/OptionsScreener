@@ -1,0 +1,20 @@
+<form hx-post="/runs" hx-target="#run" hx-swap="innerHTML">
+  <div class="grid">
+    <label>Names to check
+      <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="2000">
+    </label>
+    <label>Quality&nbsp;↔&nbsp;Yield blend
+      <input type="range" name="fundamental_weight" min="0" max="1" step="0.05"
+             value="{{ defaults.fundamental_weight }}">
+    </label>
+  </div>
+  <div class="grid">
+    <label>Min yield (e.g. 0.15)
+      <input type="number" name="min_yield" step="0.01" placeholder="(none)">
+    </label>
+    <label>Min DTE <input type="number" name="min_dte" value="{{ defaults.min_dte }}"></label>
+    <label>Max DTE <input type="number" name="max_dte" value="{{ defaults.max_dte }}"></label>
+    <label>Timeout (s) <input type="number" name="timeout_seconds" placeholder="(none)"></label>
+  </div>
+  <button type="submit">Run screen</button>
+</form>
