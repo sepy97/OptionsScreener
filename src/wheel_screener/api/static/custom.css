@@ -1,47 +1,62 @@
-/* Wheel Screener — light polish on top of Pico (vendored, no external assets) */
+/* Wheel Screener — light visual polish on Pico (vendored; preliminary UI, see UI_STATUS.md) */
 
-/* keep the header visible while scrolling a long results table */
-thead th {
+:root {
+  --wheel-accent: #10804f;            /* a calm "wheel green" */
+  --wheel-accent-soft: rgba(16, 128, 79, 0.08);
+  /* nudge Pico's primary toward the accent (best-effort across themes) */
+  --pico-primary: #10804f;
+  --pico-primary-hover: #0c6b41;
+  --pico-primary-underline: rgba(16, 128, 79, 0.5);
+}
+
+/* --- layout / header --- */
+main.container { max-width: 1080px; }
+hgroup { border-bottom: 2px solid var(--wheel-accent); padding-bottom: 0.6rem; margin-bottom: 1.5rem; }
+hgroup h1 { margin-bottom: 0.15rem; }
+footer { margin-top: 2.5rem; text-align: center; color: var(--pico-muted-color); }
+
+/* --- form --- */
+form { margin-bottom: 0; }
+form label small { font-weight: normal; color: var(--pico-muted-color); }
+
+/* --- results table --- */
+figure { margin: 0; }
+table { font-size: 0.92rem; }
+td, th { padding: 0.4rem 0.6rem; }
+thead th {                              /* sticky, with a subtle accent underline */
   position: sticky;
   top: 0;
-  background: var(--pico-card-background-color, #fff);
   z-index: 1;
-}
-
-/* sortable column headers + clickable symbols read as plain text, not links */
-th a,
-td a {
-  text-decoration: none;
-  color: inherit;
-  cursor: pointer;
+  background: var(--pico-card-sectioning-background-color, #f4f6f8);
+  border-bottom: 2px solid var(--wheel-accent);
   white-space: nowrap;
 }
-th a:hover,
-td a:hover {
-  text-decoration: underline;
-}
-
-/* right-align + tabular figures so numeric columns line up */
-tbody td:not(:nth-child(2)) {
+tbody tr:not(.detail):hover { background: var(--wheel-accent-soft); }
+/* right-align + tabular figures on every column but Symbol, so numbers line up */
+thead th:not(:nth-child(2)), tbody td:not(:nth-child(2)) {
+  text-align: right;
   font-variant-numeric: tabular-nums;
 }
+tbody td:nth-child(2) { text-align: left; }
 
-/* candidate detail row (inserted after a data row on symbol-click) */
+/* sortable headers + clickable symbols read as plain text with a hover cue */
+th a, td a { text-decoration: none; color: inherit; cursor: pointer; white-space: nowrap; }
+th a:hover, td a:hover { color: var(--wheel-accent); text-decoration: underline; }
+td a strong { border-bottom: 1px dotted currentColor; }   /* hint: the symbol is clickable */
+
+/* --- candidate detail row (inserted after a data row on symbol-click) --- */
 .detail {
   position: relative;
-  margin: 0.25rem 0 0.5rem;
-  padding: 0.5rem 0.75rem;
+  margin: 0.25rem 0;
+  padding: 0.6rem 2rem 0.6rem 0.9rem;
   font-size: 0.9em;
   background: var(--pico-code-background-color, #f6f8fa);
-  border-radius: 0.375rem;
+  border-left: 3px solid var(--wheel-accent);
+  border-radius: 0.25rem;
 }
-.detail ul {
-  margin: 0.35rem 0 0;
-}
+.detail ul { margin: 0.4rem 0 0; }
 .detail-close {
-  position: absolute;
-  top: 0.25rem;
-  right: 0.5rem;
-  font-size: 1.1rem;
-  line-height: 1;
+  position: absolute; top: 0.3rem; right: 0.6rem;
+  font-size: 1.25rem; line-height: 1; text-decoration: none; color: var(--pico-muted-color);
 }
+.detail-close:hover { color: var(--pico-del-color, #c0392b); }
