@@ -63,7 +63,9 @@ class ScreenCriteria(BaseModel):
     max_abs_delta: float = 0.30
     min_dte: int = 30
     max_dte: int = 45
-    dte_tolerance: int = 10  # accept nearest expiry within ±tol when none lands in [min,max]
+    # 0 = strict: results stay within [min_dte, max_dte]. Set >0 to also accept an expiry up to
+    # N days outside the window when none lands in-band (opt-in; may return out-of-window results).
+    dte_tolerance: int = 0
     # ranking / liquidity gates
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
     min_open_interest: int = 100

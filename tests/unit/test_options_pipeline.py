@@ -57,13 +57,16 @@ def test_select_put_applies_gates():
     assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # bid 0 = unsellable
 
 
-def test_select_put_prefers_in_band_then_nearest_monthly():
-    crit = ScreenCriteria()  # target band 30-45, dte_tolerance 10 -> window 20-55
+def test_select_put_dte_is_strict_by_default_tolerance_is_opt_in():
+    crit = ScreenCriteria()  # target band 30-45, strict (dte_tolerance 0)
     # in-band (35 DTE) wins over an out-of-band 25-DTE even with a richer raw yield
     both = _chain([_put(90, -0.20, 25, 3.0), _put(90, -0.20, 35, 1.0)])
     assert select_put(both, crit).dte == 35
-    # monthly-only: nothing in 30-45 -> nearest monthly within tolerance is taken
-    assert select_put(_chain([_put(90, -0.20, 25, 1.5)]), crit).dte == 25
+    # monthly-only, nothing in 30-45: strict default returns nothing (issue #26)...
+    only25 = _chain([_put(90, -0.20, 25, 1.5)])
+    assert select_put(only25, crit) is None
+    # ...unless tolerance is opted in, which then admits the nearest expiry within ±tol
+    assert select_put(only25, ScreenCriteria(dte_tolerance=10)).dte == 25
 
 
 def test_rank_equal_fundamentals_orders_by_yield():

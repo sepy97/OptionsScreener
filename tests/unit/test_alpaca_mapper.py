@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from wheel_screener.adapters.alpaca.mapper import build_chain, parse_occ_symbol
 from wheel_screener.core.models import OptionType, ScreenCriteria
@@ -64,3 +64,15 @@ def test_alpaca_chain_feeds_select_put() -> None:
     oi = {"AAA260725P00090000": 800, "AAA260725P00085000": 300}
     put = select_put(build_chain("AAA", snapshots, oi, today), ScreenCriteria())
     assert put is not None and put.strike == 90.0 and put.open_interest == 800
+
+
+def test_select_put_honors_strict_dte_window() -> None:
+    # only an out-of-window expiry: 60 DTE, while the default window is [30, 45] (issue #26)
+    today = date(2026, 6, 25)
+    far = f"AAA{today + timedelta(days=60):%y%m%d}P00090000"
+    snaps = {far: {"latestQuote": {"bp": 1.4, "ap": 1.5}, "greeks": {"delta": -0.20},
+                   "impliedVolatility": 0.34}}
+    chain = build_chain("AAA", snaps, {far: 800}, today)
+    assert select_put(chain, ScreenCriteria()) is None  # strict by default: 60 DTE is out of band
+    picked = select_put(chain, ScreenCriteria(dte_tolerance=20))  # opt-in tolerance admits it
+    assert picked is not None and picked.dte == 60
