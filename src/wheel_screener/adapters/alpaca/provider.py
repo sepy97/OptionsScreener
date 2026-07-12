@@ -27,7 +27,10 @@ class AlpacaChainProvider:
     ) -> None:
         self._settings = settings
         self._client = client or httpx.Client(timeout=timeout)
-        self._limiter = RateLimiter(settings.calls_per_minute)
+        # the data API (snapshots) and trading API (contracts) enforce SEPARATE rate limits,
+        # so each host gets its own limiter rather than sharing one budget (which would 429)
+        self._data_limiter = RateLimiter(settings.calls_per_minute)
+        self._trading_limiter = RateLimiter(settings.calls_per_minute)
         self._cache: DiskCache | None = (
             DiskCache(settings.chain_cache_dir, settings.chain_cache_ttl_seconds)
             if settings.chain_cache_enabled
@@ -41,13 +44,13 @@ class AlpacaChainProvider:
             "accept": "application/json",
         }
 
-    def _get(self, url: str, params: dict) -> dict:
-        self._limiter.acquire()  # re-acquired per attempt so retries respect the rate limit
+    def _get(self, url: str, params: dict, limiter: RateLimiter) -> dict:
+        limiter.acquire()  # re-acquired per attempt so retries respect the rate limit
         resp = self._client.get(url, params=params, headers=self._headers())
         resp.raise_for_status()
         return resp.json()
 
-    def _paginate(self, url: str, params: dict, collect, *, attempts: int, mult: float):
+    def _paginate(self, url, params, collect, limiter, *, attempts: int, mult: float):
         """Run a token-paginated GET, calling ``collect(page)`` per page (each a retried call)."""
         token = None
         for _ in range(500):  # safety cap, far beyond any real window — avoids an infinite loop
@@ -55,7 +58,8 @@ class AlpacaChainProvider:
             if token:
                 page_params["page_token"] = token
             page = run_with_retry(
-                lambda p=page_params: self._get(url, p), max_attempts=attempts, multiplier=mult
+                lambda p=page_params: self._get(url, p, limiter),
+                max_attempts=attempts, multiplier=mult,
             )
             collect(page)
             token = page.get("next_page_token")
@@ -73,7 +77,7 @@ class AlpacaChainProvider:
         }
         out: dict = {}
         self._paginate(
-            url, params, lambda page: out.update(page.get("snapshots") or {}),
+            url, params, lambda page: out.update(page.get("snapshots") or {}), self._data_limiter,
             attempts=self._settings.max_retries + 1, mult=self._settings.retry_backoff_multiplier,
         )
         return out
@@ -100,7 +104,7 @@ class AlpacaChainProvider:
                         pass
 
         self._paginate(
-            url, params, _collect,
+            url, params, _collect, self._trading_limiter,
             attempts=self._settings.max_retries + 1, mult=self._settings.retry_backoff_multiplier,
         )
         return oi
