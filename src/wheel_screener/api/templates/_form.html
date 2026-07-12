@@ -1,11 +1,16 @@
 <form hx-post="/runs" hx-target="#run" hx-swap="innerHTML">
   <div class="grid">
     <label>Names to check
-      <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="2000">
+      {# max 500 is a UI guardrail (stricter than the schema's le=2000) toward the fast path #}
+      <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="500">
+      <small>more = broader but slower (the chain pull is rate-limited)</small>
     </label>
-    <label>Quality&nbsp;↔&nbsp;Yield blend
+    <label>Ranking blend
       <input type="range" name="fundamental_weight" min="0" max="1" step="0.05"
-             value="{{ defaults.fundamental_weight }}">
+             value="{{ defaults.fundamental_weight }}"
+             oninput="this.parentNode.querySelector('.fw-val').textContent=(+this.value).toFixed(2)">
+      <small>rank by <b>option yield</b> (0) ↔ <b>fundamental strength</b> (1 — earnings, debt,
+        valuation) — <span class="fw-val">{{ defaults.fundamental_weight }}</span></small>
     </label>
   </div>
   <div class="grid">

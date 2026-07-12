@@ -209,7 +209,7 @@ def dashboard(request: Request, runner: JobRunner = Depends(get_job_runner)):
 @app.post("/runs")
 def start_run(
     request: Request,
-    top_n: int = Form(250),
+    top_n: int = Form(150),
     fundamental_weight: float = Form(0.5),
     min_dollar_volume: float = Form(25_000_000.0),
     min_yield: str = Form(""),
