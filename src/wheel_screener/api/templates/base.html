@@ -9,11 +9,13 @@
   <script src="/static/htmx.min.js"></script>
 </head>
 <body>
+<header class="app-header">
+  <div class="container app-header__inner">
+    <span class="brand">◐ Wheel&nbsp;Screener</span>
+    <span class="brand-sub">CSP / wheel candidate screener — a shortlist to verify, not signals</span>
+  </div>
+</header>
 <main class="container">
-  <hgroup>
-    <h1>Wheel Screener</h1>
-    <p>Cash-secured-put candidates — a shortlist to verify, not signals.</p>
-  </hgroup>
   {% block content %}{% endblock %}
   <footer><small>Preliminary UI — to be reworked (see docs/UI_STATUS.md).</small></footer>
 </main>

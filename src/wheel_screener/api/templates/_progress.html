@@ -1,4 +1,5 @@
-<article hx-get="/runs/{{ job.job_id }}/progress" hx-trigger="every 2s" hx-swap="outerHTML" hx-target="this">
+<article class="run-progress" hx-get="/runs/{{ job.job_id }}/progress" hx-trigger="every 2s"
+         hx-swap="outerHTML" hx-target="this">
   <header>
     <strong aria-busy="true">Screening…</strong>
     <button hx-post="/runs/{{ job.job_id }}/cancel" hx-target="#run" hx-swap="innerHTML"
