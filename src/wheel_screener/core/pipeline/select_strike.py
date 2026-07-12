@@ -1,7 +1,7 @@
 """Stage 4 — strike selection: the cash-secured put to sell on a survivor.
 
-Within the 30–45 DTE window, take the put nearest the target delta in each expiry, then
-pick the expiry with the best annualized yield (subject to liquidity gates).
+Within the [min_dte, max_dte] window, take the put nearest the target delta in each expiry,
+then pick the expiry with the best annualized yield (subject to liquidity gates).
 """
 
 from __future__ import annotations
@@ -42,10 +42,11 @@ def select_put(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> OptionContr
     """Best cash-secured put for this underlying, or None if nothing qualifies.
 
     Gates: PUT, has delta, |delta| <= max_abs_delta, open interest >= min, a real sellable
-    bid (bid > 0), and a computable bid/ask spread within the limit. DTE in [min,max] is a
-    *target*: expiries within ±dte_tolerance are eligible, but in-band expiries are
-    preferred; only if none land in-band do we fall back to the nearest monthly. Among the
-    chosen expiries' per-expiry nearest-to-target-delta puts, pick the highest yield.
+    bid (bid > 0), and a computable bid/ask spread within the limit. By default
+    (dte_tolerance == 0) results stay strictly within [min_dte, max_dte]. A positive
+    dte_tolerance also admits expiries within ±tol, preferring in-band ones and only falling
+    back to an out-of-window expiry when none land in-band. Among the chosen expiries'
+    per-expiry nearest-to-target-delta puts, pick the highest yield.
     """
     lo, hi, tol = criteria.min_dte, criteria.max_dte, criteria.dte_tolerance
     eligible = [
