@@ -13,17 +13,22 @@
         valuation) — <span class="fw-val">{{ defaults.fundamental_weight }}</span></small>
     </label>
   </div>
-  <div class="grid">
-    <label>Min $-volume/day
-      <input type="number" name="min_dollar_volume" value="{{ defaults.min_dollar_volume }}"
-             step="1000000" min="0">
-    </label>
-    <label>Min yield (e.g. 0.15)
-      <input type="number" name="min_yield" step="0.01" placeholder="(none)">
-    </label>
-    <label>Min DTE <input type="number" name="min_dte" value="{{ defaults.min_dte }}"></label>
-    <label>Max DTE <input type="number" name="max_dte" value="{{ defaults.max_dte }}"></label>
-    <label>Timeout (s) <input type="number" name="timeout_seconds" placeholder="(none)"></label>
-  </div>
-  <button type="submit">Run screen</button>
+  <details class="advanced">
+    <summary>Advanced filters</summary>
+    <div class="grid">
+      <label>Min $-volume/day
+        <input type="number" name="min_dollar_volume" value="{{ defaults.min_dollar_volume }}"
+               step="1000000" min="0">
+      </label>
+      <label>Min yield (e.g. 0.15)
+        <input type="number" name="min_yield" step="0.01" placeholder="(none)">
+      </label>
+    </div>
+    <div class="grid">
+      <label>Min DTE <input type="number" name="min_dte" value="{{ defaults.min_dte }}"></label>
+      <label>Max DTE <input type="number" name="max_dte" value="{{ defaults.max_dte }}"></label>
+      <label>Timeout (s) <input type="number" name="timeout_seconds" placeholder="(none)"></label>
+    </div>
+  </details>
+  <button type="submit" class="run-btn">Run screen</button>
 </form>

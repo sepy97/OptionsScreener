@@ -1,62 +1,98 @@
-/* Wheel Screener — light visual polish on Pico (vendored; preliminary UI, see UI_STATUS.md) */
+/* Wheel Screener — visual design layer on Pico (vendored; preliminary UI, see UI_STATUS.md).
+   Uses Pico's CSS variables where possible so light/dark themes both work. */
 
 :root {
-  --wheel-accent: #10804f;            /* a calm "wheel green" */
-  --wheel-accent-soft: rgba(16, 128, 79, 0.08);
-  /* nudge Pico's primary toward the accent (best-effort across themes) */
-  --pico-primary: #10804f;
-  --pico-primary-hover: #0c6b41;
-  --pico-primary-underline: rgba(16, 128, 79, 0.5);
+  --wheel-accent: #0e9f6e;             /* emerald */
+  --wheel-accent-strong: #0b8a5f;
+  --wheel-accent-soft: rgba(14, 159, 110, 0.10);
+  --wheel-radius: 10px;
+  --wheel-shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --pico-primary: #0e9f6e;
+  --pico-primary-hover: #0b8a5f;
+  --pico-primary-focus: rgba(14, 159, 110, 0.25);
+  --pico-primary-underline: rgba(14, 159, 110, 0.5);
+  --pico-border-radius: var(--wheel-radius);
 }
 
-/* --- layout / header --- */
+body { -webkit-font-smoothing: antialiased; }
+@media (prefers-color-scheme: light) { body { background: #f5f7f9; } }
+
+/* --- header bar --- */
+.app-header {
+  background: linear-gradient(135deg, var(--wheel-accent), var(--wheel-accent-strong));
+  color: #fff;
+  padding: 0.85rem 0;
+  box-shadow: var(--wheel-shadow);
+  margin-bottom: 2rem;
+}
+.app-header__inner { display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap; }
+.brand { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
+.brand-sub { font-size: 0.85rem; opacity: 0.85; }
+
+/* --- layout / cards --- */
 main.container { max-width: 1080px; }
-hgroup { border-bottom: 2px solid var(--wheel-accent); padding-bottom: 0.6rem; margin-bottom: 1.5rem; }
-hgroup h1 { margin-bottom: 0.15rem; }
-footer { margin-top: 2.5rem; text-align: center; color: var(--pico-muted-color); }
+article {
+  border: 1px solid var(--pico-card-border-color, rgba(0, 0, 0, 0.07));
+  border-radius: var(--wheel-radius);
+  box-shadow: var(--wheel-shadow);
+}
+article > h2, section > h2 { margin-top: 0; font-size: 1.1rem; }
+article > header strong { font-size: 1.05rem; }
+footer {
+  margin-top: 3rem; padding-top: 1rem;
+  border-top: 1px solid var(--pico-muted-border-color);
+  text-align: center; color: var(--pico-muted-color);
+}
 
 /* --- form --- */
-form { margin-bottom: 0; }
-form label small { font-weight: normal; color: var(--pico-muted-color); }
+form label { font-weight: 600; font-size: 0.9rem; }
+form label small { font-weight: 400; color: var(--pico-muted-color); }
+.advanced {
+  margin: 0.75rem 0 1rem;
+  border: 1px dashed var(--pico-muted-border-color);
+  border-radius: var(--wheel-radius);
+  padding: 0 0.85rem;
+}
+.advanced summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; padding: 0.6rem 0; color: var(--wheel-accent); }
+.run-btn {
+  width: auto; min-width: 12rem; margin: 0.25rem 0 0; font-weight: 600;
+  background: var(--wheel-accent); border-color: var(--wheel-accent);
+}
+.run-btn:hover { background: var(--wheel-accent-strong); border-color: var(--wheel-accent-strong); }
 
 /* --- results table --- */
-figure { margin: 0; }
-table { font-size: 0.92rem; }
-td, th { padding: 0.4rem 0.6rem; }
-thead th {                              /* sticky, with a subtle accent underline */
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  background: var(--pico-card-sectioning-background-color, #f4f6f8);
+figure { margin: 0; overflow-x: auto; }
+table { font-size: 0.9rem; margin: 0; }
+th, td { padding: 0.45rem 0.65rem; }
+thead th {
+  position: sticky; top: 0; z-index: 1;
+  background: var(--pico-card-sectioning-background-color, #eef2f5);
   border-bottom: 2px solid var(--wheel-accent);
-  white-space: nowrap;
+  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.02em; white-space: nowrap;
 }
 tbody tr:not(.detail):hover { background: var(--wheel-accent-soft); }
 /* right-align + tabular figures on every column but Symbol, so numbers line up */
-thead th:not(:nth-child(2)), tbody td:not(:nth-child(2)) {
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
+thead th:not(:nth-child(2)), tbody td:not(:nth-child(2)) { text-align: right; font-variant-numeric: tabular-nums; }
 tbody td:nth-child(2) { text-align: left; }
-
-/* sortable headers + clickable symbols read as plain text with a hover cue */
 th a, td a { text-decoration: none; color: inherit; cursor: pointer; white-space: nowrap; }
 th a:hover, td a:hover { color: var(--wheel-accent); text-decoration: underline; }
-td a strong { border-bottom: 1px dotted currentColor; }   /* hint: the symbol is clickable */
+td a strong { border-bottom: 1px dotted currentColor; }   /* hint: symbol is clickable */
 
-/* --- candidate detail row (inserted after a data row on symbol-click) --- */
+/* --- candidate detail row --- */
 .detail {
-  position: relative;
-  margin: 0.25rem 0;
-  padding: 0.6rem 2rem 0.6rem 0.9rem;
-  font-size: 0.9em;
-  background: var(--pico-code-background-color, #f6f8fa);
+  position: relative; margin: 0.25rem 0; padding: 0.7rem 2rem 0.7rem 1rem;
+  font-size: 0.88rem; background: var(--pico-code-background-color, #f6f8fa);
   border-left: 3px solid var(--wheel-accent);
-  border-radius: 0.25rem;
+  border-radius: 0 var(--wheel-radius) var(--wheel-radius) 0;
 }
-.detail ul { margin: 0.4rem 0 0; }
+.detail ul { margin: 0.4rem 0 0; padding-left: 0; list-style: none; }
+.detail li { padding: 0.1rem 0; }
 .detail-close {
-  position: absolute; top: 0.3rem; right: 0.6rem;
-  font-size: 1.25rem; line-height: 1; text-decoration: none; color: var(--pico-muted-color);
+  position: absolute; top: 0.35rem; right: 0.65rem; font-size: 1.3rem; line-height: 1;
+  text-decoration: none; color: var(--pico-muted-color);
 }
 .detail-close:hover { color: var(--pico-del-color, #c0392b); }
+
+/* --- run states --- */
+.run-progress ul { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--pico-muted-color); }
+[role="alert"] { border-left: 3px solid var(--pico-del-color, #c0392b); }
