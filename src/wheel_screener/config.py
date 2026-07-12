@@ -48,8 +48,10 @@ class AlpacaSettings(BaseModel):
     # /v2/options/contracts (OI) is account-bound — this MUST match the api_key/api_secret
     # environment. Paper-account users: set to https://paper-api.alpaca.markets.
     trading_base_url: str = "https://api.alpaca.markets"
-    calls_per_minute: int = 1000  # Alpaca data API ~1000/min
-    max_concurrency: int = 16
+    # free/Basic tier is ~200/min PER API; applied separately to the data + trading hosts.
+    # Raise for the paid Algo Trader Plus plan (much higher).
+    calls_per_minute: int = 200
+    max_concurrency: int = 8
     max_retries: int = 3  # retry transient 429/5xx (0 = no retry)
     retry_backoff_multiplier: float = 1.0  # exponential backoff base; 0 disables the wait
     chain_cache_enabled: bool = True

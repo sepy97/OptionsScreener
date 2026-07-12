@@ -29,7 +29,8 @@ def test_schwab_concurrency_is_configurable() -> None:
 
 
 def test_build_service_local_is_default() -> None:
-    service = build_service(Settings())  # default fundamentals_source == "local"
+    # explicit chain_source so an ambient .env (e.g. CHAIN_SOURCE=alpaca) can't sway the test
+    service = build_service(Settings(chain_source="schwab"))  # default fundamentals_source=local
     assert isinstance(service, ScreenerService)
     assert isinstance(service.fundamentals, LocalFundamentalsProvider)
     assert isinstance(service.chains, SchwabChainProvider)
@@ -42,4 +43,4 @@ def test_build_service_live_source() -> None:
 
 def test_chain_source_selects_alpaca() -> None:
     assert isinstance(build_service(Settings(chain_source="alpaca")).chains, AlpacaChainProvider)
-    assert isinstance(build_service(Settings()).chains, SchwabChainProvider)  # default schwab
+    assert isinstance(build_service(Settings(chain_source="schwab")).chains, SchwabChainProvider)

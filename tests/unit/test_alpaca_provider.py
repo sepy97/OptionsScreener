@@ -128,4 +128,4 @@ def test_snapshot_pagination_merges_pages() -> None:
 def test_capabilities_reflects_feed() -> None:
     assert AlpacaChainProvider(_settings(feed="opra")).capabilities().realtime is True
     caps = AlpacaChainProvider(_settings(feed="indicative")).capabilities()
-    assert caps.name == "alpaca" and caps.realtime is False and caps.max_concurrency == 16
+    assert caps.name == "alpaca" and caps.realtime is False and caps.max_concurrency == 8
