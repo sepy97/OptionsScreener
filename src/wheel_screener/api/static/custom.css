@@ -26,15 +26,7 @@ tbody td:not(:nth-child(2)) {
   font-variant-numeric: tabular-nums;
 }
 
-/* expandable detail row: invisible until a fragment is loaded into it */
-tr.detail > td {
-  padding: 0;
-  border: none;
-}
-tr.detail:has(> td:empty) {
-  display: none;
-}
-
+/* candidate detail row (inserted after a data row on symbol-click) */
 .detail {
   position: relative;
   margin: 0.25rem 0 0.5rem;

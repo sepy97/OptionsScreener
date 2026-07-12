@@ -13,7 +13,7 @@ from wheel_screener.core.models import ScreenCriteria
 
 
 class ScreenRequest(BaseModel):
-    top_n: int = Field(250, ge=1, le=2000, description="Fundamental survivors to pull chains for.")
+    top_n: int = Field(150, ge=1, le=2000, description="Fundamental survivors to pull chains for.")
     fundamental_weight: float = Field(0.5, ge=0.0, le=1.0, description="1=quality, 0=yield.")
     min_dollar_volume: float = Field(
         25_000_000.0, ge=0.0, description="Skip stocks below this avg daily $-volume (0=off)."

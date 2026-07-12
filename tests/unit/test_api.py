@@ -303,26 +303,29 @@ def test_candidate_detail_fragment(tmp_path) -> None:
     _done_job(runner, _candidate("AAA"))
     client = _client(runner)
     r = client.get("/runs/j/candidates/AAA")
-    assert r.status_code == 200 and "AAA80P" in r.text and "collateral" in r.text.lower()
+    # a detail ROW (inserted after the data row via afterend), with a close control
+    assert r.status_code == 200 and "<tr" in r.text and "detail-close" in r.text
+    assert "AAA80P" in r.text and "collateral" in r.text.lower()
     assert client.get("/runs/j/candidates/NOPE").status_code == 404
 
 
-def test_results_table_has_detail_links(tmp_path) -> None:
+def test_results_table_symbol_click_expands_detail(tmp_path) -> None:
     runner = _runner(_FakeService(), tmp_path)
     _done_job(runner, _candidate("AAA"))
     r = _client(runner).get("/runs/j/results")
-    assert "/runs/j/candidates/AAA" in r.text and 'id="d-j-1"' in r.text  # index-based DOM id
+    # symbol click inserts the detail as a new sibling row — no fragile hidden-row + :has reveal
+    assert "/runs/j/candidates/AAA" in r.text
+    assert 'hx-target="closest tr"' in r.text and 'hx-swap="afterend"' in r.text
 
 
-def test_detail_target_selector_safe_for_dotted_symbols(tmp_path) -> None:
+def test_detail_link_safe_for_dotted_tickers(tmp_path) -> None:
     runner = _runner(_FakeService(), tmp_path)
-    _done_job(runner, _candidate("BRK.B"))  # share-class ticker — a dot is invalid in a CSS #id
+    _done_job(runner, _candidate("BRK.B"))  # share-class ticker with a dot
     client = _client(runner)
     r = client.get("/runs/j/results")
-    assert 'id="d-j-1"' in r.text and 'hx-target="#d-j-1"' in r.text  # row index, not the symbol
-    assert "d-j-BRK.B" not in r.text  # never emits a CSS-unsafe id/target
-    assert "/runs/j/candidates/BRK.B" in r.text  # real symbol stays in the URL
-    assert client.get("/runs/j/candidates/BRK.B").status_code == 200  # and the route resolves it
+    # no DOM id/selector is built from the symbol now, so dots can't break anything
+    assert "/runs/j/candidates/BRK.B" in r.text  # symbol only in the URL
+    assert client.get("/runs/j/candidates/BRK.B").status_code == 200  # route resolves it
 
 
 def test_sort_handles_nulls_and_nested_columns(tmp_path) -> None:
