@@ -61,8 +61,8 @@ class ScreenCriteria(BaseModel):
     # options target
     target_delta: float = -0.20
     max_abs_delta: float = 0.30
-    min_dte: int = 30
-    max_dte: int = 45
+    min_dte: int = 21  # ~3 weeks
+    max_dte: int = 35  # ~5 weeks
     # 0 = strict: results stay within [min_dte, max_dte]. Set >0 to also accept an expiry up to
     # N days outside the window when none lands in-band (opt-in; may return out-of-window results).
     dte_tolerance: int = 0
