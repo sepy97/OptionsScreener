@@ -1,32 +1,47 @@
-<form hx-post="/runs" hx-target="#run" hx-swap="innerHTML">
+<form hx-post="/runs" hx-target="#run" hx-swap="innerHTML" hx-disabled-elt="find button">
   <div class="grid">
-    <label>Names to check
-      {# max 500 is a UI guardrail (stricter than the schema's le=2000) toward the fast path #}
-      <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="500">
-      <small>more = broader but slower (the chain pull is rate-limited)</small>
-    </label>
-    <label>Ranking blend
-      <input type="range" name="fundamental_weight" min="0" max="1" step="0.05"
-             value="{{ defaults.fundamental_weight }}"
-             oninput="this.parentNode.querySelector('.fw-val').textContent=(+this.value).toFixed(2)">
-      <small>rank by <b>option yield</b> (0) ↔ <b>fundamental strength</b> (1 — earnings, debt,
-        valuation) — <span class="fw-val">{{ defaults.fundamental_weight }}</span></small>
-    </label>
+    <div>
+      <label for="min_dte">Days to expiration (DTE)</label>
+      <fieldset role="group">
+        <input type="number" id="min_dte" name="min_dte" value="{{ defaults.min_dte }}"
+               min="1" max="400" aria-label="Minimum DTE">
+        <input type="number" name="max_dte" value="{{ defaults.max_dte }}"
+               min="1" max="400" aria-label="Maximum DTE">
+      </fieldset>
+      <small>e.g. 30–45 days — the expiry window to sell into</small>
+    </div>
+    <fieldset class="rank-by">
+      <legend>Rank by</legend>
+      <div class="segmented">
+        <input type="radio" name="fundamental_weight" value="0" id="rank-yield"
+               {% if defaults.fundamental_weight == 0 %}checked{% endif %}>
+        <label for="rank-yield">Higher yield<small>most premium</small></label>
+        <input type="radio" name="fundamental_weight" value="0.5" id="rank-bal"
+               {% if defaults.fundamental_weight == 0.5 %}checked{% endif %}>
+        <label for="rank-bal">Balanced<small>premium + quality</small></label>
+        <input type="radio" name="fundamental_weight" value="1" id="rank-qual"
+               {% if defaults.fundamental_weight == 1 %}checked{% endif %}>
+        <label for="rank-qual">Better quality<small>safer to own</small></label>
+      </div>
+    </fieldset>
   </div>
   <details class="advanced">
     <summary>Advanced filters</summary>
+    <div class="grid">
+      <label>Names to check
+        <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="500">
+        <small>more = broader but slower (the chain pull is rate-limited)</small>
+      </label>
+      <label>Min yield
+        <input type="number" name="min_yield" step="0.01" placeholder="(none)">
+        <small>0.15 = 15% / yr</small>
+      </label>
+    </div>
     <div class="grid">
       <label>Min $-volume/day
         <input type="number" name="min_dollar_volume" value="{{ defaults.min_dollar_volume }}"
                step="1000000" min="0">
       </label>
-      <label>Min yield (e.g. 0.15)
-        <input type="number" name="min_yield" step="0.01" placeholder="(none)">
-      </label>
-    </div>
-    <div class="grid">
-      <label>Min DTE <input type="number" name="min_dte" value="{{ defaults.min_dte }}"></label>
-      <label>Max DTE <input type="number" name="max_dte" value="{{ defaults.max_dte }}"></label>
       <label>Timeout (s) <input type="number" name="timeout_seconds" placeholder="(none)"></label>
     </div>
   </details>
