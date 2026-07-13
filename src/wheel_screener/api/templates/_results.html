@@ -1,5 +1,6 @@
 {% set sk = sort_key|default('score') %}
 {% set so = sort_order|default('desc') %}
+{% set n = (job.result or [])|length %}
 {% macro sortlink(label, key) %}
   {% set nxt = 'asc' if (sk == key and so == 'desc') else 'desc' %}
   <th><a href="#" hx-get="/runs/{{ job.job_id }}/results?sort={{ key }}&order={{ nxt }}"
@@ -8,9 +9,16 @@
 {% endmacro %}
 <article id="results-{{ job.job_id }}">
   <header>
-    <strong>{{ (job.result or [])|length }} candidate(s)</strong>
+    <strong>{{ n }} candidate{{ '' if n == 1 else 's' }}</strong>
     {% if job.status == "cancelled" %} <mark>cancelled — partial</mark>{% endif %}
-    {% if job.result %} <small>— click a symbol for detail, a column to sort</small>{% endif %}
+    {% if summary %}
+    <span class="result-stats">
+      {% if summary.yield_max is not none %}<span>yield
+        <b>{{ "%.1f"|format(summary.yield_min * 100) }}–{{ "%.1f%%"|format(summary.yield_max * 100) }}</b></span>{% endif %}
+      {% if summary.dte_max is not none %}<span>DTE <b>{{ summary.dte_min }}–{{ summary.dte_max }}</b></span>{% endif %}
+    </span>
+    {% endif %}
+    {% if job.result %}<small>click a symbol for detail · a column to sort</small>{% endif %}
   </header>
   {% if job.result %}
   <figure>
@@ -30,22 +38,22 @@
         {% set k = c.contract %}
         <tr>
           <td>{{ loop.index }}</td>
-          {# click a symbol to insert its detail as a new row right below (afterend) — no hidden
-             row / :has reveal (fragile) and no symbol-based id (dotted tickers break selectors) #}
+          {# click a symbol to insert its detail as a new row below (afterend) — no fragile
+             hidden row / :has reveal, and no symbol-based DOM id (dotted tickers break selectors) #}
           <td><a href="#" hx-get="/runs/{{ job.job_id }}/candidates/{{ c.symbol }}"
                  hx-target="closest tr" hx-swap="afterend" hx-sync="this:drop"
               ><strong>{{ c.symbol }}</strong></a></td>
           <td>{{ k.strike }}</td>
           <td>{{ k.expiration }}</td>
           <td>{{ k.dte }}</td>
-          <td>{{ "%.2f"|format(k.delta) if k.delta is not none else "" }}</td>
-          <td>{{ "%.0f%%"|format(k.implied_volatility * 100) if k.implied_volatility is not none else "" }}</td>
-          <td>{{ k.bid if k.bid is not none else "" }}</td>
-          <td>{{ k.mid if k.mid is not none else "" }}</td>
-          <td>{{ k.open_interest if k.open_interest is not none else "" }}</td>
-          <td>{{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "" }}</td>
-          <td>{{ "%.2f"|format(c.fundamental_score) if c.fundamental_score is not none else "" }}</td>
-          <td>{{ "%.2f"|format(c.score) if c.score is not none else "" }}</td>
+          <td>{{ "%.2f"|format(k.delta) if k.delta is not none else "—" }}</td>
+          <td>{{ "%.0f%%"|format(k.implied_volatility * 100) if k.implied_volatility is not none else "—" }}</td>
+          <td>{{ k.bid if k.bid is not none else "—" }}</td>
+          <td>{{ k.mid if k.mid is not none else "—" }}</td>
+          <td>{{ k.open_interest if k.open_interest is not none else "—" }}</td>
+          <td class="{% if c.annualized_yield is not none %}{{ 'y-hi' if c.annualized_yield >= 0.25 else ('y-mid' if c.annualized_yield >= 0.15 else 'y-lo') }}{% endif %}">{{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</td>
+          <td>{{ "%.2f"|format(c.fundamental_score) if c.fundamental_score is not none else "—" }}</td>
+          <td class="score-cell" style="--pct: {{ (c.score * 100)|round|int if c.score is not none else 0 }}%">{{ "%.2f"|format(c.score) if c.score is not none else "—" }}</td>
         </tr>
         {% endfor %}
       </tbody>
