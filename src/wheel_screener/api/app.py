@@ -71,6 +71,14 @@ templates = Jinja2Templates(directory=str(_HERE / "templates"))
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
 
 
+def _num2(v: object) -> str:
+    """Render a number to 2 decimals ('—' if missing) — avoids float artifacts like 2.860000003."""
+    return f"{v:.2f}" if isinstance(v, (int, float)) and not isinstance(v, bool) else "—"
+
+
+templates.env.filters["num2"] = _num2
+
+
 def _opt_float(raw: str) -> float | None:
     raw = (raw or "").strip()
     return float(raw) if raw else None

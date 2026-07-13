@@ -301,6 +301,14 @@ def test_results_sort_by_column(tmp_path) -> None:
     assert "/runs/j/results?sort=" in desc.text  # headers are sortable links
 
 
+def test_num2_filter_rounds_floats() -> None:
+    from wheel_screener.api.app import _num2
+
+    assert _num2(2.8600000000000003) == "2.86"  # no float display artifact
+    assert _num2(80.0) == "80.00" and _num2(1) == "1.00"
+    assert _num2(None) == "—" and _num2(True) == "—"  # missing / non-number
+
+
 def test_results_summary_and_emphasis(tmp_path) -> None:
     runner = _runner(_FakeService(), tmp_path)
     _done_job(runner, _candidate("AAA", yld=0.30), _candidate("BBB", yld=0.10))
