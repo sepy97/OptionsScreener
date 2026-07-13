@@ -137,13 +137,11 @@ tbody td:nth-child(9), tbody td:nth-child(11) { color: var(--pico-muted-color); 
 /* --- candidate detail row --- */
 .detail {
   position: relative; margin: 0.25rem 0; padding: 0.75rem 2.25rem 0.75rem 1rem;
-  font-size: 0.875rem; background: var(--sunken);
+  font-size: 0.875rem; background: var(--sunken); white-space: normal;   /* override table nowrap */
   border-left: 3px solid var(--wheel-accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
-.detail ul {
-  margin: 0.4rem 0 0; padding: 0; list-style: none;
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.2rem 1.5rem;
-}
+.detail ul { margin: 0.4rem 0 0; padding: 0; list-style: none; }
+.detail li { padding: 0.15rem 0; }
 .detail-close {
   position: absolute; top: 0.5rem; right: 0.5rem;
   display: inline-flex; align-items: center; justify-content: center;
