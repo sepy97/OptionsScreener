@@ -1,9 +1,10 @@
+{% import "_icons.html" as icon %}
 {% set k = c.contract %}
 <tr class="detail">
   <td colspan="12">
     <div class="detail">
       <a href="#" class="detail-close" onclick="this.closest('tr').remove();return false;"
-         aria-label="close">×</a>
+         aria-label="close">{{ icon.close() }}</a>
       <strong>{{ c.symbol }}</strong> &middot; {{ k.option_symbol }} (put)
       <ul>
         <li>Strike {{ k.strike|num2 }} &middot; exp {{ k.expiration }} ({{ k.dte }} DTE)</li>

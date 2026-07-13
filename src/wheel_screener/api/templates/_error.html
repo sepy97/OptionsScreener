@@ -1,3 +1,4 @@
+{% import "_icons.html" as icon %}
 <article role="alert">
-  <strong>⚠ {{ message }}</strong>
+  <strong>{{ icon.warning() }}{{ message }}</strong>
 </article>

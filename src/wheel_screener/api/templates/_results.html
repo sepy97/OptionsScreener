@@ -1,3 +1,4 @@
+{% import "_icons.html" as icon %}
 {% set sk = sort_key|default('score') %}
 {% set so = sort_order|default('desc') %}
 {% set n = (job.result or [])|length %}
@@ -5,16 +6,12 @@
   {% set nxt = 'asc' if (sk == key and so == 'desc') else 'desc' %}
   <th><a href="#" hx-get="/runs/{{ job.job_id }}/results?sort={{ key }}&order={{ nxt }}"
          hx-target="#results-{{ job.job_id }}" hx-swap="outerHTML"
-      >{{ label }}{% if sk == key %} {{ '▾' if so == 'desc' else '▴' }}{% endif %}</a></th>
+      >{{ label }}{% if sk == key %} {{ icon.chevron(so) }}{% endif %}</a></th>
 {% endmacro %}
 <article id="results-{{ job.job_id }}">
-  <header>
-    {% if job.result %}
-    <a href="/runs/{{ job.job_id }}/export.csv" role="button" class="secondary outline export-btn"
-       download>⭳ Export CSV</a>
-    {% endif %}
+  <header class="results-head">
     <strong>{{ n }} candidate{{ '' if n == 1 else 's' }}</strong>
-    {% if job.status == "cancelled" %} <mark>cancelled — partial</mark>{% endif %}
+    {% if job.status == "cancelled" %}<span class="badge badge--neg">cancelled — partial</span>{% endif %}
     {% if summary %}
     <span class="result-stats">
       {% if summary.yield_max is not none %}<span>yield
@@ -22,7 +19,11 @@
       {% if summary.dte_max is not none %}<span>DTE <b>{{ summary.dte_min }}–{{ summary.dte_max }}</b></span>{% endif %}
     </span>
     {% endif %}
-    {% if job.result %}<small>click a symbol for detail · a column to sort</small>{% endif %}
+    {% if job.result %}
+    <a href="/runs/{{ job.job_id }}/export.csv" role="button" class="secondary outline export-btn"
+       download>{{ icon.download() }} Export CSV</a>
+    <small class="results-hint">click a symbol for detail · click a column to sort</small>
+    {% endif %}
   </header>
   {% if job.result %}
   <figure>
@@ -33,7 +34,7 @@
           {{ sortlink("Exp", "exp") }}{{ sortlink("DTE", "dte") }}{{ sortlink("Delta", "delta") }}
           {{ sortlink("IV", "iv") }}{{ sortlink("Bid", "bid") }}{{ sortlink("Mid", "mid") }}
           {{ sortlink("OI", "oi") }}{{ sortlink("Yield", "yield") }}
-          {{ sortlink("Fund.", "fund") }}{{ sortlink("Score", "score") }}
+          {{ sortlink("Quality", "fund") }}{{ sortlink("Score", "score") }}
         </tr>
       </thead>
       <tbody>
@@ -62,7 +63,7 @@
     </table>
   </figure>
   {% else %}
-  <p>No candidates matched. Try a higher max-DTE, a lower min-yield, a lower min&nbsp;$-volume,
-     or more names.</p>
+  <p class="empty-state">No candidates matched. Try a higher max-DTE, a lower min-yield,
+     a lower min&nbsp;$-volume, or more names.</p>
   {% endif %}
 </article>
