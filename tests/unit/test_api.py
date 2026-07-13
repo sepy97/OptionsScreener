@@ -319,6 +319,25 @@ def test_results_summary_and_emphasis(tmp_path) -> None:
     assert "score-cell" in r.text and "--pct:" in r.text  # in-cell score bar
 
 
+def test_export_csv(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA"))
+    r = _client(runner).get("/runs/j/export.csv")
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
+    assert "attachment" in r.headers.get("content-disposition", "").lower()
+    lines = r.text.splitlines()
+    assert lines[0].startswith("symbol,option_symbol,strike")  # header row
+    assert any(line.startswith("AAA,") for line in lines[1:])  # data row
+    assert _client(runner).get("/runs/nope/export.csv").status_code == 404  # unknown run
+
+
+def test_results_view_has_export_button(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA"))
+    r = _client(runner).get("/runs/j/results")
+    assert "/runs/j/export.csv" in r.text and "download" in r.text
+
+
 def test_candidate_detail_fragment(tmp_path) -> None:
     runner = _runner(_FakeService(), tmp_path)
     _done_job(runner, _candidate("AAA"))
