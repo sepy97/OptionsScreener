@@ -45,6 +45,8 @@
              hidden row / :has reveal, and no symbol-based DOM id (dotted tickers break selectors) #}
           <td><a href="#" hx-get="/runs/{{ job.job_id }}/candidates/{{ c.symbol }}"
                  hx-target="closest tr" hx-swap="afterend" hx-sync="this:drop"
+                 hx-on::before-request="let d=this.closest('tr').nextElementSibling;
+                   if(d){if(d.classList.contains('detail')){d.remove();event.preventDefault();}}"
               ><strong>{{ c.symbol }}</strong></a></td>
           <td>{{ k.strike|num2 }}</td>
           <td>{{ k.expiration }}</td>
