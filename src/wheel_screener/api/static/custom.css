@@ -1,105 +1,116 @@
-/* Wheel Screener — visual design layer on Pico (vendored; preliminary UI, see UI_STATUS.md).
-   Uses Pico's CSS variables where possible so light/dark themes both work. */
+/* Wheel Screener — design layer on Pico (vendored, no build step). Pinned to light theme. */
 
 :root {
-  --wheel-accent: #0e9f6e;             /* emerald */
+  /* brand / primary action */
+  --wheel-accent: #0e9f6e;
   --wheel-accent-strong: #0b8a5f;
   --wheel-accent-soft: rgba(14, 159, 110, 0.10);
-  --wheel-radius: 10px;
-  --wheel-shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
-  --pico-primary: #0e9f6e;
-  --pico-primary-hover: #0b8a5f;
-  --pico-primary-focus: rgba(14, 159, 110, 0.25);
-  --pico-primary-underline: rgba(14, 159, 110, 0.5);
-  --pico-border-radius: var(--wheel-radius);
+  /* data semantics */
+  --warn: #b7791f;
+  --warn-soft: rgba(183, 121, 31, 0.12);
+  --neg: #c0392b;
+  --neg-soft: rgba(192, 57, 43, 0.12);
+  /* neutral surfaces + structure */
+  --ink: #1c2530;
+  --border: rgba(16, 24, 40, 0.10);
+  --sunken: #f6f8fa;
+  /* geometry */
+  --radius: 10px;
+  --radius-sm: 8px;
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.06), 0 1px 2px rgba(16, 24, 40, 0.04);
+  --pico-border-radius: var(--radius-sm);
 }
 
-body { -webkit-font-smoothing: antialiased; }
-@media (prefers-color-scheme: light) { body { background: #f5f7f9; } }
+body { background: #f5f7f9; -webkit-font-smoothing: antialiased; }
 
-/* --- header bar --- */
+/* icons: inline SVG sized to text, aligned to the baseline */
+.icon { width: 1em; height: 1em; vertical-align: -0.125em; flex-shrink: 0; }
+
+/* --- header (neutral bar, accent rule + accent brand mark) --- */
 .app-header {
-  background: linear-gradient(135deg, var(--wheel-accent), var(--wheel-accent-strong));
-  color: #fff;
-  padding: 0.85rem 0;
-  box-shadow: var(--wheel-shadow);
-  margin-bottom: 2rem;
+  background: #fff; color: var(--ink);
+  border-bottom: 2px solid var(--wheel-accent);
+  padding: 0.85rem 0; margin-bottom: 1.5rem;
 }
-.app-header__inner { display: flex; align-items: baseline; gap: 0.9rem; flex-wrap: wrap; }
-.brand { font-size: 1.25rem; font-weight: 700; letter-spacing: -0.01em; }
-.brand-sub { font-size: 0.85rem; opacity: 0.85; }
+.app-header__inner { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.brand { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 1.25rem; font-weight: 700; color: var(--wheel-accent); }
+.brand-mark { width: 1.15em; height: 1.15em; }
+.brand-sub { font-size: 0.875rem; color: var(--pico-muted-color); }
 
 /* --- layout / cards --- */
 main.container { max-width: 1080px; }
-article {
-  border: 1px solid var(--pico-card-border-color, rgba(0, 0, 0, 0.07));
-  border-radius: var(--wheel-radius);
-  box-shadow: var(--wheel-shadow);
+main.container > article, main.container > section { margin-bottom: 1rem; }
+article { border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); }
+article > h2, section > h2 { margin-top: 0; font-size: 1.05rem; }
+footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border); text-align: center; color: var(--pico-muted-color); }
+
+/* --- badges (replace the yellow highlighter <mark>) --- */
+.badge, mark {
+  display: inline-flex; align-items: center; gap: 0.25rem;
+  padding: 0.1rem 0.5rem; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; line-height: 1.6;
+  background: var(--warn-soft); color: var(--warn);
 }
-article > h2, section > h2 { margin-top: 0; font-size: 1.1rem; }
-article > header strong { font-size: 1.05rem; }
-footer {
-  margin-top: 3rem; padding-top: 1rem;
-  border-top: 1px solid var(--pico-muted-border-color);
-  text-align: center; color: var(--pico-muted-color);
-}
+.badge--neg { background: var(--neg-soft); color: var(--neg); }
 
 /* --- form --- */
-form label { font-weight: 600; font-size: 0.9rem; }
+form { margin-bottom: 0; }
+form > .grid { align-items: start; }
+form label, .rank-by legend { font-weight: 600; font-size: 0.875rem; }
 form label small { font-weight: 400; color: var(--pico-muted-color); }
 .advanced {
-  margin: 0.75rem 0 1rem;
-  border: 1px solid var(--pico-muted-border-color);
-  border-radius: var(--wheel-radius);
-  padding: 0 0.85rem;
+  margin: 0.75rem 0 1rem; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: 0 0.85rem;
 }
-.advanced summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; padding: 0.6rem 0; color: var(--wheel-accent); }
-
-/* "Rank by" — a radio group styled as a segmented button bar (no JS) */
-.rank-by { margin: 0; padding: 0; border: 0; }
-.rank-by legend { font-weight: 600; font-size: 0.9rem; padding: 0; margin-bottom: calc(var(--pico-spacing) * 0.25); }
-.segmented { display: flex; gap: 0; }
-.segmented input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
-.segmented label {
-  flex: 1; margin: 0; text-align: center; cursor: pointer; line-height: 1.2;
-  padding: 0.5rem 0.6rem; font-weight: 600; font-size: 0.88rem;
-  border: 1px solid var(--pico-form-element-border-color); border-left-width: 0;
-}
-.segmented label:first-of-type { border-left-width: 1px; border-radius: var(--wheel-radius) 0 0 var(--wheel-radius); }
-.segmented label:last-of-type { border-radius: 0 var(--wheel-radius) var(--wheel-radius) 0; }
-.segmented label small { display: block; font-weight: 400; font-size: 0.72rem; color: var(--pico-muted-color); }
-.segmented input:checked + label {
-  background: var(--wheel-accent-soft); color: var(--wheel-accent-strong);
-  box-shadow: inset 0 0 0 1px var(--wheel-accent); border-color: var(--wheel-accent);
-}
-.segmented input:checked + label small { color: var(--wheel-accent-strong); }
-.segmented input:focus-visible + label { outline: 2px solid var(--pico-primary-focus); outline-offset: -2px; }
+.advanced summary { cursor: pointer; font-weight: 600; font-size: 0.875rem; padding: 0.5rem 0; color: var(--wheel-accent); }
 .run-btn {
-  width: auto; min-width: 12rem; margin: 0.25rem 0 0; font-weight: 600;
+  width: 100%; margin-top: 1rem; font-weight: 600;
   background: var(--wheel-accent); border-color: var(--wheel-accent);
 }
 .run-btn:hover { background: var(--wheel-accent-strong); border-color: var(--wheel-accent-strong); }
 
+/* "Rank by" — radio group as a segmented button bar (no JS, no border shimmer) */
+.rank-by { margin: 0; padding: 0; border: 0; }
+.rank-by legend { padding: 0; margin-bottom: calc(var(--pico-spacing) * 0.25); }
+.segmented { display: flex; }
+.segmented input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
+.segmented label {
+  flex: 1; margin: 0 0 0 -1px; display: flex; flex-direction: column; justify-content: center;
+  text-align: center; cursor: pointer; line-height: 1.25; min-height: 2.75rem;
+  padding: 0.4rem 0.6rem; font-weight: 600; font-size: 0.875rem;
+  border: 1px solid var(--pico-form-element-border-color);
+}
+.segmented label:first-of-type { margin-left: 0; border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.segmented label:last-of-type { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.segmented label small { font-weight: 400; font-size: 0.75rem; color: var(--pico-muted-color); }
+.segmented input:checked + label {
+  position: relative; z-index: 1; border-color: var(--wheel-accent);
+  background: var(--wheel-accent-soft); color: var(--wheel-accent-strong);
+}
+.segmented input:checked + label small { color: var(--wheel-accent-strong); }
+.segmented input:focus-visible + label { outline: 2px solid var(--pico-primary-focus); outline-offset: -2px; }
+
 /* --- results table --- */
 figure { margin: 0; overflow-x: auto; }
-table { font-size: 0.9rem; margin: 0; }
-th, td { padding: 0.45rem 0.65rem; white-space: nowrap; }   /* cells never wrap (dates stay 1 line) */
+table { font-size: 0.875rem; margin: 0; }
+th, td { padding: 0.5rem 0.75rem; white-space: nowrap; }
 thead th {
-  position: sticky; top: 0; z-index: 1;
-  background: var(--pico-card-sectioning-background-color, #eef2f5);
-  border-bottom: 2px solid var(--wheel-accent);
-  font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.02em; white-space: nowrap;
+  position: sticky; top: 0; z-index: 1; background: var(--sunken);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600;
 }
-tbody tr:not(.detail):nth-child(odd) { background: rgba(125, 125, 125, 0.05); }   /* zebra */
-tbody tr:not(.detail):hover { background: var(--wheel-accent-soft); }              /* wins over zebra */
-/* right-align + tabular figures on every column but Symbol (col 1), so numbers line up */
+tbody tr:not(.detail):nth-child(odd) { background: rgba(125, 125, 125, 0.045); }   /* zebra */
+tbody tr:not(.detail):hover { background: var(--wheel-accent-soft); }               /* wins over zebra */
 thead th:not(:nth-child(1)), tbody td:not(:nth-child(1)) { text-align: right; font-variant-numeric: tabular-nums; }
 tbody td:nth-child(1) { text-align: left; }
-th a, td a { text-decoration: none; color: inherit; cursor: pointer; white-space: nowrap; }
-th a:hover, td a:hover { color: var(--wheel-accent); text-decoration: underline; }
+th a, td a { text-decoration: none; color: inherit; cursor: pointer; }
+th a:hover, td a:hover { color: var(--wheel-accent); }
+th a:focus-visible, td a:focus-visible { outline: 2px solid var(--pico-primary-focus); outline-offset: 2px; border-radius: 2px; }
 td a strong { border-bottom: 1px dotted currentColor; }   /* hint: symbol is clickable */
+/* faint sort affordance on all sortable headers; the active one shows a chevron in the markup */
+thead th a .icon { opacity: 0.6; }
 
-/* column emphasis: mute reference cols (Bid=7/Mid=8/OI=9/Fund=11); highlight yield + a score bar */
+/* column emphasis: mute reference cols (Bid=7/Mid=8/OI=9/Quality=11); highlight yield + a score bar */
 tbody td:nth-child(7), tbody td:nth-child(8),
 tbody td:nth-child(9), tbody td:nth-child(11) { color: var(--pico-muted-color); }
 .y-hi { color: var(--wheel-accent-strong); font-weight: 700; }
@@ -109,43 +120,54 @@ tbody td:nth-child(9), tbody td:nth-child(11) { color: var(--pico-muted-color); 
   font-weight: 600;
   background: linear-gradient(to right, var(--wheel-accent-soft) var(--pct, 0%), transparent var(--pct, 0%));
 }
-.result-stats {
-  display: inline-flex; flex-wrap: wrap; gap: 0.2rem 1rem; margin-left: 0.75rem;
-  font-size: 0.85rem; font-weight: 400; color: var(--pico-muted-color);
+
+/* results header: count · stats ...... [Export] on one aligned flex row */
+.results-head { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; }
+.results-head strong { font-size: 1.05rem; }
+.result-stats { display: inline-flex; flex-wrap: wrap; gap: 0.15rem 1rem; font-weight: 400; color: var(--pico-muted-color); }
+.result-stats span { text-transform: uppercase; font-size: 0.72rem; letter-spacing: 0.02em; }
+.result-stats b { font-size: 0.9rem; color: var(--ink); font-variant-numeric: tabular-nums; }
+.results-hint { flex-basis: 100%; margin: 0; color: var(--pico-muted-color); }
+.export-btn {
+  margin: 0 0 0 auto; width: auto; padding: 0.35rem 0.8rem; font-size: 0.875rem;
+  display: inline-flex; align-items: center; gap: 0.4rem;
 }
-.result-stats b { color: var(--pico-color); font-variant-numeric: tabular-nums; }
-.export-btn { float: right; width: auto; margin: 0; padding: 0.25rem 0.7rem; font-size: 0.85rem; }
+.empty-state { text-align: center; color: var(--pico-muted-color); padding: 2rem 1rem; }
 
 /* --- candidate detail row --- */
 .detail {
-  position: relative; margin: 0.25rem 0; padding: 0.7rem 2rem 0.7rem 1rem;
-  font-size: 0.88rem; background: var(--pico-code-background-color, #f6f8fa);
-  border-left: 3px solid var(--wheel-accent);
-  border-radius: 0 var(--wheel-radius) var(--wheel-radius) 0;
+  position: relative; margin: 0.25rem 0; padding: 0.75rem 2.25rem 0.75rem 1rem;
+  font-size: 0.875rem; background: var(--sunken);
+  border-left: 3px solid var(--wheel-accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
-.detail ul { margin: 0.4rem 0 0; padding-left: 0; list-style: none; }
-.detail li { padding: 0.1rem 0; }
+.detail ul {
+  margin: 0.4rem 0 0; padding: 0; list-style: none;
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 0.2rem 1.5rem;
+}
 .detail-close {
-  position: absolute; top: 0.35rem; right: 0.65rem; font-size: 1.3rem; line-height: 1;
+  position: absolute; top: 0.5rem; right: 0.5rem;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 1.5rem; height: 1.5rem; border-radius: 6px; font-size: 1rem;
   text-decoration: none; color: var(--pico-muted-color);
 }
-.detail-close:hover { color: var(--pico-del-color, #c0392b); }
+.detail-close:hover { background: var(--neg-soft); color: var(--neg); }
 
 /* --- run states --- */
-.run-progress ul { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--pico-muted-color); }
-[role="alert"] { border-left: 3px solid var(--pico-del-color, #c0392b); }
+.run-progress ul { margin: 0.5rem 0 0; padding: 0; list-style: none; font-size: 0.875rem; color: var(--pico-muted-color); font-family: var(--pico-font-family-monospace); }
+.run-progress li::before { content: "› "; color: var(--wheel-accent); }
+[role="alert"] { border-left: 3px solid var(--neg); }
+[role="alert"] .icon { color: var(--neg); margin-right: 0.35rem; }
 
 /* --- responsive / small screens --- */
 @media (max-width: 820px) {
   .app-header__inner { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
-  .brand-sub { font-size: 0.78rem; }
-  table { font-size: 0.85rem; }
-  th, td { padding: 0.4rem 0.45rem; }
-  /* drop reference columns (Bid=7, Mid=8, OI=9, Fund=11) — the wide table still scrolls if needed */
+  table { font-size: 0.8125rem; }
+  th, td { padding: 0.45rem 0.5rem; }
+  /* drop reference columns (Bid=7, Mid=8, OI=9, Quality=11) — the wide table still scrolls */
   thead th:nth-child(7), tbody td:nth-child(7),
   thead th:nth-child(8), tbody td:nth-child(8),
   thead th:nth-child(9), tbody td:nth-child(9),
   thead th:nth-child(11), tbody td:nth-child(11) { display: none; }
-  .segmented label { padding: 0.45rem 0.3rem; font-size: 0.8rem; }
-  .segmented label small { font-size: 0.64rem; }
+  .segmented label { padding: 0.4rem 0.3rem; font-size: 0.8125rem; }
+  .segmented label small { font-size: 0.6875rem; }
 }

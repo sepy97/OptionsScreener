@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% block content %}
+  {% import "_icons.html" as icon %}
   <article>
     <h2>Run a screen</h2>
     {% include "_form.html" %}
@@ -12,7 +13,7 @@
     <h2>Latest results
       <small>as of {{ latest.created_at[:16].replace("T", " ") }} UTC ({{ latest_age }})</small>
       {% if latest_stale %}
-      <small><mark>&#9888; may be stale &mdash; re-run for live prices</mark></small>
+      <span class="badge">{{ icon.warning() }} may be stale — re-run for live prices</span>
       {% endif %}
     </h2>
     {% with job = latest %}{% include "_results.html" %}{% endwith %}
