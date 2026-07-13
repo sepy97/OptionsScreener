@@ -301,6 +301,16 @@ def test_results_sort_by_column(tmp_path) -> None:
     assert "/runs/j/results?sort=" in desc.text  # headers are sortable links
 
 
+def test_results_summary_and_emphasis(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA", yld=0.30), _candidate("BBB", yld=0.10))
+    r = _client(runner).get("/runs/j/results")
+    assert r.status_code == 200
+    assert "result-stats" in r.text and "yield" in r.text  # summary stat line
+    assert "y-hi" in r.text and "y-lo" in r.text  # yield tiers (0.30 -> hi, 0.10 -> lo)
+    assert "score-cell" in r.text and "--pct:" in r.text  # in-cell score bar
+
+
 def test_candidate_detail_fragment(tmp_path) -> None:
     runner = _runner(_FakeService(), tmp_path)
     _done_job(runner, _candidate("AAA"))

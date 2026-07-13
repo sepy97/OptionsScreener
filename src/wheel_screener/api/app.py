@@ -101,6 +101,22 @@ def _humanize_age(created_at: str) -> tuple[str, bool]:
     return (label, secs > _STALE_AFTER_SECONDS)
 
 
+def _results_summary(results: list | None) -> dict | None:
+    """Yield/DTE range across a result set — a compact 'what am I looking at' line."""
+    if not results:
+        return None
+    ys = [c["annualized_yield"] for c in results if c.get("annualized_yield") is not None]
+    dtes = [
+        c["contract"]["dte"]
+        for c in results
+        if c.get("contract") and c["contract"].get("dte") is not None
+    ]
+    return {
+        "yield_min": min(ys) if ys else None, "yield_max": max(ys) if ys else None,
+        "dte_min": min(dtes) if dtes else None, "dte_max": max(dtes) if dtes else None,
+    }
+
+
 def _num(v: object) -> float:
     # non-numeric/missing -> -inf: clusters nulls at the bottom under the default desc sort
     # (and at the top when a column is toggled ascending). The point is a stable, no-TypeError key.
@@ -202,7 +218,11 @@ def dashboard(request: Request, runner: JobRunner = Depends(get_job_runner)):
     age, stale = _humanize_age(latest["created_at"]) if latest else ("", False)
     return templates.TemplateResponse(
         request, "dashboard.html",
-        {"defaults": ScreenRequest(), "latest": latest, "latest_age": age, "latest_stale": stale},
+        {
+            "defaults": ScreenRequest(), "latest": latest, "latest_age": age,
+            "latest_stale": stale,
+            "summary": _results_summary(latest["result"] if latest else None),
+        },
     )
 
 
@@ -251,7 +271,9 @@ def run_progress(request: Request, job_id: str, runner: JobRunner = Depends(get_
         err = job.get("error") or {}
         message = f"{err.get('type', 'error')}: {err.get('detail', '')}"
         return templates.TemplateResponse(request, "_error.html", {"message": message})
-    return templates.TemplateResponse(request, "_results.html", {"job": job})  # done / cancelled
+    return templates.TemplateResponse(  # done / cancelled
+        request, "_results.html", {"job": job, "summary": _results_summary(job.get("result"))}
+    )
 
 
 @app.get("/runs/{job_id}/results")
@@ -272,7 +294,10 @@ def run_results(
         results.sort(key=keyfn, reverse=(order != "asc"))
     return templates.TemplateResponse(
         request, "_results.html",
-        {"job": {**job, "result": results}, "sort_key": sort, "sort_order": order},
+        {
+            "job": {**job, "result": results}, "sort_key": sort, "sort_order": order,
+            "summary": _results_summary(results),
+        },
     )
 
 
