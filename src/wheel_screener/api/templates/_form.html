@@ -33,14 +33,16 @@
         <small>more = broader but slower (the chain pull is rate-limited)</small>
       </label>
       <label>Min yield
-        <input type="number" name="min_yield" step="0.01" placeholder="(none)">
-        <small>0.15 = 15% / yr</small>
+        <input type="number" name="min_yield" step="0.01" min="0" value="{{ defaults.min_yield }}">
+        <small>annualized floor — 0.10 = 10% / yr (blank = no floor)</small>
       </label>
     </div>
     <div class="grid">
-      <label>Min $-volume/day
-        <input type="number" name="min_dollar_volume" value="{{ defaults.min_dollar_volume }}"
-               step="1000000" min="0">
+      <label>Min avg $-volume/day
+        <input type="text" inputmode="numeric" name="min_dollar_volume"
+               value="{{ defaults.min_dollar_volume|usd }}"
+               onchange="this.value=(+this.value.replace(/,/g,'')||0).toLocaleString('en-US')">
+        <small>US$ traded per day — skips stocks too thin to have tradeable options</small>
       </label>
       <label>Timeout (s) <input type="number" name="timeout_seconds" placeholder="(none)"></label>
     </div>

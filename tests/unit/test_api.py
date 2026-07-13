@@ -270,6 +270,13 @@ def test_invalid_form_renders_422(tmp_path) -> None:
     assert r.status_code == 422 and "invalid input" in r.text
 
 
+def test_run_form_accepts_comma_formatted_dollar_volume(tmp_path) -> None:
+    runner = _runner(_FakeService(result=[]), tmp_path)
+    # the accountant-formatted field submits "50,000,000"; commas must be stripped, not 422
+    r = _client(runner).post("/runs", data={"top_n": 10, "min_dollar_volume": "50,000,000"})
+    assert r.status_code == 200 and "/progress" in r.text
+
+
 def test_screen_request_maps_min_dollar_volume() -> None:
     from wheel_screener.api.schemas import ScreenRequest
 

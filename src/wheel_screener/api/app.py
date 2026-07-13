@@ -113,6 +113,14 @@ def _num2(v: object) -> str:
 templates.env.filters["num2"] = _num2
 
 
+def _usd(v: object) -> str:
+    """Accountant-style thousands separators (25000000 -> '25,000,000')."""
+    return f"{v:,.0f}" if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)
+
+
+templates.env.filters["usd"] = _usd
+
+
 def _opt_float(raw: str) -> float | None:
     raw = (raw or "").strip()
     return float(raw) if raw else None
@@ -273,8 +281,8 @@ def start_run(
     request: Request,
     top_n: int = Form(150),
     fundamental_weight: float = Form(0.5),
-    min_dollar_volume: float = Form(25_000_000.0),
-    min_yield: str = Form(""),
+    min_dollar_volume: str = Form("25,000,000"),   # accountant-formatted; commas stripped below
+    min_yield: str = Form("0.10"),
     min_dte: int = Form(21),
     max_dte: int = Form(35),
     timeout_seconds: str = Form(""),
@@ -283,7 +291,8 @@ def start_run(
     try:
         req = ScreenRequest(
             top_n=top_n, fundamental_weight=fundamental_weight,
-            min_dollar_volume=min_dollar_volume, min_yield=_opt_float(min_yield),
+            min_dollar_volume=float((min_dollar_volume or "").replace(",", "").strip() or 0),
+            min_yield=_opt_float(min_yield),
             min_dte=min_dte, max_dte=max_dte, timeout_seconds=_opt_float(timeout_seconds),
         )
     except (ValidationError, ValueError) as e:
