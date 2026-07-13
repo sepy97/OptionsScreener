@@ -19,8 +19,8 @@ class ScreenRequest(BaseModel):
         25_000_000.0, ge=0.0, description="Skip stocks below this avg daily $-volume (0=off)."
     )
     min_yield: float | None = Field(None, ge=0.0, description="Drop candidates below this yield.")
-    min_dte: int = Field(30, ge=1, le=400)
-    max_dte: int = Field(45, ge=1, le=400)
+    min_dte: int = Field(21, ge=1, le=400)  # ~3 weeks
+    max_dte: int = Field(35, ge=1, le=400)  # ~5 weeks
     timeout_seconds: float | None = Field(None, gt=0.0, description="Wall-clock budget; partials.")
 
     @model_validator(mode="after")

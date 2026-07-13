@@ -43,13 +43,13 @@ def test_select_put_picks_best_yield_near_target_delta():
         _put(95, -0.10, 35, 1.0), _put(90, -0.20, 35, 1.5), _put(85, -0.30, 35, 2.2),
         _put(90, -0.20, 40, 1.9),  # same delta, higher annualized yield than the 35-DTE
     ])
-    put = select_put(chain, ScreenCriteria())
+    put = select_put(chain, ScreenCriteria(min_dte=30, max_dte=45))  # explicit window (35 & 40 in)
     assert put is not None
     assert put.strike == 90 and put.dte == 40
 
 
 def test_select_put_applies_gates():
-    crit = ScreenCriteria()  # min_oi=100, max_spread=0.10, max_abs_delta=0.30, dte 30-45
+    crit = ScreenCriteria(min_dte=30, max_dte=45)  # min_oi=100, max_spread=0.10, |Δ|≤0.30
     assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=50)]), crit) is None      # low OI
     assert select_put(_chain([_put(90, -0.20, 40, 1.5, spread=0.5)]), crit) is None  # wide spread
     assert select_put(_chain([_put(90, -0.40, 40, 1.5)]), crit) is None  # |delta|>0.30
@@ -58,15 +58,15 @@ def test_select_put_applies_gates():
 
 
 def test_select_put_dte_is_strict_by_default_tolerance_is_opt_in():
-    crit = ScreenCriteria()  # target band 30-45, strict (dte_tolerance 0)
+    crit = ScreenCriteria(min_dte=30, max_dte=45)  # explicit window, strict (dte_tolerance 0)
     # in-band (35 DTE) wins over an out-of-band 25-DTE even with a richer raw yield
     both = _chain([_put(90, -0.20, 25, 3.0), _put(90, -0.20, 35, 1.0)])
     assert select_put(both, crit).dte == 35
-    # monthly-only, nothing in 30-45: strict default returns nothing (issue #26)...
+    # monthly-only, nothing in 30-45: strict returns nothing (issue #26)...
     only25 = _chain([_put(90, -0.20, 25, 1.5)])
     assert select_put(only25, crit) is None
     # ...unless tolerance is opted in, which then admits the nearest expiry within ±tol
-    assert select_put(only25, ScreenCriteria(dte_tolerance=10)).dte == 25
+    assert select_put(only25, ScreenCriteria(min_dte=30, max_dte=45, dte_tolerance=10)).dte == 25
 
 
 def test_rank_equal_fundamentals_orders_by_yield():
@@ -123,7 +123,8 @@ class _FakeChains:
 def test_run_screen_end_to_end():
     chain = _chain([_put(90, -0.20, 40, 1.9), _put(95, -0.10, 40, 1.0)])
     service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
-    results = service.run_screen(ScreenCriteria(top_n=10), date(2026, 6, 22))
+    crit = ScreenCriteria(top_n=10, min_dte=30, max_dte=45)
+    results = service.run_screen(crit, date(2026, 6, 22))
     assert len(results) == 1
     r = results[0]
     assert r.symbol == "AAA"

@@ -116,3 +116,18 @@ td a strong { border-bottom: 1px dotted currentColor; }   /* hint: symbol is cli
 /* --- run states --- */
 .run-progress ul { margin: 0.5rem 0 0; font-size: 0.9rem; color: var(--pico-muted-color); }
 [role="alert"] { border-left: 3px solid var(--pico-del-color, #c0392b); }
+
+/* --- responsive / small screens --- */
+@media (max-width: 820px) {
+  .app-header__inner { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
+  .brand-sub { font-size: 0.78rem; }
+  table { font-size: 0.85rem; }
+  th, td { padding: 0.4rem 0.45rem; }
+  /* drop reference columns (Bid, Mid, OI, Fund.) — the wide table still scrolls if needed */
+  thead th:nth-child(8), tbody td:nth-child(8),
+  thead th:nth-child(9), tbody td:nth-child(9),
+  thead th:nth-child(10), tbody td:nth-child(10),
+  thead th:nth-child(12), tbody td:nth-child(12) { display: none; }
+  .segmented label { padding: 0.45rem 0.3rem; font-size: 0.8rem; }
+  .segmented label small { font-size: 0.64rem; }
+}

@@ -213,8 +213,8 @@ def start_run(
     fundamental_weight: float = Form(0.5),
     min_dollar_volume: float = Form(25_000_000.0),
     min_yield: str = Form(""),
-    min_dte: int = Form(30),
-    max_dte: int = Form(45),
+    min_dte: int = Form(21),
+    max_dte: int = Form(35),
     timeout_seconds: str = Form(""),
     runner: JobRunner = Depends(get_job_runner),
 ):
