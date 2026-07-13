@@ -226,7 +226,10 @@ def test_dashboard_renders_form(tmp_path) -> None:
     r = _client(_runner(_FakeService(result=[]), tmp_path)).get("/")
     assert r.status_code == 200
     assert 'hx-post="/runs"' in r.text and "Run screen" in r.text
-    assert "Preliminary UI" in r.text  # honest about the placeholder UI (docs/UI_STATUS.md)
+    # segmented "Rank by" control (replaced the confusing 0..1 slider)
+    assert "Rank by" in r.text and "Higher yield" in r.text and "Better quality" in r.text
+    # DTE is now a primary control; names-to-check moved into Advanced
+    assert 'name="min_dte"' in r.text and "Advanced filters" in r.text
 
 
 def test_run_flow_polls_then_renders_results(tmp_path) -> None:
