@@ -25,9 +25,8 @@
     <table>
       <thead>
         <tr>
-          <th>#</th>
           {{ sortlink("Symbol", "symbol") }}{{ sortlink("Strike", "strike") }}
-          {{ sortlink("Exp", "exp") }}{{ sortlink("DTE", "dte") }}{{ sortlink("Δ", "delta") }}
+          {{ sortlink("Exp", "exp") }}{{ sortlink("DTE", "dte") }}{{ sortlink("Delta", "delta") }}
           {{ sortlink("IV", "iv") }}{{ sortlink("Bid", "bid") }}{{ sortlink("Mid", "mid") }}
           {{ sortlink("OI", "oi") }}{{ sortlink("Yield", "yield") }}
           {{ sortlink("Fund.", "fund") }}{{ sortlink("Score", "score") }}
@@ -37,7 +36,6 @@
         {% for c in job.result %}
         {% set k = c.contract %}
         <tr>
-          <td>{{ loop.index }}</td>
           {# click a symbol to insert its detail as a new row below (afterend) — no fragile
              hidden row / :has reveal, and no symbol-based DOM id (dotted tickers break selectors) #}
           <td><a href="#" hx-get="/runs/{{ job.job_id }}/candidates/{{ c.symbol }}"

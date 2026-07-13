@@ -83,7 +83,7 @@ form label small { font-weight: 400; color: var(--pico-muted-color); }
 /* --- results table --- */
 figure { margin: 0; overflow-x: auto; }
 table { font-size: 0.9rem; margin: 0; }
-th, td { padding: 0.45rem 0.65rem; }
+th, td { padding: 0.45rem 0.65rem; white-space: nowrap; }   /* cells never wrap (dates stay 1 line) */
 thead th {
   position: sticky; top: 0; z-index: 1;
   background: var(--pico-card-sectioning-background-color, #eef2f5);
@@ -92,16 +92,16 @@ thead th {
 }
 tbody tr:not(.detail):nth-child(odd) { background: rgba(125, 125, 125, 0.05); }   /* zebra */
 tbody tr:not(.detail):hover { background: var(--wheel-accent-soft); }              /* wins over zebra */
-/* right-align + tabular figures on every column but Symbol, so numbers line up */
-thead th:not(:nth-child(2)), tbody td:not(:nth-child(2)) { text-align: right; font-variant-numeric: tabular-nums; }
-tbody td:nth-child(2) { text-align: left; }
+/* right-align + tabular figures on every column but Symbol (col 1), so numbers line up */
+thead th:not(:nth-child(1)), tbody td:not(:nth-child(1)) { text-align: right; font-variant-numeric: tabular-nums; }
+tbody td:nth-child(1) { text-align: left; }
 th a, td a { text-decoration: none; color: inherit; cursor: pointer; white-space: nowrap; }
 th a:hover, td a:hover { color: var(--wheel-accent); text-decoration: underline; }
 td a strong { border-bottom: 1px dotted currentColor; }   /* hint: symbol is clickable */
 
-/* column emphasis: mute reference cols (Bid/Mid/OI/Fund.); highlight yield + a score bar */
-tbody td:nth-child(8), tbody td:nth-child(9),
-tbody td:nth-child(10), tbody td:nth-child(12) { color: var(--pico-muted-color); }
+/* column emphasis: mute reference cols (Bid=7/Mid=8/OI=9/Fund=11); highlight yield + a score bar */
+tbody td:nth-child(7), tbody td:nth-child(8),
+tbody td:nth-child(9), tbody td:nth-child(11) { color: var(--pico-muted-color); }
 .y-hi { color: var(--wheel-accent-strong); font-weight: 700; }
 .y-mid { font-weight: 600; }
 .y-lo { color: var(--pico-muted-color); }
@@ -140,11 +140,11 @@ tbody td:nth-child(10), tbody td:nth-child(12) { color: var(--pico-muted-color);
   .brand-sub { font-size: 0.78rem; }
   table { font-size: 0.85rem; }
   th, td { padding: 0.4rem 0.45rem; }
-  /* drop reference columns (Bid, Mid, OI, Fund.) — the wide table still scrolls if needed */
+  /* drop reference columns (Bid=7, Mid=8, OI=9, Fund=11) — the wide table still scrolls if needed */
+  thead th:nth-child(7), tbody td:nth-child(7),
   thead th:nth-child(8), tbody td:nth-child(8),
   thead th:nth-child(9), tbody td:nth-child(9),
-  thead th:nth-child(10), tbody td:nth-child(10),
-  thead th:nth-child(12), tbody td:nth-child(12) { display: none; }
+  thead th:nth-child(11), tbody td:nth-child(11) { display: none; }
   .segmented label { padding: 0.45rem 0.3rem; font-size: 0.8rem; }
   .segmented label small { font-size: 0.64rem; }
 }
