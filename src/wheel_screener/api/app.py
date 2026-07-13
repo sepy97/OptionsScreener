@@ -9,6 +9,8 @@ One service + one job runner are built at startup (lifespan) and shared across r
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
@@ -69,6 +71,38 @@ app = FastAPI(title="Wheel Screener API", version="0.1.0", lifespan=lifespan)
 _HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
+
+
+# CSV export columns: (header, accessor over a serialized CandidateResult dict)
+_EXPORT_COLUMNS: list[tuple[str, object]] = [
+    ("symbol", lambda c: c.get("symbol")),
+    ("option_symbol", lambda c: (c.get("contract") or {}).get("option_symbol")),
+    ("strike", lambda c: (c.get("contract") or {}).get("strike")),
+    ("expiration", lambda c: (c.get("contract") or {}).get("expiration")),
+    ("dte", lambda c: (c.get("contract") or {}).get("dte")),
+    ("delta", lambda c: (c.get("contract") or {}).get("delta")),
+    ("iv", lambda c: (c.get("contract") or {}).get("implied_volatility")),
+    ("bid", lambda c: (c.get("contract") or {}).get("bid")),
+    ("ask", lambda c: (c.get("contract") or {}).get("ask")),
+    ("mid", lambda c: (c.get("contract") or {}).get("mid")),
+    ("spread_pct", lambda c: (c.get("contract") or {}).get("spread_pct")),
+    ("open_interest", lambda c: (c.get("contract") or {}).get("open_interest")),
+    ("annualized_yield", lambda c: c.get("annualized_yield")),
+    ("premium", lambda c: c.get("premium")),
+    ("collateral", lambda c: c.get("collateral")),
+    ("fundamental_score", lambda c: c.get("fundamental_score")),
+    ("score", lambda c: c.get("score")),
+    ("next_earnings", lambda c: c.get("next_earnings")),
+]
+
+
+def _candidates_csv(results: list | None) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow([name for name, _ in _EXPORT_COLUMNS])
+    for c in results or []:
+        writer.writerow([fn(c) for _, fn in _EXPORT_COLUMNS])
+    return buf.getvalue()
 
 
 def _num2(v: object) -> str:
@@ -323,6 +357,20 @@ def run_candidate(
             request, "_error.html", {"message": "unknown candidate"}, status_code=404
         )
     return templates.TemplateResponse(request, "_candidate.html", {"c": cand})
+
+
+@app.get("/runs/{job_id}/export.csv")
+def export_run(job_id: str, runner: JobRunner = Depends(get_job_runner)) -> Response:
+    """Download a run's candidates as a CSV file."""
+    job = runner.get(job_id)
+    if job is None or job.get("result") is None:
+        raise HTTPException(status_code=404, detail="no results to export")
+    stamp = (job.get("created_at") or "screen")[:16].replace(":", "").replace("T", "_")
+    return Response(
+        content=_candidates_csv(job["result"]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="wheel-candidates-{stamp}.csv"'},
+    )
 
 
 @app.post("/runs/{job_id}/cancel")

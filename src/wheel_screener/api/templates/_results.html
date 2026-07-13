@@ -9,6 +9,10 @@
 {% endmacro %}
 <article id="results-{{ job.job_id }}">
   <header>
+    {% if job.result %}
+    <a href="/runs/{{ job.job_id }}/export.csv" role="button" class="secondary outline export-btn"
+       download>⭳ Export CSV</a>
+    {% endif %}
     <strong>{{ n }} candidate{{ '' if n == 1 else 's' }}</strong>
     {% if job.status == "cancelled" %} <mark>cancelled — partial</mark>{% endif %}
     {% if summary %}
