@@ -18,7 +18,8 @@ class ScreenRequest(BaseModel):
     min_dollar_volume: float = Field(
         25_000_000.0, ge=0.0, description="Skip stocks below this avg daily $-volume (0=off)."
     )
-    min_yield: float | None = Field(None, ge=0.0, description="Drop candidates below this yield.")
+    # annualized-yield floor; default 10%. Blank in the form -> None (no floor).
+    min_yield: float | None = Field(0.10, ge=0.0, description="Drop candidates below this yield.")
     min_dte: int = Field(21, ge=1, le=400)  # ~3 weeks
     max_dte: int = Field(35, ge=1, le=400)  # ~5 weeks
     timeout_seconds: float | None = Field(None, gt=0.0, description="Wall-clock budget; partials.")
