@@ -54,22 +54,26 @@ def select_top(
     earnings: dict[str, date],
     today: date,
 ) -> list[Underlying]:
-    """Gate -> earnings blackout -> cross-sectional rank -> (sector cap) -> top N.
+    """Gate -> cross-sectional rank -> earnings blackout -> (sector cap) -> top N.
 
-    Pure and deterministic given Underlyings with ``.metrics`` populated.
+    The rank comes BEFORE the blackout on purpose: the fundamental score is a cross-sectional
+    percentile and must not depend on earnings timing. The blackout is only a display filter (a
+    limiting criterion), so a market screen and a single-ticker search show the same score for a
+    name. Pure and deterministic given Underlyings with ``.metrics`` populated.
     """
     gated = [u for u in names if not gate_reasons(u.metrics, criteria)]
-    survivors = apply_earnings_blackout(gated, earnings, today, criteria.max_dte)
-    ranked = rank_by_fundamentals(survivors, criteria.factor_weights, criteria.stock_profile)
+    ranked = rank_by_fundamentals(gated, criteria.factor_weights, criteria.stock_profile)
+    survivors = apply_earnings_blackout(ranked, earnings, today, criteria.max_dte)
+    blacked_out = len(gated) - len(survivors)
     if criteria.min_fundamental_score is not None:
         floor = criteria.min_fundamental_score
-        ranked = [u for u in ranked if (u.fundamental_score or 0.0) >= floor]
+        survivors = [u for u in survivors if (u.fundamental_score or 0.0) >= floor]
     if criteria.max_per_sector is not None:
-        ranked = _cap_per_sector(ranked, criteria.max_per_sector)
-    kept = ranked[: criteria.top_n]
+        survivors = _cap_per_sector(survivors, criteria.max_per_sector)
+    kept = survivors[: criteria.top_n]
     logger.info(
         "fundamentals: %d/%d passed gates · %d blacked out (earnings ≤%dd) · top %d kept",
-        len(gated), len(names), len(gated) - len(survivors), criteria.max_dte, len(kept),
+        len(gated), len(names), blacked_out, criteria.max_dte, len(kept),
     )
     return kept
 
