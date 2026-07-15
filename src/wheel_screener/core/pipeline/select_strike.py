@@ -1,7 +1,8 @@
-"""Stage 4 — strike selection: the cash-secured put to sell on a survivor.
+"""Stage 4 — strike selection: the cash-secured put(s) to sell.
 
-Within the [min_dte, max_dte] window, take the put nearest the target delta in each expiry,
-then pick the expiry with the best annualized yield (subject to liquidity gates).
+For the market screen we take ONE put per name (nearest the target delta, best yield).
+For a single-ticker search we return the top-N puts nearest the target delta (one per expiry),
+so you can compare expiries at a consistent moneyness. Both share the same sellability gates.
 """
 
 from __future__ import annotations
@@ -38,18 +39,12 @@ def put_yield(c: OptionContract) -> float | None:
     return annualized_csp_yield(prem, c.strike, c.dte)
 
 
-def select_put(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> OptionContract | None:
-    """Best cash-secured put for this underlying, or None if nothing qualifies.
-
-    Gates: PUT, has delta, |delta| <= max_abs_delta, open interest >= min, a real sellable
-    bid (bid > 0), and a computable bid/ask spread within the limit. By default
-    (dte_tolerance == 0) results stay strictly within [min_dte, max_dte]. A positive
-    dte_tolerance also admits expiries within ±tol, preferring in-band ones and only falling
-    back to an out-of-window expiry when none land in-band. Among the chosen expiries'
-    per-expiry nearest-to-target-delta puts, pick the highest yield.
-    """
+def _eligible_puts(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> list[OptionContract]:
+    """Puts that pass the sellability gates: PUT with a delta, DTE within [min,max] (±tolerance),
+    |delta| <= max_abs_delta, open interest >= min, a real sellable bid (>0), and a computable
+    bid/ask spread within the limit."""
     lo, hi, tol = criteria.min_dte, criteria.max_dte, criteria.dte_tolerance
-    eligible = [
+    return [
         c
         for c in snapshot.contracts
         if c.option_type == OptionType.PUT
@@ -58,23 +53,48 @@ def select_put(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> OptionContr
         and abs(c.delta) <= criteria.max_abs_delta
         and (c.open_interest or 0) >= criteria.min_open_interest
         and c.bid is not None
-        and c.bid > 0  # must be actually sellable (a 0 bid = no buyer)
+        and c.bid > 0
         and c.spread_pct is not None
         and c.spread_pct <= criteria.max_bid_ask_spread_pct
     ]
-    if not eligible:
-        return None
 
-    target = criteria.target_delta
-    best_per_expiry: dict[object, OptionContract] = {}
-    for c in eligible:
-        cur = best_per_expiry.get(c.expiration)
-        if cur is None or abs(c.delta - target) < abs(cur.delta - target):
-            best_per_expiry[c.expiration] = c
 
-    priced = [c for c in best_per_expiry.values() if put_yield(c) is not None]
+def _best_put_per_expiry(
+    puts: list[OptionContract], target_delta: float
+) -> list[OptionContract]:
+    """The put nearest ``target_delta`` in each expiry, keeping only priceable ones."""
+    best: dict[object, OptionContract] = {}
+    for c in puts:
+        cur = best.get(c.expiration)
+        if cur is None or abs(c.delta - target_delta) < abs(cur.delta - target_delta):
+            best[c.expiration] = c
+    return [c for c in best.values() if put_yield(c) is not None]
+
+
+def select_put(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> OptionContract | None:
+    """Best cash-secured put for this underlying, or None if nothing qualifies.
+
+    By default (dte_tolerance == 0) results stay strictly within [min_dte, max_dte]. A positive
+    dte_tolerance also admits expiries within ±tol, preferring in-band ones. Among the chosen
+    expiries' per-expiry nearest-to-target-delta puts, pick the highest yield.
+    """
+    priced = _best_put_per_expiry(_eligible_puts(snapshot, criteria), criteria.target_delta)
     if not priced:
         return None
+    lo, hi = criteria.min_dte, criteria.max_dte
     in_band = [c for c in priced if lo <= c.dte <= hi]
-    pool = in_band if in_band else priced  # prefer 30-45; else the nearest monthly
+    pool = in_band if in_band else priced  # prefer in-band; else the nearest expiry within tol
     return max(pool, key=lambda c: put_yield(c) or 0.0)
+
+
+def select_top_puts(
+    snapshot: ChainSnapshot, criteria: ScreenCriteria, n: int
+) -> list[OptionContract]:
+    """The N cash-secured puts nearest ``target_delta`` (one per expiry) — for a single-ticker
+    search. Same sellability gates as ``select_put``; selects the N expiries whose nearest-to-
+    target put is closest to the target delta, returned earliest-expiry-first (term structure)."""
+    priced = _best_put_per_expiry(_eligible_puts(snapshot, criteria), criteria.target_delta)
+    priced.sort(key=lambda c: abs(c.delta - criteria.target_delta))  # pick the N nearest target
+    top = priced[: max(n, 0)]
+    top.sort(key=lambda c: c.dte)  # display order: earliest expiry first
+    return top

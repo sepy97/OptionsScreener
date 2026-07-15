@@ -206,6 +206,52 @@ def refresh_fundamentals(
     typer.echo(f"Refreshed {len(fresh)} symbols into the overlay ({total} rows total).")
 
 
+@app.command()
+@handle_provider_errors
+def search(
+    ticker: str = typer.Argument(..., help="Ticker symbol, e.g. AAPL."),
+    top_n: int = typer.Option(5, help="How many puts to show (nearest the target delta)."),
+    min_dte: int = typer.Option(7, help="Minimum days to expiration."),
+    max_dte: int = typer.Option(45, help="Maximum days to expiration."),
+    target_delta: float = typer.Option(-0.20, help="Target put delta."),
+) -> None:
+    """Top-N cash-secured puts to sell on ONE ticker (any optionable symbol; skips the funnel)."""
+    settings = Settings()
+    token = Path(settings.schwab.token_path).expanduser()
+    if settings.chain_source == "schwab" and not token.exists():
+        typer.echo("error: no Schwab token; run `wheel-screener auth-login` first.")
+        raise typer.Exit(code=1)
+    criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=target_delta)
+    _print_search(build_service(settings).search_ticker(ticker, criteria, date.today(), n=top_n))
+
+
+def _print_search(r: object) -> None:
+    fund = (
+        "n/a" if r.passes_fundamentals is None
+        else "pass" if r.passes_fundamentals else "FAIL (" + ", ".join(r.gate_reasons) + ")"
+    )
+    earn = f" · next earnings {r.next_earnings}" if r.next_earnings else ""
+    typer.echo(f"{r.symbol}: {len(r.puts)} sellable put(s) · fundamentals {fund}{earn}")
+    if not r.puts:
+        typer.echo("  nothing in the DTE / delta / liquidity window.")
+        return
+    typer.echo(
+        f"  {'strike':>7} {'exp':>10} {'dte':>4} {'delta':>6} {'iv':>5} "
+        f"{'bid':>5} {'yield':>6} {'oi':>7} {'b/e':>8}"
+    )
+    for c in r.puts:
+        k = c.contract
+        iv = f"{k.implied_volatility * 100:.0f}%" if k.implied_volatility is not None else "-"
+        be = k.strike - (c.premium or 0.0)
+        earns_before = r.next_earnings and r.next_earnings <= k.expiration
+        flag = " <- earnings before exp" if earns_before else ""
+        yld = (c.annualized_yield or 0.0) * 100
+        typer.echo(
+            f"  {k.strike:>7.2f} {k.expiration!s:>10} {k.dte:>4} {k.delta:>6.2f} {iv:>5} "
+            f"{k.bid:>5.2f} {yld:>5.1f}% {k.open_interest or 0:>7} {be:>8.2f}{flag}"
+        )
+
+
 @app.command("refresh-screen")
 @handle_provider_errors
 def refresh_screen(
