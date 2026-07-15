@@ -375,6 +375,24 @@ def test_check_basic_auth_pure() -> None:
     assert not _path_exempt("/") and not _path_exempt("/runs/j/results")
 
 
+def test_resolve_auth_fails_closed_when_required() -> None:
+    import pytest
+
+    from wheel_screener.api.app import _resolve_auth
+    from wheel_screener.config import AuthSettings, Settings
+
+    def _s(**kw) -> Settings:
+        return Settings(auth=AuthSettings(**kw))
+
+    # required + no password -> refuse to start (fail closed)
+    with pytest.raises(RuntimeError, match="AUTH__PASSWORD"):
+        _resolve_auth(_s(required=True))
+    # required + password -> gate enabled
+    assert _resolve_auth(_s(required=True, password="pw")) is not None
+    # not required + no password -> open (dev), no raise
+    assert _resolve_auth(_s(required=False)) is None
+
+
 def test_basic_auth_gate_enforced() -> None:
     from wheel_screener.api.app import _Auth
 

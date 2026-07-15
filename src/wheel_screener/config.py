@@ -68,11 +68,16 @@ class IvRankSettings(BaseModel):
 
 class AuthSettings(BaseModel):
     """HTTP Basic Auth for the web app. The gate is ENABLED only when ``password`` is set
-    (env ``AUTH__PASSWORD``); left unset it's OPEN — convenient for local dev, so REQUIRE it in
-    production. ``/health`` and ``/static`` stay open regardless (liveness probes + assets)."""
+    (env ``AUTH__PASSWORD``); left unset it's OPEN — convenient for local dev. ``/health`` and
+    ``/static`` stay open regardless (liveness probes + assets).
+
+    ``required`` is the production fail-CLOSED switch: set ``AUTH__REQUIRED=true`` (the deploy
+    container does) and the app REFUSES TO START if no password is configured — so a forgotten
+    secret crashes the deploy loudly instead of silently exposing the app."""
 
     user: str = "admin"
     password: SecretStr = SecretStr("")
+    required: bool = False  # fail closed: refuse to start unauthenticated when true
 
 
 class LogSettings(BaseModel):

@@ -68,6 +68,17 @@ def _auth_from_settings(settings: Settings) -> _Auth | None:
     return _Auth(settings.auth.user, pw) if pw else None
 
 
+def _resolve_auth(settings: Settings) -> _Auth | None:
+    """Credentials for the gate, or None (open). Fails CLOSED: when ``AUTH__REQUIRED`` is set but
+    no password is configured, raise so the app refuses to start unauthenticated (prod safety)."""
+    auth = _auth_from_settings(settings)
+    if auth is None and settings.auth.required:
+        raise RuntimeError(
+            "AUTH__REQUIRED=true but AUTH__PASSWORD is empty — refusing to start unauthenticated"
+        )
+    return auth
+
+
 def _path_exempt(path: str) -> bool:
     """Liveness probe + static assets bypass auth (so uptime checks and CSS work)."""
     return path == "/health" or path == "/static" or path.startswith("/static/")
@@ -95,9 +106,9 @@ async def lifespan(app: FastAPI):
     service = build_service(settings)
     app.state.settings = settings
     app.state.service = service
-    app.state.auth = _auth_from_settings(settings)
+    app.state.auth = _resolve_auth(settings)  # raises if AUTH__REQUIRED but no password (prod)
     if app.state.auth is None:
-        logger.warning("web auth DISABLED (no AUTH__PASSWORD set) — set it before exposing the app")
+        logger.warning("web auth DISABLED (no AUTH__PASSWORD) — set AUTH__REQUIRED=true in prod")
     app.state.job_runner = JobRunner(service, JobStore(settings.jobs_db_path))
     # let pipeline INFO logs through so background jobs can capture stage progress
     logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
