@@ -76,6 +76,16 @@ class _FakeService:
             raise self._error
         return self._result
 
+    def search_ticker(self, symbol, criteria, today, *, n=5):
+        from wheel_screener.core.service import TickerSearch
+
+        if self._error is not None:
+            raise self._error
+        return TickerSearch(
+            symbol=symbol.upper(), puts=list(self._result or []),
+            passes_fundamentals=True, gate_reasons=[], next_earnings=None,
+        )
+
 
 def _runner(service: _FakeService, tmp_path) -> JobRunner:
     return JobRunner(service, JobStore(str(tmp_path / "jobs.sqlite")))
@@ -130,6 +140,18 @@ def test_failed_job_records_typed_error(tmp_path) -> None:
     runner.wait(job_id)
     job = client.get(f"/screen/{job_id}").json()
     assert job["status"] == "failed" and job["error"]["type"] == "AuthExpiredError"
+
+
+def test_search_route_renders_puts() -> None:
+    app.dependency_overrides[get_service] = lambda: _FakeService(result=[_candidate("AAA")])
+    try:
+        r = TestClient(app).post("/search", data={"ticker": "aaa", "top_n": 5})
+        assert r.status_code == 200
+        assert "AAA" in r.text and "Breakeven" in r.text and "fundamentals: pass" in r.text
+        blank = TestClient(app).post("/search", data={"ticker": "", "top_n": 5})
+        assert blank.status_code == 422  # empty ticker
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_run_blocking_stores_done_result(tmp_path) -> None:

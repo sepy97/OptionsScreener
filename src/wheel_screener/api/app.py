@@ -13,7 +13,7 @@ import csv
 import io
 import logging
 from contextlib import asynccontextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
@@ -34,6 +34,7 @@ from wheel_screener.core.errors import (
     ProviderUnavailableError,
     RateLimitedError,
 )
+from wheel_screener.core.models import ScreenCriteria
 from wheel_screener.core.service import ScreenerService
 
 logger = logging.getLogger(__name__)
@@ -274,6 +275,30 @@ def dashboard(request: Request, runner: JobRunner = Depends(get_job_runner)):
             "summary": _results_summary(latest["result"] if latest else None),
         },
     )
+
+
+@app.post("/search")
+def search_route(
+    request: Request,
+    ticker: str = Form(...),
+    top_n: int = Form(5),
+    min_dte: int = Form(7),
+    max_dte: int = Form(45),
+    target_delta: float = Form(-0.20),
+    service: ScreenerService = Depends(get_service),
+):
+    """Single-ticker CSP search — synchronous (one chain pull) top-N puts near the target delta."""
+    symbol = (ticker or "").strip().upper()
+    if not symbol:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "enter a ticker symbol"}, status_code=422
+        )
+    criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=target_delta)
+    try:
+        result = service.search_ticker(symbol, criteria, date.today(), n=top_n)
+    except ProviderError as e:
+        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
+    return templates.TemplateResponse(request, "_search.html", {"result": result})
 
 
 @app.post("/runs")
