@@ -296,17 +296,25 @@ def health(
     service: ScreenerService = Depends(get_service),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Liveness + readiness: is the local store loaded, and is a Schwab token present?"""
+    """Liveness + readiness: is the local store loaded, and is the ACTIVE chain source ready?"""
     known = getattr(service.fundamentals, "known_symbols", None)
     try:
         store_loaded = bool(known()) if known is not None else True
     except Exception:  # noqa: BLE001 - health must never raise
         store_loaded = False
-    token_present = Path(settings.schwab.token_path).expanduser().exists()
+    source = settings.chain_source
+    if source == "alpaca":  # key/secret auth — ready when both are configured
+        chain_ready = bool(
+            settings.alpaca.api_key.get_secret_value()
+            and settings.alpaca.api_secret.get_secret_value()
+        )
+    else:  # schwab — ready when the OAuth token file is present
+        chain_ready = Path(settings.schwab.token_path).expanduser().exists()
     return {
-        "status": "ok" if (store_loaded and token_present) else "degraded",
+        "status": "ok" if (store_loaded and chain_ready) else "degraded",
         "store_loaded": store_loaded,
-        "schwab_token": token_present,
+        "chain_source": source,
+        "chain_ready": chain_ready,
     }
 
 

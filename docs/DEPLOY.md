@@ -31,8 +31,16 @@ rsync -avz data/fundamentals-slim/   droplet:/srv/steadybull/data/fundamentals/
 rsync -avz data/earnings_calendar.csv droplet:/srv/steadybull/data/earnings_calendar.csv
 ```
 
-On the droplet, clone the repo into `/srv/steadybull` (so `./data` = `/srv/steadybull/data`) and
-write `.env` (from `.env.example`) with the real secrets — **at minimum**:
+On the droplet, clone the repo into `/srv/steadybull` (so `./data` = `/srv/steadybull/data`).
+
+**Make the data dir writable by the container** — it runs as **uid 10001**, but a host bind mount
+keeps the host owner, so hand it over or the app can't create `jobs.sqlite` and won't start:
+
+```bash
+sudo chown -R 10001:10001 /srv/steadybull/data
+```
+
+Then write `.env` (from `.env.example`) with the real secrets — **at minimum**:
 
 ```
 AUTH__PASSWORD=<a strong password>      # AUTH__REQUIRED=true is set by compose; boot fails without this

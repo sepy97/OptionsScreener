@@ -23,8 +23,9 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra api --no-dev
 
-# run unprivileged
-RUN useradd --create-home --uid 10001 app && chown -R app:app /app
+# run unprivileged as a fixed uid (10001). /data is the mount point — for a named volume it
+# inherits this ownership; for a host bind mount, chown the host dir to 10001 (see docs/DEPLOY.md).
+RUN useradd --create-home --uid 10001 app && mkdir -p /data && chown -R app:app /app /data
 USER app
 
 EXPOSE 8000

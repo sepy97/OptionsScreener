@@ -240,20 +240,23 @@ def _health_client(settings: Settings) -> TestClient:
     return TestClient(app)
 
 
-def test_health_ok_with_store_and_token(tmp_path) -> None:
-    settings = Settings()
+def test_health_ok_when_chain_source_ready(tmp_path) -> None:
+    # schwab source is ready when its OAuth token file exists (pin the source; dev .env may differ)
+    settings = Settings(chain_source="schwab")
     token = tmp_path / "token.json"
     token.write_text("{}")
     settings.schwab.token_path = str(token)
     body = _health_client(settings).get("/health").json()
-    assert body == {"status": "ok", "store_loaded": True, "schwab_token": True}
+    assert body == {
+        "status": "ok", "store_loaded": True, "chain_source": "schwab", "chain_ready": True,
+    }
 
 
-def test_health_degraded_without_token(tmp_path) -> None:
-    settings = Settings()
+def test_health_degraded_when_chain_source_unready(tmp_path) -> None:
+    settings = Settings(chain_source="schwab")
     settings.schwab.token_path = str(tmp_path / "missing.json")
     body = _health_client(settings).get("/health").json()
-    assert body["schwab_token"] is False and body["status"] == "degraded"
+    assert body["chain_ready"] is False and body["status"] == "degraded"
 
 
 # --- HTML (HTMX) UI ---
@@ -373,6 +376,28 @@ def test_check_basic_auth_pure() -> None:
     # exemptions: liveness probe + static assets bypass the gate
     assert _path_exempt("/health") and _path_exempt("/static/custom.css")
     assert not _path_exempt("/") and not _path_exempt("/runs/j/results")
+
+
+def test_health_reflects_active_chain_source() -> None:
+    from wheel_screener.api.deps import get_service, get_settings
+    from wheel_screener.config import AlpacaSettings, Settings
+
+    app.dependency_overrides[get_service] = lambda: _FakeService()
+    try:
+        # Alpaca configured -> ready via key/secret (NOT gated on a Schwab token that never exists)
+        app.dependency_overrides[get_settings] = lambda: Settings(
+            chain_source="alpaca", alpaca=AlpacaSettings(api_key="k", api_secret="s")
+        )
+        j = TestClient(app).get("/health").json()
+        assert j["chain_source"] == "alpaca" and j["chain_ready"] is True and j["status"] == "ok"
+        # Alpaca with no creds -> degraded (explicit empty AlpacaSettings so dev .env can't leak in)
+        app.dependency_overrides[get_settings] = lambda: Settings(
+            chain_source="alpaca", alpaca=AlpacaSettings()
+        )
+        j2 = TestClient(app).get("/health").json()
+        assert j2["chain_ready"] is False and j2["status"] == "degraded"
+    finally:
+        app.dependency_overrides.clear()
 
 
 def test_resolve_auth_fails_closed_when_required() -> None:

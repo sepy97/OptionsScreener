@@ -16,7 +16,9 @@ services:
       JOBS_DB_PATH: /data/jobs.sqlite
       LOG__DIR: /data/logs
     volumes:
-      - ./data:/data # host ./data holds the slim store (fundamentals/), jobs DB, logs
+      # host ./data holds the slim store (fundamentals/), jobs DB, logs.
+      # the container runs as uid 10001 — `sudo chown -R 10001:10001 ./data` first (see DEPLOY.md).
+      - ./data:/data
     expose:
       - "8000" # internal only; reachable by Caddy, never published to the host
     healthcheck:
