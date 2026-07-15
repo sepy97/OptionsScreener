@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from wheel_screener.core.fundamentals import gate_reasons
+from wheel_screener.core.fundamentals import gate_reasons, rank_by_fundamentals
 from wheel_screener.core.models import (
     CandidateResult,
     ChainFilter,
@@ -42,6 +42,7 @@ class TickerSearch:
     gate_reasons: list[str] = field(default_factory=list)
     next_earnings: date | None = None
     metrics: FundamentalMetrics | None = None  # the ticker's raw fundamentals (P/E, ROE, ...)
+    fundamental_score: float | None = None  # the screener's 0-1 cross-sectional score
 
 
 @dataclass
@@ -54,6 +55,24 @@ class ScreenerService:
 
     fundamentals: FundamentalsProvider
     chains: ChainProvider
+    _scores: dict[str, float] | None = field(default=None, init=False, repr=False, compare=False)
+
+    def _universe_scores(self, criteria: ScreenCriteria, today: date) -> dict[str, float]:
+        """The screener's 0-1 cross-sectional fundamental score for every gate-passing name in the
+        universe. Computed once and cached (stable between fundamentals refreshes) so a single
+        ticker search doesn't re-rank the market on every call."""
+        if self._scores is None:
+            universe = build_universe(self.fundamentals, criteria)
+            metrics = self.fundamentals.fetch_metrics([u.symbol for u in universe])
+            for u in universe:
+                u.metrics = metrics.get(u.symbol)
+            gated = [u for u in universe if not gate_reasons(u.metrics, criteria)]
+            rank_by_fundamentals(gated, criteria.factor_weights, criteria.stock_profile)
+            self._scores = {
+                u.symbol: u.fundamental_score for u in gated if u.fundamental_score is not None
+            }
+            logger.info("fundamental scores computed for %d names (cached)", len(self._scores))
+        return self._scores
 
     def _put_filter(self, criteria: ScreenCriteria) -> ChainFilter:
         # pull a padded window so monthly-only names still surface their nearest monthly
@@ -148,14 +167,16 @@ class ScreenerService:
         earnings = self.fundamentals.earnings_calendar(
             today, today + timedelta(days=criteria.max_dte)
         ).get(symbol)
+        score = self._universe_scores(criteria, today).get(symbol)  # same score the screener shows
         for c in puts:
             c.next_earnings = earnings
+            c.fundamental_score = score
         logger.info(
-            "search %s: %d puts near Δ=%.2f (DTE %d-%d) · fundamentals=%s",
+            "search %s: %d puts near Δ=%.2f (DTE %d-%d) · score=%s",
             symbol, len(puts), criteria.target_delta, criteria.min_dte, criteria.max_dte,
-            "n/a" if passes is None else ("pass" if passes else ",".join(reasons)),
+            "n/a" if score is None else f"{score:.2f}",
         )
         return TickerSearch(
-            symbol=symbol, puts=puts, passes_fundamentals=passes,
-            gate_reasons=reasons, next_earnings=earnings, metrics=metrics,
+            symbol=symbol, puts=puts, passes_fundamentals=passes, gate_reasons=reasons,
+            next_earnings=earnings, metrics=metrics, fundamental_score=score,
         )

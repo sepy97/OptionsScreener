@@ -83,7 +83,7 @@ class _FakeService:
             raise self._error
         return TickerSearch(
             symbol=symbol.upper(), puts=list(self._result or []),
-            passes_fundamentals=True, gate_reasons=[], next_earnings=None,
+            passes_fundamentals=True, gate_reasons=[], next_earnings=None, fundamental_score=0.7,
         )
 
 
@@ -147,7 +147,7 @@ def test_search_route_renders_puts() -> None:
     try:
         r = TestClient(app).post("/search", data={"ticker": "aaa", "top_n": 5})
         assert r.status_code == 200
-        assert "AAA" in r.text and "Breakeven" in r.text and "fundamentals pass" in r.text
+        assert "AAA" in r.text and "Breakeven" in r.text and "fundamental score" in r.text
         blank = TestClient(app).post("/search", data={"ticker": "", "top_n": 5})
         assert blank.status_code == 422  # empty ticker
     finally:
