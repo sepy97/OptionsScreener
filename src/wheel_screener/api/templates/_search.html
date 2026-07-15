@@ -1,0 +1,47 @@
+{% import "_icons.html" as icon %}
+{% set r = result %}
+{% set n = r.puts|length %}
+<article>
+  <header class="results-head">
+    <strong>{{ r.symbol }} — {{ n }} sellable put{{ '' if n == 1 else 's' }}</strong>
+    {% if r.passes_fundamentals is true %}<span class="badge badge--ok">fundamentals: pass</span>
+    {% elif r.passes_fundamentals is false %}<span class="badge badge--neg">fundamentals:
+      {{ r.gate_reasons|join(', ') }}</span>{% endif %}
+    {% if r.next_earnings %}<span class="badge">{{ icon.warning() }} earnings {{ r.next_earnings }}</span>{% endif %}
+  </header>
+  {% if r.puts %}
+  <figure>
+    <table>
+      <thead>
+        <tr>
+          <th>Strike</th><th>Exp</th><th>DTE</th><th>Delta</th><th>IV</th><th>Bid</th><th>Mid</th>
+          <th>Spread</th><th>OI</th><th>Yield</th><th>Breakeven</th><th>Collateral</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in r.puts %}
+        {% set k = c.contract %}
+        <tr>
+          <td>{{ k.strike|num2 }}</td>
+          <td>{{ k.expiration }}{% if r.next_earnings and r.next_earnings <= k.expiration %}
+            <span title="earnings before expiry">{{ icon.warning() }}</span>{% endif %}</td>
+          <td>{{ k.dte }}</td>
+          <td>{{ "%.2f"|format(k.delta) if k.delta is not none else "—" }}</td>
+          <td>{{ "%.0f%%"|format(k.implied_volatility * 100) if k.implied_volatility is not none else "—" }}</td>
+          <td>{{ k.bid|num2 }}</td>
+          <td>{{ k.mid|num2 }}</td>
+          <td>{{ "%.1f%%"|format(k.spread_pct * 100) if k.spread_pct is not none else "—" }}</td>
+          <td>{{ k.open_interest if k.open_interest is not none else "—" }}</td>
+          <td class="{% if c.annualized_yield is not none %}{{ 'y-hi' if c.annualized_yield >= 0.25 else ('y-mid' if c.annualized_yield >= 0.15 else 'y-lo') }}{% endif %}">{{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</td>
+          <td>{{ (k.strike - (c.premium or 0.0))|num2 }}</td>
+          <td>{{ c.collateral|usd }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </figure>
+  {% else %}
+  <p class="empty-state">No sellable puts for {{ r.symbol }} in the DTE / delta / liquidity window —
+     try a wider DTE range or a different ticker.</p>
+  {% endif %}
+</article>

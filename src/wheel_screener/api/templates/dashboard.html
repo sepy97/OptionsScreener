@@ -2,6 +2,25 @@
 {% block content %}
   {% import "_icons.html" as icon %}
   <article>
+    <h2>Search a ticker</h2>
+    <form hx-post="/search" hx-target="#search-results" hx-swap="innerHTML"
+          hx-disabled-elt="find button">
+      <div class="grid">
+        <label>Ticker
+          <input type="text" name="ticker" placeholder="AAPL" required autocomplete="off"
+                 oninput="this.value=this.value.toUpperCase()">
+          <small>any optionable symbol — the top puts nearest −0.20Δ across expiries</small>
+        </label>
+        <label>How many puts
+          <input type="number" name="top_n" value="5" min="1" max="25">
+        </label>
+      </div>
+      <button type="submit" class="run-btn">Find CSPs</button>
+    </form>
+    <div id="search-results"></div>
+  </article>
+
+  <article>
     <h2>Run a screen</h2>
     {% include "_form.html" %}
   </article>
