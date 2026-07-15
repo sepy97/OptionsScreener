@@ -48,8 +48,8 @@ class ScreenCriteria(BaseModel):
     universe_limit: int = 50  # deep-fetch cap (by market cap) when bulk pre-rank is unavailable
     # fundamentals
     stock_profile: StockProfile = StockProfile.STALWART
-    top_n: int = 50  # keep the top N (by cross-sectional rank) for the chain pull
-    min_fundamental_score: float | None = None  # 0..1 composite floor; None = keep top_n
+    top_n: int = 50  # keep the top N (by peer percentile) for the chain pull
+    min_fundamental_score: float | None = None  # 0..1 absolute-strength floor; None = keep top_n
     max_per_sector: int | None = None  # optional concentration cap on the top-N
     max_leverage: float = 4.0  # hard gate: net-debt/EBITDA ceiling
     min_metrics_present: int = 6  # coverage gate: min core metrics required
@@ -109,11 +109,13 @@ class FundamentalMetrics(BaseModel):
 
 
 class FundamentalRating(BaseModel):
-    """Composite fundamental score for one name."""
+    """Fundamental scores for one name — the absolute strength rating AND the peer percentile."""
 
     profile: StockProfile
-    category_scores: dict[str, float] = Field(default_factory=dict)  # per-category 0..1
-    composite: float = 0.0  # 0..1
+    category_scores: dict[str, float] = Field(default_factory=dict)  # peer-percentile factors 0..1
+    composite: float = 0.0  # peer percentile 0..1
+    strength: float | None = None  # absolute financial strength 0..1 (peer-independent)
+    strength_scores: dict[str, float] = Field(default_factory=dict)  # absolute factor scores 0..1
 
 
 class Underlying(BaseModel):
@@ -127,7 +129,10 @@ class Underlying(BaseModel):
     # fundamentals
     metrics: FundamentalMetrics | None = None
     rating: FundamentalRating | None = None
+    # the primary rating: absolute financial strength (0..1), independent of the peer set
     fundamental_score: float | None = None
+    # secondary: cross-sectional percentile vs the screened field (0..1)
+    peer_percentile: float | None = None
     # calendar
     next_earnings: date | None = None
     has_weeklys: bool | None = None
@@ -186,7 +191,8 @@ class CandidateResult(BaseModel):
 
     symbol: str
     contract: OptionContract
-    fundamental_score: float | None = None
+    fundamental_score: float | None = None  # absolute financial strength 0..1 (primary rating)
+    peer_percentile: float | None = None  # percentile vs the screened field 0..1 (secondary)
     annualized_yield: float | None = None
     premium: float | None = None  # conservative credit (the bid)
     collateral: float | None = None

@@ -111,12 +111,13 @@ td a strong { border-bottom: 1px dotted currentColor; }   /* hint: symbol is cli
 /* faint sort affordance on all sortable headers; the active one shows a chevron in the markup */
 thead th a .icon { opacity: 0.6; }
 
-/* column emphasis: mute reference cols (Bid=7/Mid=8/OI=9/Quality=11); highlight yield + a score bar */
+/* column emphasis: mute reference cols (Bid=7/Mid=8/OI=9/Peers=12); highlight yield, strength + score */
 tbody td:nth-child(7), tbody td:nth-child(8),
-tbody td:nth-child(9), tbody td:nth-child(11) { color: var(--pico-muted-color); }
+tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); }
 .y-hi { color: var(--wheel-accent-strong); font-weight: 700; }
 .y-mid { font-weight: 600; }
 .y-lo { color: var(--pico-muted-color); }
+.strength-cell { font-weight: 700; }   /* the primary rating */
 .score-cell {
   font-weight: 600;
   background: linear-gradient(to right, var(--wheel-accent-soft) var(--pct, 0%), transparent var(--pct, 0%));
@@ -166,11 +167,11 @@ tbody td:nth-child(9), tbody td:nth-child(11) { color: var(--pico-muted-color); 
   .app-header__inner { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
   table { font-size: 0.8125rem; }
   th, td { padding: 0.45rem 0.5rem; }
-  /* drop reference columns (Bid=7, Mid=8, OI=9, Quality=11) — the wide table still scrolls */
+  /* drop reference columns (Bid=7, Mid=8, OI=9, Peers=12) — keep the primary Strength (11) */
   thead th:nth-child(7), tbody td:nth-child(7),
   thead th:nth-child(8), tbody td:nth-child(8),
   thead th:nth-child(9), tbody td:nth-child(9),
-  thead th:nth-child(11), tbody td:nth-child(11) { display: none; }
+  thead th:nth-child(12), tbody td:nth-child(12) { display: none; }
   .segmented label { padding: 0.4rem 0.3rem; font-size: 0.8125rem; }
   .segmented label small { font-size: 0.6875rem; }
 }

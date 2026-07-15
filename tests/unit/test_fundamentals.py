@@ -6,6 +6,7 @@ from wheel_screener.core.fundamentals import (
     gate_reasons,
     rank_by_fundamentals,
     sanitize_metrics,
+    score_strength,
 )
 from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
 from wheel_screener.core.pipeline.rate_fundamentals import apply_earnings_blackout, select_top
@@ -114,6 +115,51 @@ def test_rank_is_deterministic() -> None:
     assert [u.symbol for u in rank_by_fundamentals(mk())] == [
         u.symbol for u in rank_by_fundamentals(mk())
     ]
+
+
+def test_rank_sets_both_scores() -> None:
+    ranked = rank_by_fundamentals([_u("A"), _u("B", roe=0.05)])
+    for u in ranked:
+        assert u.fundamental_score is not None  # absolute strength
+        assert u.peer_percentile is not None  # peer percentile
+        assert u.rating.strength == u.fundamental_score
+
+
+# --- score_strength: the absolute rating -----------------------------------
+
+def test_strength_is_absolute_not_relative() -> None:
+    # the same metrics score identically whether ranked alone or against strong/weak peers
+    solo, _ = score_strength(_healthy())
+    with_weak = rank_by_fundamentals([_u("X"), _u("W", roe=0.01, pe=40, ps=8)])
+    with_strong = rank_by_fundamentals([_u("X"), _u("S", roe=0.5, pe=5, ps=0.5)])
+    x_weak = next(u for u in with_weak if u.symbol == "X").fundamental_score
+    x_strong = next(u for u in with_strong if u.symbol == "X").fundamental_score
+    assert solo == x_weak == x_strong  # peers don't move the absolute strength
+
+
+def test_strength_ranks_quality() -> None:
+    strong, _ = score_strength(_healthy(pe=6, ps=0.5, pb=0.8, roe=0.40, roa=0.20, roi=0.40,
+                                        ros=0.20, debt_to_equity=0.2, net_debt_to_ebitda=0.0))
+    weak, _ = score_strength(_healthy(pe=19, ps=1.8, pb=4, roe=0.11, roa=0.06, roi=0.11,
+                                      ros=0.06, debt_to_equity=1.8, net_debt_to_ebitda=1.8))
+    assert 0.0 <= weak < strong <= 1.0
+
+
+def test_strength_none_without_metrics() -> None:
+    assert score_strength(None) == (None, {})
+
+
+def test_strength_ignores_missing_metrics_no_coverage_bias() -> None:
+    # a name with only ROE present is scored on ROE alone, not penalized for the gaps
+    composite, factors = score_strength(FundamentalMetrics(roe=0.30))
+    assert composite is not None and factors == {"efficiency": 1.0}  # ROE>0.2 -> good
+
+
+def test_strength_no_sign_trap() -> None:
+    # negative PE (loss-maker) is sanitized out, never scored as "cheap = good"
+    _, factors = score_strength(FundamentalMetrics(pe=-5, eps=-2.0, ps=3, roe=0.25))
+    # valuation rests on PS only (PE dropped); efficiency on ROE
+    assert factors["efficiency"] == 1.0
 
 
 # --- select_top: end-to-end stage logic -------------------------------------

@@ -83,7 +83,8 @@ class _FakeService:
             raise self._error
         return TickerSearch(
             symbol=symbol.upper(), puts=list(self._result or []),
-            passes_fundamentals=True, gate_reasons=[], next_earnings=None, fundamental_score=0.7,
+            passes_fundamentals=True, gate_reasons=[], next_earnings=None,
+            fundamental_score=0.7, peer_percentile=0.62,
         )
 
 
@@ -147,7 +148,8 @@ def test_search_route_renders_puts() -> None:
     try:
         r = TestClient(app).post("/search", data={"ticker": "aaa", "top_n": 5})
         assert r.status_code == 200
-        assert "AAA" in r.text and "Breakeven" in r.text and "fundamental score" in r.text
+        assert "AAA" in r.text and "Breakeven" in r.text
+        assert "strength 70/100" in r.text and "0.62 vs peers" in r.text
         blank = TestClient(app).post("/search", data={"ticker": "", "top_n": 5})
         assert blank.status_code == 422  # empty ticker
     finally:
@@ -417,7 +419,7 @@ def test_sort_handles_nulls_and_nested_columns(tmp_path) -> None:
     runner = _runner(_FakeService(), tmp_path)
     _done_job(runner, _candidate("AAA", fund=None), _candidate("BBB", fund=0.9))
     client = _client(runner)
-    desc = client.get("/runs/j/results?sort=fund&order=desc")  # _num(-inf) path, no TypeError
+    desc = client.get("/runs/j/results?sort=strength&order=desc")  # _num(-inf) path, no TypeError
     assert desc.status_code == 200 and desc.text.index("BBB") < desc.text.index("AAA")  # null sinks
     assert client.get("/runs/j/results?sort=strike&order=asc").status_code == 200  # nested key
 

@@ -8,7 +8,11 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from wheel_screener.core.fundamentals import gate_reasons, rank_by_fundamentals
+from wheel_screener.core.fundamentals import (
+    gate_reasons,
+    rank_by_fundamentals,
+    score_strength,
+)
 from wheel_screener.core.models import (
     CandidateResult,
     ChainFilter,
@@ -42,7 +46,8 @@ class TickerSearch:
     gate_reasons: list[str] = field(default_factory=list)
     next_earnings: date | None = None
     metrics: FundamentalMetrics | None = None  # the ticker's raw fundamentals (P/E, ROE, ...)
-    fundamental_score: float | None = None  # the screener's 0-1 cross-sectional score
+    fundamental_score: float | None = None  # absolute financial strength 0-1 (primary rating)
+    peer_percentile: float | None = None  # percentile vs the screened field (None if outside it)
 
 
 @dataclass
@@ -58,9 +63,10 @@ class ScreenerService:
     _scores: dict[str, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def _universe_scores(self, criteria: ScreenCriteria, today: date) -> dict[str, float]:
-        """The screener's 0-1 cross-sectional fundamental score for every gate-passing name in the
-        universe. Computed once and cached (stable between fundamentals refreshes) so a single
-        ticker search doesn't re-rank the market on every call."""
+        """The 0-1 cross-sectional *peer percentile* for every gate-passing name in the universe.
+        Computed once and cached (stable between fundamentals refreshes) so a single ticker search
+        doesn't re-rank the market on every call. (The absolute strength rating is per-name and
+        computed directly from the ticker's metrics, so it doesn't need this.)"""
         if self._scores is None:
             universe = build_universe(self.fundamentals, criteria)
             metrics = self.fundamentals.fetch_metrics([u.symbol for u in universe])
@@ -69,9 +75,9 @@ class ScreenerService:
             gated = [u for u in universe if not gate_reasons(u.metrics, criteria)]
             rank_by_fundamentals(gated, criteria.factor_weights, criteria.stock_profile)
             self._scores = {
-                u.symbol: u.fundamental_score for u in gated if u.fundamental_score is not None
+                u.symbol: u.peer_percentile for u in gated if u.peer_percentile is not None
             }
-            logger.info("fundamental scores computed for %d names (cached)", len(self._scores))
+            logger.info("peer percentiles computed for %d names (cached)", len(self._scores))
         return self._scores
 
     def _put_filter(self, criteria: ScreenCriteria) -> ChainFilter:
@@ -130,6 +136,7 @@ class ScreenerService:
             candidates.append(
                 self._candidate(
                     u.symbol, put, fundamental_score=u.fundamental_score,
+                    peer_percentile=u.peer_percentile,
                     next_earnings=u.next_earnings, has_weeklys=u.has_weeklys,
                 )
             )
@@ -167,16 +174,22 @@ class ScreenerService:
         earnings = self.fundamentals.earnings_calendar(
             today, today + timedelta(days=criteria.max_dte)
         ).get(symbol)
-        score = self._universe_scores(criteria, today).get(symbol)  # same score the screener shows
+        # absolute strength from the ticker's own metrics (works even for out-of-universe names);
+        # the peer percentile needs the ranked universe, so it's None outside the screened field.
+        strength, _ = score_strength(metrics, criteria.factor_weights, criteria.stock_profile)
+        percentile = self._universe_scores(criteria, today).get(symbol)
         for c in puts:
             c.next_earnings = earnings
-            c.fundamental_score = score
+            c.fundamental_score = strength
+            c.peer_percentile = percentile
         logger.info(
-            "search %s: %d puts near Δ=%.2f (DTE %d-%d) · score=%s",
+            "search %s: %d puts near Δ=%.2f (DTE %d-%d) · strength=%s · pct=%s",
             symbol, len(puts), criteria.target_delta, criteria.min_dte, criteria.max_dte,
-            "n/a" if score is None else f"{score:.2f}",
+            "n/a" if strength is None else f"{strength:.2f}",
+            "n/a" if percentile is None else f"{percentile:.2f}",
         )
         return TickerSearch(
             symbol=symbol, puts=puts, passes_fundamentals=passes, gate_reasons=reasons,
-            next_earnings=earnings, metrics=metrics, fundamental_score=score,
+            next_earnings=earnings, metrics=metrics,
+            fundamental_score=strength, peer_percentile=percentile,
         )
