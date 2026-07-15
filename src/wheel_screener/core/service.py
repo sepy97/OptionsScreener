@@ -12,6 +12,7 @@ from wheel_screener.core.fundamentals import gate_reasons
 from wheel_screener.core.models import (
     CandidateResult,
     ChainFilter,
+    FundamentalMetrics,
     OptionType,
     ScreenCriteria,
     Underlying,
@@ -40,6 +41,7 @@ class TickerSearch:
     passes_fundamentals: bool | None = None  # None if the ticker isn't in the local store
     gate_reasons: list[str] = field(default_factory=list)
     next_earnings: date | None = None
+    metrics: FundamentalMetrics | None = None  # the ticker's raw fundamentals (P/E, ROE, ...)
 
 
 @dataclass
@@ -155,5 +157,5 @@ class ScreenerService:
         )
         return TickerSearch(
             symbol=symbol, puts=puts, passes_fundamentals=passes,
-            gate_reasons=reasons, next_earnings=earnings,
+            gate_reasons=reasons, next_earnings=earnings, metrics=metrics,
         )

@@ -1,21 +1,35 @@
 {% import "_icons.html" as icon %}
 {% set r = result %}
 {% set n = r.puts|length %}
+{% set sk = sort_key|default('') %}
+{% set so = sort_order|default('desc') %}
+{% set tn = top_n|default(n) %}
+{% macro sortlink(label, key) %}
+  {% set nxt = 'asc' if (sk == key and so == 'desc') else 'desc' %}
+  <th><a href="#" hx-post="/search" hx-target="#search-results" hx-swap="innerHTML"
+         hx-vals='{"ticker": "{{ r.symbol }}", "top_n": {{ tn }}, "sort": "{{ key }}", "order": "{{ nxt }}"}'
+      >{{ label }}{% if sk == key %} {{ icon.chevron(so) }}{% endif %}</a></th>
+{% endmacro %}
 <article>
   <header class="results-head">
-    <strong>{{ r.symbol }} — {{ n }} sellable put{{ '' if n == 1 else 's' }}</strong>
-    {% if r.passes_fundamentals is true %}<span class="badge badge--ok">fundamentals: pass</span>
-    {% elif r.passes_fundamentals is false %}<span class="badge badge--neg">fundamentals:
-      {{ r.gate_reasons|join(', ') }}</span>{% endif %}
+    <strong>{{ r.symbol }} · {{ n }} sellable put{{ '' if n == 1 else 's' }}</strong>
+    {% if r.passes_fundamentals is true %}<span class="fund-note fund-ok">fundamentals pass</span>
+    {% elif r.passes_fundamentals is false %}<span class="fund-note fund-bad">fundamentals: {{ r.gate_reasons|join(', ') }}</span>{% endif %}
+    {% if r.metrics %}<span class="ticker-metrics">{% if r.metrics.pe is not none %}P/E {{ "%.1f"|format(r.metrics.pe) }}{% endif %}{% if r.metrics.roe is not none %} · ROE {{ "%.0f%%"|format(r.metrics.roe * 100) }}{% endif %}{% if r.metrics.fcf_yield is not none %} · FCF yld {{ "%.1f%%"|format(r.metrics.fcf_yield * 100) }}{% endif %}{% if r.metrics.net_debt_to_ebitda is not none %} · net debt/EBITDA {{ "%.1f"|format(r.metrics.net_debt_to_ebitda) }}{% endif %}</span>{% endif %}
     {% if r.next_earnings %}<span class="badge">{{ icon.warning() }} earnings {{ r.next_earnings }}</span>{% endif %}
+    {% if r.puts %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}" role="button"
+       class="secondary outline export-btn" download>{{ icon.download() }} Export CSV</a>{% endif %}
   </header>
   {% if r.puts %}
   <figure>
     <table>
       <thead>
         <tr>
-          <th>Strike</th><th>Exp</th><th>DTE</th><th>Delta</th><th>IV</th><th>Bid</th><th>Mid</th>
-          <th>Spread</th><th>OI</th><th>Yield</th><th>Breakeven</th><th>Collateral</th>
+          {{ sortlink("Strike", "strike") }}{{ sortlink("Exp", "exp") }}{{ sortlink("DTE", "dte") }}
+          {{ sortlink("Delta", "delta") }}{{ sortlink("IV", "iv") }}{{ sortlink("Bid", "bid") }}
+          {{ sortlink("Mid", "mid") }}{{ sortlink("Spread", "spread") }}{{ sortlink("OI", "oi") }}
+          {{ sortlink("Yield", "yield") }}{{ sortlink("Breakeven", "breakeven") }}
+          {{ sortlink("Collateral", "collateral") }}
         </tr>
       </thead>
       <tbody>
