@@ -1,0 +1,44 @@
+# Production stack for steadybull.net: the app behind Caddy (auto-TLS reverse proxy).
+# Secrets (AUTH__PASSWORD, ALPACA__*, FMP__API_KEY) come from a host .env — see docs/DEPLOY.md.
+services:
+  app:
+    build: .
+    image: wheel-screener:latest
+    restart: unless-stopped
+    env_file: .env # secrets: AUTH__PASSWORD, ALPACA__API_KEY/API_SECRET, FMP__API_KEY, ...
+    environment:
+      # production posture (override anything from .env)
+      CHAIN_SOURCE: alpaca # key/secret, no OAuth — the prod chain source
+      AUTH__REQUIRED: "true" # fail closed: refuse to start without AUTH__PASSWORD
+      # runtime paths -> the mounted volume
+      DATA_DIR: /data/fundamentals
+      EARNINGS_PATH: /data/earnings_calendar.csv
+      JOBS_DB_PATH: /data/jobs.sqlite
+      LOG__DIR: /data/logs
+    volumes:
+      - ./data:/data # host ./data holds the slim store (fundamentals/), jobs DB, logs
+    expose:
+      - "8000" # internal only; reachable by Caddy, never published to the host
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/health').status==200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 40s
+      retries: 3
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data # ACME certs (persist so re-deploys don't re-issue)
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:

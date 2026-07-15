@@ -1,0 +1,13 @@
+# Auto-TLS reverse proxy. Caddy fetches + renews a Let's Encrypt cert for the domain on its own,
+# provided DNS points at this host and ports 80/443 are open. Add an email under a global block
+# (`{ email you@example.com }`) to get expiry notices. Add www.steadybull.net once its DNS exists.
+steadybull.net {
+	encode zstd gzip
+	reverse_proxy app:8000
+	header {
+		Strict-Transport-Security "max-age=31536000;"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		-Server
+	}
+}
