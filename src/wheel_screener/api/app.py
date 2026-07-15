@@ -9,10 +9,13 @@ One service + one job runner are built at startup (lifespan) and shared across r
 
 from __future__ import annotations
 
+import base64
 import csv
 import io
 import logging
+import secrets
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -49,6 +52,53 @@ _ERROR_STATUS: list[tuple[type[ProviderError], int]] = [
 ]
 
 
+# ---- HTTP Basic Auth gate --------------------------------------------------
+# Single-user gate. Enabled only when a password is configured; /health and /static stay open.
+
+
+@dataclass(frozen=True)
+class _Auth:
+    user: str
+    password: str
+
+
+def _auth_from_settings(settings: Settings) -> _Auth | None:
+    """The configured credentials, or None when no password is set (gate disabled)."""
+    pw = settings.auth.password.get_secret_value()
+    return _Auth(settings.auth.user, pw) if pw else None
+
+
+def _resolve_auth(settings: Settings) -> _Auth | None:
+    """Credentials for the gate, or None (open). Fails CLOSED: when ``AUTH__REQUIRED`` is set but
+    no password is configured, raise so the app refuses to start unauthenticated (prod safety)."""
+    auth = _auth_from_settings(settings)
+    if auth is None and settings.auth.required:
+        raise RuntimeError(
+            "AUTH__REQUIRED=true but AUTH__PASSWORD is empty — refusing to start unauthenticated"
+        )
+    return auth
+
+
+def _path_exempt(path: str) -> bool:
+    """Liveness probe + static assets bypass auth (so uptime checks and CSS work)."""
+    return path == "/health" or path == "/static" or path.startswith("/static/")
+
+
+def _check_basic_auth(header: str | None, auth: _Auth) -> bool:
+    """Constant-time check of an ``Authorization: Basic`` header against the credentials."""
+    if not header or not header.startswith("Basic "):
+        return False
+    try:
+        user, sep, pw = base64.b64decode(header[6:]).decode("utf-8").partition(":")
+    except (ValueError, UnicodeDecodeError):
+        return False
+    if not sep:  # no colon = malformed
+        return False
+    ok_user = secrets.compare_digest(user, auth.user)
+    ok_pw = secrets.compare_digest(pw, auth.password)
+    return ok_user and ok_pw
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Build the service + job runner ONCE; warm the store. Requests share them."""
@@ -56,6 +106,9 @@ async def lifespan(app: FastAPI):
     service = build_service(settings)
     app.state.settings = settings
     app.state.service = service
+    app.state.auth = _resolve_auth(settings)  # raises if AUTH__REQUIRED but no password (prod)
+    if app.state.auth is None:
+        logger.warning("web auth DISABLED (no AUTH__PASSWORD) — set AUTH__REQUIRED=true in prod")
     app.state.job_runner = JobRunner(service, JobStore(settings.jobs_db_path))
     # let pipeline INFO logs through so background jobs can capture stage progress
     logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
@@ -69,6 +122,19 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Wheel Screener API", version=__version__, lifespan=lifespan)
+
+
+@app.middleware("http")
+async def _basic_auth_gate(request: Request, call_next):
+    """Reject requests without valid Basic-Auth credentials when the gate is enabled."""
+    auth = getattr(request.app.state, "auth", None)
+    if auth is not None and not _path_exempt(request.url.path):
+        if not _check_basic_auth(request.headers.get("Authorization"), auth):
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="wheel-screener"'},
+            )
+    return await call_next(request)
 
 _HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(_HERE / "templates"))

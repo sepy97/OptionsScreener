@@ -66,6 +66,20 @@ class IvRankSettings(BaseModel):
     orats_token: SecretStr = SecretStr("")
 
 
+class AuthSettings(BaseModel):
+    """HTTP Basic Auth for the web app. The gate is ENABLED only when ``password`` is set
+    (env ``AUTH__PASSWORD``); left unset it's OPEN — convenient for local dev. ``/health`` and
+    ``/static`` stay open regardless (liveness probes + assets).
+
+    ``required`` is the production fail-CLOSED switch: set ``AUTH__REQUIRED=true`` (the deploy
+    container does) and the app REFUSES TO START if no password is configured — so a forgotten
+    secret crashes the deploy loudly instead of silently exposing the app."""
+
+    user: str = "admin"
+    password: SecretStr = SecretStr("")
+    required: bool = False  # fail closed: refuse to start unauthenticated when true
+
+
 class LogSettings(BaseModel):
     """Diagnostic logging. The console level follows -v/-vv; the rotating file always
     captures ``file_level`` and up, so cron'd runs leave a recoverable history."""
@@ -90,6 +104,7 @@ class Settings(BaseSettings):
     fmp: FmpSettings = Field(default_factory=FmpSettings)
     iv_rank: IvRankSettings = Field(default_factory=IvRankSettings)
     log: LogSettings = Field(default_factory=LogSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
 
     # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)
     chain_source: str = "schwab"
