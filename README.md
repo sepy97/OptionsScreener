@@ -208,10 +208,12 @@ in [docs/TODO.md](docs/TODO.md).
 
 ## Status
 
-**Working end-to-end and live-validated:** local fundamentals → Schwab chains → ranked CSP shortlist,
-with the earnings blackout, conservative bid-based yields, and a blended fundamental+yield ranking.
-Hardened for real-world failures — typed provider errors, retry/backoff, run timeout + cancellation
-+ partial results, no silent masking, no raw tracebacks, and verbosity-controlled logging with an
-always-on rotating log file. The web (FastAPI) and Swift front-ends
-are the next, optional layers; the service already exposes the `cancel` / `max_runtime_seconds` seam
-they'll use.
+**v0.2.0 — web UI + Alpaca.** Working end-to-end and live-validated: local fundamentals → Schwab
+**or Alpaca** chains → ranked CSP shortlist, with the earnings blackout, conservative bid-based
+yields, and a blended fundamental+yield ranking. A server-rendered **web UI** (FastAPI + HTMX) runs,
+cancels, and displays screens with live progress, sortable results, per-candidate detail, an instant
+precomputed dashboard, and CSV export. Hardened for real-world failures — typed provider errors,
+retry/backoff, run timeout + cancellation + partial results, no silent masking, no raw tracebacks,
+and verbosity-controlled logging with an always-on rotating log file. The UI is intentionally
+preliminary (see [`docs/UI_STATUS.md`](docs/UI_STATUS.md)); auth + deployment (DigitalOcean) and a
+native/Swift front-end are the next layers.

@@ -1,6 +1,6 @@
 [project]
 name = "wheel-screener"
-version = "0.1.0"
+version = "0.2.0"
 description = "Cash-secured-put / wheel options screener"
 readme = "README.md"
 requires-python = ">=3.11"

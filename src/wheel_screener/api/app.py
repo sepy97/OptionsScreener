@@ -66,7 +66,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Wheel Screener API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="Wheel Screener API", version="0.2.0", lifespan=lifespan)
 
 _HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(_HERE / "templates"))
