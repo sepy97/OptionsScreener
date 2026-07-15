@@ -147,9 +147,25 @@ def test_search_route_renders_puts() -> None:
     try:
         r = TestClient(app).post("/search", data={"ticker": "aaa", "top_n": 5})
         assert r.status_code == 200
-        assert "AAA" in r.text and "Breakeven" in r.text and "fundamentals: pass" in r.text
+        assert "AAA" in r.text and "Breakeven" in r.text and "fundamentals pass" in r.text
         blank = TestClient(app).post("/search", data={"ticker": "", "top_n": 5})
         assert blank.status_code == 422  # empty ticker
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_search_route_sort_and_export() -> None:
+    svc = _FakeService(result=[_candidate("AAA", yld=0.10), _candidate("BBB", yld=0.90)])
+    app.dependency_overrides[get_service] = lambda: svc
+    try:
+        client = TestClient(app)
+        r = client.post("/search", data={"ticker": "mu", "top_n": 5})
+        assert "Export CSV" in r.text and 'hx-post="/search"' in r.text  # export + sortable headers
+        asc = client.post("/search", data={"ticker": "mu", "sort": "yield", "order": "asc"})
+        assert asc.text.index("10.0%") < asc.text.index("90.0%")  # sorted ascending by yield
+        csv = client.get("/search/export.csv?ticker=mu&top_n=5")
+        assert csv.status_code == 200 and csv.headers["content-type"].startswith("text/csv")
+        assert "AAA" in csv.text and "BBB" in csv.text  # symbol column in the export
     finally:
         app.dependency_overrides.clear()
 

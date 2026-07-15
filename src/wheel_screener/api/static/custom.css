@@ -134,6 +134,10 @@ tbody td:nth-child(9), tbody td:nth-child(11) { color: var(--pico-muted-color); 
   display: inline-flex; align-items: center; gap: 0.4rem;
 }
 .empty-state { text-align: center; color: var(--pico-muted-color); padding: 2rem 1rem; }
+.fund-note { font-size: 0.8rem; font-weight: 600; }
+.fund-ok { color: var(--wheel-accent-strong); }
+.fund-bad { color: var(--neg); }
+.ticker-metrics { font-size: 0.8rem; color: var(--pico-muted-color); font-variant-numeric: tabular-nums; }
 
 /* --- candidate detail row --- */
 .detail {

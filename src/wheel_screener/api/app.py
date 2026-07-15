@@ -190,6 +190,22 @@ _SORT_KEYS = {
     "score": lambda c: _num(c.get("score")),
 }
 
+# sort key -> accessor over a CandidateResult OBJECT (the ticker-search table works on objects)
+_SEARCH_SORT_KEYS = {
+    "strike": lambda c: c.contract.strike,
+    "exp": lambda c: c.contract.expiration.isoformat(),
+    "dte": lambda c: c.contract.dte,
+    "delta": lambda c: _num(c.contract.delta),
+    "iv": lambda c: _num(c.contract.implied_volatility),
+    "bid": lambda c: _num(c.contract.bid),
+    "mid": lambda c: _num(c.contract.mid),
+    "spread": lambda c: _num(c.contract.spread_pct),
+    "oi": lambda c: _num(c.contract.open_interest),
+    "yield": lambda c: _num(c.annualized_yield),
+    "breakeven": lambda c: c.contract.strike - (c.premium or 0.0),
+    "collateral": lambda c: _num(c.collateral),
+}
+
 
 @app.exception_handler(ProviderError)
 async def _provider_error_handler(request: Request, exc: ProviderError) -> JSONResponse:
@@ -277,6 +293,12 @@ def dashboard(request: Request, runner: JobRunner = Depends(get_job_runner)):
     )
 
 
+def _search(service: ScreenerService, ticker: str, top_n: int, min_dte: int, max_dte: int,
+            target_delta: float):
+    criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=target_delta)
+    return service.search_ticker((ticker or "").strip().upper(), criteria, date.today(), n=top_n)
+
+
 @app.post("/search")
 def search_route(
     request: Request,
@@ -285,20 +307,48 @@ def search_route(
     min_dte: int = Form(7),
     max_dte: int = Form(45),
     target_delta: float = Form(-0.20),
+    sort: str = Form(""),
+    order: str = Form("desc"),
     service: ScreenerService = Depends(get_service),
 ):
     """Single-ticker CSP search — synchronous (one chain pull) top-N puts near the target delta."""
-    symbol = (ticker or "").strip().upper()
-    if not symbol:
+    if not (ticker or "").strip():
         return templates.TemplateResponse(
             request, "_error.html", {"message": "enter a ticker symbol"}, status_code=422
         )
-    criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=target_delta)
     try:
-        result = service.search_ticker(symbol, criteria, date.today(), n=top_n)
+        result = _search(service, ticker, top_n, min_dte, max_dte, target_delta)
     except ProviderError as e:
         return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
-    return templates.TemplateResponse(request, "_search.html", {"result": result})
+    keyfn = _SEARCH_SORT_KEYS.get(sort)
+    if keyfn is not None:
+        order = "asc" if order.lower() == "asc" else "desc"
+        result.puts.sort(key=keyfn, reverse=(order != "asc"))
+    return templates.TemplateResponse(
+        request, "_search.html",
+        {"result": result, "top_n": top_n, "sort_key": sort, "sort_order": order},
+    )
+
+
+@app.get("/search/export.csv")
+def search_export(
+    ticker: str,
+    top_n: int = 5,
+    min_dte: int = 7,
+    max_dte: int = 45,
+    target_delta: float = -0.20,
+    service: ScreenerService = Depends(get_service),
+) -> Response:
+    """Download a ticker's top-N puts as CSV."""
+    if not (ticker or "").strip():
+        raise HTTPException(status_code=422, detail="no ticker")
+    result = _search(service, ticker, top_n, min_dte, max_dte, target_delta)
+    rows = [c.model_dump(mode="json") for c in result.puts]
+    return Response(
+        content=_candidates_csv(rows),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{result.symbol}-puts.csv"'},
+    )
 
 
 @app.post("/runs")
