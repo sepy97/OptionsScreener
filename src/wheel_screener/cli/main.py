@@ -230,17 +230,10 @@ def _print_search(r: object) -> None:
         "n/a" if r.passes_fundamentals is None
         else "pass" if r.passes_fundamentals else "FAIL (" + ", ".join(r.gate_reasons) + ")"
     )
-    parts = []
-    if r.metrics:
-        if r.metrics.pe is not None:
-            parts.append(f"P/E {r.metrics.pe:.1f}")
-        if r.metrics.roe is not None:
-            parts.append(f"ROE {r.metrics.roe * 100:.0f}%")
-        if r.metrics.fcf_yield is not None:
-            parts.append(f"FCF {r.metrics.fcf_yield * 100:.1f}%")
-    metr = " · " + " · ".join(parts) if parts else ""
+    fs = r.fundamental_score
+    score = f" · fundamental score {fs:.2f}" if fs is not None else ""
     earn = f" · next earnings {r.next_earnings}" if r.next_earnings else ""
-    typer.echo(f"{r.symbol}: {len(r.puts)} sellable put(s) · fundamentals {fund}{metr}{earn}")
+    typer.echo(f"{r.symbol}: {len(r.puts)} sellable put(s) · gate {fund}{score}{earn}")
     if not r.puts:
         typer.echo("  nothing in the DTE / delta / liquidity window.")
         return

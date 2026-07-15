@@ -13,9 +13,13 @@
 <article>
   <header class="results-head">
     <strong>{{ r.symbol }} · {{ n }} sellable put{{ '' if n == 1 else 's' }}</strong>
-    {% if r.passes_fundamentals is true %}<span class="fund-note fund-ok">fundamentals pass</span>
-    {% elif r.passes_fundamentals is false %}<span class="fund-note fund-bad">fundamentals: {{ r.gate_reasons|join(', ') }}</span>{% endif %}
-    {% if r.metrics %}<span class="ticker-metrics">{% if r.metrics.pe is not none %}P/E {{ "%.1f"|format(r.metrics.pe) }}{% endif %}{% if r.metrics.roe is not none %} · ROE {{ "%.0f%%"|format(r.metrics.roe * 100) }}{% endif %}{% if r.metrics.fcf_yield is not none %} · FCF yld {{ "%.1f%%"|format(r.metrics.fcf_yield * 100) }}{% endif %}{% if r.metrics.net_debt_to_ebitda is not none %} · net debt/EBITDA {{ "%.1f"|format(r.metrics.net_debt_to_ebitda) }}{% endif %}</span>{% endif %}
+    {% if r.fundamental_score is not none %}
+    <span class="fund-note" title="fundamental quality vs the screened universe (0–1)">fundamental score {{ "%.2f"|format(r.fundamental_score) }}</span>
+    {% elif r.passes_fundamentals is true %}
+    <span class="fund-note" title="passes the gate but is outside the $20–200 screened universe, so no cross-sectional score">fundamentals: pass</span>
+    {% elif r.passes_fundamentals is false %}
+    <span class="fund-note fund-bad">fails gate: {{ r.gate_reasons|join(', ') }}</span>
+    {% endif %}
     {% if r.next_earnings %}<span class="badge">{{ icon.warning() }} earnings {{ r.next_earnings }}</span>{% endif %}
     {% if r.puts %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}" role="button"
        class="secondary outline export-btn" download>{{ icon.download() }} Export CSV</a>{% endif %}

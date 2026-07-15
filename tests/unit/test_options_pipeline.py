@@ -140,6 +140,8 @@ def test_search_ticker_returns_top_puts_with_context():
     assert r.symbol == "AAA"  # normalized to upper
     assert [c.contract.dte for c in r.puts] == [14, 28] and all(c.symbol == "AAA" for c in r.puts)
     assert r.passes_fundamentals is True and r.gate_reasons == []  # _good() passes the gate
+    assert r.fundamental_score is not None  # cross-sectional score computed from the universe
+    assert all(c.fundamental_score == r.fundamental_score for c in r.puts)
     assert r.next_earnings is None
 
 
