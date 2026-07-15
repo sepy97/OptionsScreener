@@ -1,0 +1,22 @@
+# Keep the build context tiny — never ship data, caches, secrets, or the local venv.
+data/
+.cache/
+logs/
+.secrets/
+.venv/
+.git/
+.github/
+dist/
+*.csv
+out.csv
+__pycache__/
+*.pyc
+.env
+.env.*
+!.env.example
+.pytest_cache/
+.ruff_cache/
+tests/
+docs/
+*.md
+!README.md
