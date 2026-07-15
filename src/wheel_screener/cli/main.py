@@ -70,13 +70,14 @@ def _write_csv(names: list[Underlying], path: str) -> None:
         writer = csv.writer(f)
         writer.writerow(
             ["rank", "symbol", "sector", "price", "market_cap",
-             "fundamental_score", "valuation", "efficiency", "sustainability"]
+             "strength", "peer_percentile", "valuation", "efficiency", "sustainability"]
         )
         for i, u in enumerate(names, start=1):
             cats = u.rating.category_scores if u.rating else {}
             writer.writerow([
                 i, u.symbol, u.sector or "", u.price or "", u.market_cap or "",
                 round(u.fundamental_score or 0.0, 4),
+                round(u.peer_percentile or 0.0, 4),
                 round(cats.get("valuation", 0.0), 4),
                 round(cats.get("efficiency", 0.0), 4),
                 round(cats.get("sustainability", 0.0), 4),
@@ -130,7 +131,8 @@ def _write_candidates_csv(results, path: str) -> None:
         writer = csv.writer(f)
         writer.writerow([
             "rank", "symbol", "strike", "expiration", "dte", "delta", "iv", "bid", "mid",
-            "open_interest", "annualized_yield", "collateral", "fundamental_score", "score",
+            "open_interest", "annualized_yield", "collateral", "strength", "peer_percentile",
+            "score",
         ])
         for i, r in enumerate(results, start=1):
             c = r.contract
@@ -144,6 +146,7 @@ def _write_candidates_csv(results, path: str) -> None:
                 round(r.annualized_yield, 4) if r.annualized_yield else "",
                 r.collateral or "",
                 round(r.fundamental_score, 4) if r.fundamental_score is not None else "",
+                round(r.peer_percentile, 4) if r.peer_percentile is not None else "",
                 round(r.score, 4) if r.score is not None else "",
             ])
 
@@ -231,9 +234,11 @@ def _print_search(r: object) -> None:
         else "pass" if r.passes_fundamentals else "FAIL (" + ", ".join(r.gate_reasons) + ")"
     )
     fs = r.fundamental_score
-    score = f" · fundamental score {fs:.2f}" if fs is not None else ""
+    strength = f" · strength {round(fs * 100)}/100" if fs is not None else ""
+    pct = r.peer_percentile
+    peers = f" · {pct:.2f} vs peers" if pct is not None else ""
     earn = f" · next earnings {r.next_earnings}" if r.next_earnings else ""
-    typer.echo(f"{r.symbol}: {len(r.puts)} sellable put(s) · gate {fund}{score}{earn}")
+    typer.echo(f"{r.symbol}: {len(r.puts)} sellable put(s) · gate {fund}{strength}{peers}{earn}")
     if not r.puts:
         typer.echo("  nothing in the DTE / delta / liquidity window.")
         return

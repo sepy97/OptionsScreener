@@ -48,11 +48,24 @@ IV rank is therefore deferred to **v2** as an optional timing overlay. If revive
 
 ## 4. Fundamental rating (reused from pythonBot, simplified)
 
-The fundamental score is only an intermediate funnel — it picks the top-N names for the expensive
-chain pull; the user-facing sort is **yield**, and a human verifies. So the objective is **recall
-(don't drop good names), not precision.** An earlier absolute-threshold bucket scorer was replaced
-(it had sign-inversion bugs — negative PE / negative-equity ratios scored as "good" — and let data
-*coverage* drive the rank). The methodology, in `core/fundamentals.py` + the `rate_fundamentals` stage:
+Every name carries **two** fundamental numbers, computed on the same sanitized metrics:
+
+- **Strength** (the primary rating, `fundamental_score`, shown as *N*/100) — an **absolute**
+  financial-strength score against fixed good/satisfactory bars (the pythonBot `STOCK_CRITERIA`),
+  graded 1.0 / 0.5 / 0 per metric, averaged per factor over the *present* metrics, and blended by
+  the durability tilt. Peer-independent: a name scores the same in a market screen and a
+  single-ticker search, and works even outside the $20–200 screened field. `score_strength()`.
+- **Peer percentile** (`peer_percentile`, shown beside it) — the **relative** cross-sectional
+  rank below, i.e. how the name stacks up against the screened field.
+
+The percentile is also the **funnel** — it picks the top-N names for the expensive chain pull; the
+user-facing sort blends **strength × yield**, and a human verifies. So the funnel objective is
+**recall (don't drop good names), not precision.** The current absolute strength score is the
+*correct* revival of an earlier absolute-threshold bucket scorer that was replaced (it had
+sign-inversion bugs — negative PE / negative-equity ratios scored as "good" — and let data
+*coverage* drive the rank); strength scores the **sanitized** metrics and averages only present
+ones, so neither bug can recur. The percentile methodology, in `core/fundamentals.py` + the
+`rate_fundamentals` stage:
 
 1. **Sanitize** — domain guards: drop PE/PEG when EPS≤0, PB & Debt/Equity when equity≤0,
    NetDebt/EBITDA when EBITDA≤0 (net cash retained); compute the DCF gap (price/intrinsic).

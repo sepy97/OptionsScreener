@@ -91,7 +91,8 @@ _EXPORT_COLUMNS: list[tuple[str, object]] = [
     ("annualized_yield", lambda c: c.get("annualized_yield")),
     ("premium", lambda c: c.get("premium")),
     ("collateral", lambda c: c.get("collateral")),
-    ("fundamental_score", lambda c: c.get("fundamental_score")),
+    ("strength", lambda c: c.get("fundamental_score")),
+    ("peer_percentile", lambda c: c.get("peer_percentile")),
     ("score", lambda c: c.get("score")),
     ("next_earnings", lambda c: c.get("next_earnings")),
 ]
@@ -186,7 +187,8 @@ _SORT_KEYS = {
     "mid": lambda c: _num(c.get("contract", {}).get("mid")),
     "oi": lambda c: _num(c.get("contract", {}).get("open_interest")),
     "yield": lambda c: _num(c.get("annualized_yield")),
-    "fund": lambda c: _num(c.get("fundamental_score")),
+    "strength": lambda c: _num(c.get("fundamental_score")),
+    "peers": lambda c: _num(c.get("peer_percentile")),
     "score": lambda c: _num(c.get("score")),
 }
 

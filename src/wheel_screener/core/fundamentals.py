@@ -16,6 +16,8 @@ Flow (the cross-sectional parts are pure given a list of Underlyings):
                           leverage, illiquid, insufficient coverage)
   rank_by_fundamentals  — within-sector percentile per metric -> valuation/efficiency/
                           sustainability factors -> weighted composite (durability tilt)
+  score_strength        — ABSOLUTE financial strength against fixed good/satisfactory bars
+                          (peer-independent); the primary rating, percentile shown beside it
 """
 
 from __future__ import annotations
@@ -56,6 +58,87 @@ _FACTORS: dict[str, tuple[bool, list[tuple[str, str]]]] = {
 _CORE_METRICS = ["pe", "ps", "pb", "roe", "roa", "ros", "debt_to_equity", "current_ratio"]
 
 _MIN_BUCKET = 5  # min names in a sector before we sector-neutralize (else universe-wide)
+
+# Absolute financial-strength bars: factor -> [(metric, orientation, good, satisfactory)]. A metric
+# scores 1.0 if it clears the "good" bar, 0.5 if it clears "satisfactory", else 0. Reused from the
+# pythonBot STOCK_CRITERIA the percentile scorer was distilled from, graded on the SANITIZED metrics
+# (so negative PE / negative equity can't score as "cheap" — the sign-inversion bug that sank the
+# original). Unlike the percentile, this is ABSOLUTE: a name's strength never moves with its peers.
+# NOTE: the liquidity bars (current/quick/cash) are monotonic "higher is safer" here, a deliberate
+# departure from pythonBot's narrow bands (which failed a very-liquid firm).
+_STRENGTH_BARS: dict[StockProfile, dict[str, list[tuple[str, str, float, float]]]] = {
+    StockProfile.STALWART: {
+        "valuation": [
+            ("pe", "low", 10, 20), ("ps", "low", 1, 2), ("pb", "low", 1, 5),
+            ("peg", "low", 1, 3), ("dcf_gap", "low", 1, 2),
+        ],
+        "efficiency": [
+            ("roe", "high", 0.20, 0.10), ("roa", "high", 0.10, 0.05),
+            ("ros", "high", 0.10, 0.05), ("roi", "high", 0.20, 0.10),
+        ],
+        "sustainability": [
+            ("debt_to_equity", "low", 1, 2), ("net_debt_to_ebitda", "low", 1, 2),
+            ("current_ratio", "high", 1.5, 1.0), ("quick_ratio", "high", 1.0, 0.5),
+            ("cash_ratio", "high", 0.5, 0.2),
+        ],
+    },
+    StockProfile.GROWTH: {  # looser valuation bars; efficiency/safety unchanged
+        "valuation": [
+            ("pe", "low", 20, 50), ("ps", "low", 2, 5), ("pb", "low", 1, 5),
+            ("peg", "low", 1, 3), ("dcf_gap", "low", 1, 2),
+        ],
+        "efficiency": [
+            ("roe", "high", 0.20, 0.10), ("roa", "high", 0.10, 0.05),
+            ("ros", "high", 0.10, 0.05), ("roi", "high", 0.20, 0.10),
+        ],
+        "sustainability": [
+            ("debt_to_equity", "low", 1, 2), ("net_debt_to_ebitda", "low", 1, 2),
+            ("current_ratio", "high", 1.5, 1.0), ("quick_ratio", "high", 1.0, 0.5),
+            ("cash_ratio", "high", 0.5, 0.2),
+        ],
+    },
+}
+
+
+def _bar_points(value: float, orientation: str, good: float, satisfactory: float) -> float:
+    """1.0 if the value clears the 'good' bar, 0.5 if it clears 'satisfactory', else 0."""
+    if orientation == "low":
+        return 1.0 if value < good else (0.5 if value < satisfactory else 0.0)
+    return 1.0 if value > good else (0.5 if value > satisfactory else 0.0)
+
+
+def score_strength(
+    metrics: FundamentalMetrics | None,
+    weights: dict[str, float] | None = None,
+    profile: StockProfile = StockProfile.STALWART,
+) -> tuple[float | None, dict[str, float]]:
+    """Absolute financial-strength score in 0..1 — independent of any peer set.
+
+    Each metric is graded against fixed good/satisfactory bars (1.0/0.5/0) on the SANITIZED
+    metrics, averaged over the *present* metrics in each factor, then blended by ``weights``
+    (default the durability tilt). Returns (composite, per-factor scores); composite is None when
+    no factor has a usable metric. Missing metrics are skipped (never imputed), so wider data
+    coverage can't inflate the score.
+    """
+    if metrics is None:
+        return None, {}
+    weights = weights or DURABILITY_TILT
+    san = sanitize_metrics(metrics)
+    bars = _STRENGTH_BARS.get(profile, _STRENGTH_BARS[StockProfile.STALWART])
+    factor_scores: dict[str, float] = {}
+    for fname, specs in bars.items():
+        pts = [
+            _bar_points(san[m], orient, good, sat)
+            for m, orient, good, sat in specs
+            if san.get(m) is not None
+        ]
+        if pts:
+            factor_scores[fname] = sum(pts) / len(pts)
+    if not factor_scores:
+        return None, {}
+    wsum = sum(weights.get(f, 0.0) for f in factor_scores) or 1.0
+    composite = sum(weights.get(f, 0.0) * s for f, s in factor_scores.items()) / wsum
+    return composite, factor_scores
 
 
 def sanitize_metrics(m: FundamentalMetrics) -> dict[str, float | None]:
@@ -166,10 +249,11 @@ def rank_by_fundamentals(
     weights: dict[str, float] | None = None,
     profile: StockProfile = StockProfile.STALWART,
 ) -> list[Underlying]:
-    """Score each name by a within-sector percentile composite; return them best-first.
+    """Score each name two ways; return them best-first by peer percentile (the funnel order).
 
-    Sets ``fundamental_score`` and ``rating`` on each Underlying. Pure and deterministic
-    given the input list.
+    Sets ``fundamental_score`` (the absolute financial-strength rating, peer-independent),
+    ``peer_percentile`` (the within-sector percentile composite), and ``rating`` on each
+    Underlying. Pure and deterministic given the input list.
     """
     if not names:
         return []
@@ -196,8 +280,11 @@ def rank_by_fundamentals(
 
     for i, u in enumerate(names):
         composite = sum(weights.get(f, 0.0) * factor_scores[i][f] for f in _FACTORS) / total_w
-        u.fundamental_score = composite
+        strength, strength_cats = score_strength(u.metrics, weights, profile)
+        u.peer_percentile = composite
+        u.fundamental_score = strength  # the primary, absolute rating
         u.rating = FundamentalRating(
-            profile=profile, category_scores=factor_scores[i], composite=composite
+            profile=profile, category_scores=factor_scores[i], composite=composite,
+            strength=strength, strength_scores=strength_cats,
         )
-    return sorted(names, key=lambda u: u.fundamental_score or 0.0, reverse=True)
+    return sorted(names, key=lambda u: u.peer_percentile or 0.0, reverse=True)

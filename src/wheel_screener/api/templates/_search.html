@@ -13,12 +13,17 @@
 <article>
   <header class="results-head">
     <strong>{{ r.symbol }} · {{ n }} sellable put{{ '' if n == 1 else 's' }}</strong>
-    {% if r.fundamental_score is not none %}
-    <span class="fund-note" title="fundamental quality vs the screened universe (0–1)">fundamental score {{ "%.2f"|format(r.fundamental_score) }}</span>
-    {% elif r.passes_fundamentals is true %}
-    <span class="fund-note" title="passes the gate but is outside the $20–200 screened universe, so no cross-sectional score">fundamentals: pass</span>
-    {% elif r.passes_fundamentals is false %}
+    {% if r.passes_fundamentals is false %}
     <span class="fund-note fund-bad">fails gate: {{ r.gate_reasons|join(', ') }}</span>
+    {% elif r.fundamental_score is not none %}
+    <span class="fund-note" title="absolute financial strength (0–100), from fixed value/quality/safety bars">strength {{ (r.fundamental_score * 100)|round|int }}/100</span>
+    {% if r.peer_percentile is not none %}
+    <span class="fund-note" title="percentile vs the $20–200 screened field (0–1)">{{ "%.2f"|format(r.peer_percentile) }} vs peers</span>
+    {% else %}
+    <span class="fund-note" title="outside the $20–200 screened universe, so no peer percentile">outside screened field</span>
+    {% endif %}
+    {% elif r.passes_fundamentals is none %}
+    <span class="fund-note" title="ticker isn't in the local fundamentals store">no fundamentals</span>
     {% endif %}
     {% if r.next_earnings %}<span class="badge">{{ icon.warning() }} earnings {{ r.next_earnings }}</span>{% endif %}
     {% if r.puts %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}" role="button"

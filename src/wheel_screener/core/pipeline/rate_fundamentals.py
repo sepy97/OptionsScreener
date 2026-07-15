@@ -66,6 +66,8 @@ def select_top(
     survivors = apply_earnings_blackout(ranked, earnings, today, criteria.max_dte)
     blacked_out = len(gated) - len(survivors)
     if criteria.min_fundamental_score is not None:
+        # floors the absolute strength rating (fundamental_score) — "only names this financially
+        # strong", independent of the peer field; the percentile drives top_n ordering above.
         floor = criteria.min_fundamental_score
         survivors = [u for u in survivors if (u.fundamental_score or 0.0) >= floor]
     if criteria.max_per_sector is not None:
