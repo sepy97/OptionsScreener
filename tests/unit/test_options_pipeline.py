@@ -13,7 +13,7 @@ from wheel_screener.core.models import (
     Underlying,
 )
 from wheel_screener.core.pipeline.rank import rank
-from wheel_screener.core.pipeline.select_strike import select_put
+from wheel_screener.core.pipeline.select_strike import select_put, select_top_puts
 from wheel_screener.core.service import ScreenerService
 
 _BASE = date(2026, 6, 22)
@@ -118,6 +118,29 @@ class _FakeChains:
 
     def capabilities(self):
         return ProviderCaps(name="fake")
+
+
+def test_select_top_puts_nearest_target_one_per_expiry():
+    crit = ScreenCriteria(min_dte=7, max_dte=45)  # target delta -0.20
+    chain = _chain([
+        _put(90, -0.20, 14, 1.0), _put(88, -0.30, 14, 1.5),  # 14 DTE: -0.20 is nearest target
+        _put(85, -0.19, 28, 1.2), _put(80, -0.28, 28, 2.0),  # 28 DTE: -0.19 nearest
+        _put(75, -0.05, 40, 0.3),                             # 40 DTE: -0.05 (far from target)
+    ])
+    top = select_top_puts(chain, crit, 2)
+    assert [c.dte for c in top] == [14, 28]  # the 2 nearest-target expiries, earliest first
+    assert [c.delta for c in top] == [-0.20, -0.19]  # one per expiry, nearest -0.20
+    assert len(select_top_puts(chain, crit, 5)) == 3  # only 3 expiries available
+
+
+def test_search_ticker_returns_top_puts_with_context():
+    chain = _chain([_put(90, -0.20, 14, 1.0), _put(85, -0.19, 28, 1.2), _put(75, -0.05, 40, 0.3)])
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
+    r = service.search_ticker("aaa", ScreenCriteria(min_dte=7, max_dte=45), date(2026, 6, 22), n=2)
+    assert r.symbol == "AAA"  # normalized to upper
+    assert [c.contract.dte for c in r.puts] == [14, 28] and all(c.symbol == "AAA" for c in r.puts)
+    assert r.passes_fundamentals is True and r.gate_reasons == []  # _good() passes the gate
+    assert r.next_earnings is None
 
 
 def test_run_screen_end_to_end():
