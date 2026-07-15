@@ -356,6 +356,40 @@ def test_app_version_tracks_single_source() -> None:
     assert app.version == __version__
 
 
+def test_check_basic_auth_pure() -> None:
+    import base64
+
+    from wheel_screener.api.app import _Auth, _check_basic_auth, _path_exempt
+
+    auth = _Auth("admin", "s3cret")
+    hdr = lambda u, p: "Basic " + base64.b64encode(f"{u}:{p}".encode()).decode()  # noqa: E731
+    assert _check_basic_auth(hdr("admin", "s3cret"), auth) is True
+    assert _check_basic_auth(hdr("admin", "wrong"), auth) is False  # wrong password
+    assert _check_basic_auth(hdr("root", "s3cret"), auth) is False  # wrong user
+    assert _check_basic_auth(None, auth) is False  # no header
+    assert _check_basic_auth("Bearer abc", auth) is False  # wrong scheme
+    assert _check_basic_auth("Basic @@notb64@@", auth) is False  # undecodable
+    assert _check_basic_auth("Basic " + base64.b64encode(b"nocolon").decode(), auth) is False
+    # exemptions: liveness probe + static assets bypass the gate
+    assert _path_exempt("/health") and _path_exempt("/static/custom.css")
+    assert not _path_exempt("/") and not _path_exempt("/runs/j/results")
+
+
+def test_basic_auth_gate_enforced() -> None:
+    from wheel_screener.api.app import _Auth
+
+    app.state.auth = _Auth("admin", "s3cret")  # enable the gate
+    try:
+        c = TestClient(app)
+        r = c.get("/nope")  # protected path, no creds
+        assert r.status_code == 401 and r.headers.get("www-authenticate", "").startswith("Basic")
+        assert c.get("/nope", auth=("admin", "bad")).status_code == 401  # wrong creds
+        assert c.get("/nope", auth=("admin", "s3cret")).status_code != 401  # passes gate (then 404)
+        assert c.get("/static/nope.css").status_code != 401  # /static is exempt
+    finally:
+        app.state.auth = None  # disable again so other tests are unaffected
+
+
 def test_results_render_legacy_snapshot_missing_new_fields(tmp_path) -> None:
     # a snapshot stored before strength/peer_percentile existed lacks those keys; the results
     # table must still render (Jinja yields Undefined for a missing dict key, not None).

@@ -66,6 +66,15 @@ class IvRankSettings(BaseModel):
     orats_token: SecretStr = SecretStr("")
 
 
+class AuthSettings(BaseModel):
+    """HTTP Basic Auth for the web app. The gate is ENABLED only when ``password`` is set
+    (env ``AUTH__PASSWORD``); left unset it's OPEN — convenient for local dev, so REQUIRE it in
+    production. ``/health`` and ``/static`` stay open regardless (liveness probes + assets)."""
+
+    user: str = "admin"
+    password: SecretStr = SecretStr("")
+
+
 class LogSettings(BaseModel):
     """Diagnostic logging. The console level follows -v/-vv; the rotating file always
     captures ``file_level`` and up, so cron'd runs leave a recoverable history."""
@@ -90,6 +99,7 @@ class Settings(BaseSettings):
     fmp: FmpSettings = Field(default_factory=FmpSettings)
     iv_rank: IvRankSettings = Field(default_factory=IvRankSettings)
     log: LogSettings = Field(default_factory=LogSettings)
+    auth: AuthSettings = Field(default_factory=AuthSettings)
 
     # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)
     chain_source: str = "schwab"
