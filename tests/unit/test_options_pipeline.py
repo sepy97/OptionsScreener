@@ -87,6 +87,19 @@ def test_rank_blends_fundamentals_and_yield_by_weight():
     assert rank([x, y], fundamental_weight=0.2)[0].symbol == "Y"  # yield-weighted
 
 
+def test_rank_uses_raw_absolute_strength() -> None:
+    # strength enters the blend RAW (it's already absolute 0..1), so a tiny quality gap makes a
+    # tiny score gap — it is NOT amplified into a big cohort-percentile gap.
+    a = CandidateResult(symbol="A", contract=_put(90, -0.2, 40, 1.0),
+                        fundamental_score=0.80, annualized_yield=0.20)
+    b = CandidateResult(symbol="B", contract=_put(90, -0.2, 40, 1.0),
+                        fundamental_score=0.79, annualized_yield=0.20)
+    ranked = rank([a, b], fundamental_weight=0.5)  # equal yield -> yield percentile 0.5 each
+    assert ranked[0].symbol == "A"  # the 0.01-stronger name edges ahead
+    assert abs(ranked[0].score - 0.65) < 1e-9  # 0.5*0.80 (raw strength) + 0.5*0.5 (yield pct)
+    assert abs(ranked[0].score - ranked[1].score) < 0.02  # tiny gap, not cohort-amplified
+
+
 def _good() -> FundamentalMetrics:
     return FundamentalMetrics(
         pe=10, ps=1, pb=1, roe=0.25, roa=0.12, ros=0.12, roi=0.25,

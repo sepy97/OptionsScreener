@@ -1,9 +1,13 @@
 """Stage 5 — order the candidate shortlist using BOTH fundamental quality and yield.
 
 After the fundamental gate has filtered out the bad names, the survivors that have a
-tradeable put are ranked by a blend of (a) their fundamental composite and (b) their
-annualized yield — each as a percentile rank among the candidates, combined with
-``fundamental_weight`` (1.0 = all fundamentals, 0.0 = all yield).
+tradeable put are ranked by a blend of (a) their **absolute strength rating** and (b) their
+annualized yield, combined with ``fundamental_weight`` (1.0 = all strength, 0.0 = all yield).
+
+Strength enters the blend RAW: it's already an absolute 0..1 score, so an 80/100 name
+contributes 0.80 regardless of the cohort (small quality gaps stay small, big ones stay big).
+Yield is unbounded and right-skewed, so it's mapped to a within-run percentile first — the only
+axis that genuinely needs normalizing to sit on the same 0..1 ruler.
 """
 
 from __future__ import annotations
@@ -25,9 +29,9 @@ def rank(
 ) -> list[CandidateResult]:
     if not candidates:
         return []
-    fund_pct = _percentiles([c.fundamental_score or 0.0 for c in candidates])
+    # strength is already absolute 0..1 → used raw; only yield needs normalizing → percentile
     yield_pct = _percentiles([c.annualized_yield or 0.0 for c in candidates])
     w = fundamental_weight
-    for c, fp, yp in zip(candidates, fund_pct, yield_pct, strict=True):
-        c.score = w * fp + (1.0 - w) * yp
+    for c, yp in zip(candidates, yield_pct, strict=True):
+        c.score = w * (c.fundamental_score or 0.0) + (1.0 - w) * yp
     return sorted(candidates, key=lambda c: c.score or 0.0, reverse=True)
