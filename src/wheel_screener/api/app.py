@@ -22,6 +22,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
+from wheel_screener import __version__
 from wheel_screener.api.deps import get_job_runner, get_service, get_settings
 from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
 from wheel_screener.api.schemas import ScreenRequest
@@ -67,7 +68,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Wheel Screener API", version="0.2.0", lifespan=lifespan)
+app = FastAPI(title="Wheel Screener API", version=__version__, lifespan=lifespan)
 
 _HERE = Path(__file__).parent
 templates = Jinja2Templates(directory=str(_HERE / "templates"))

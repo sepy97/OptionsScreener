@@ -348,6 +348,14 @@ def test_results_sort_by_column(tmp_path) -> None:
     assert "/runs/j/results?sort=" in desc.text  # headers are sortable links
 
 
+def test_app_version_tracks_single_source() -> None:
+    # the FastAPI version must derive from the package's __version__ (one source of truth),
+    # never a hardcoded string that can drift.
+    from wheel_screener import __version__
+
+    assert app.version == __version__
+
+
 def test_results_render_legacy_snapshot_missing_new_fields(tmp_path) -> None:
     # a snapshot stored before strength/peer_percentile existed lacks those keys; the results
     # table must still render (Jinja yields Undefined for a missing dict key, not None).

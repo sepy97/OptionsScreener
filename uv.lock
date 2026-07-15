@@ -1512,7 +1512,6 @@ wheels = [
 
 [[package]]
 name = "wheel-screener"
-version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
@@ -1562,7 +1561,7 @@ requires-dist = [
     { name = "typer", specifier = ">=0.12" },
     { name = "uvicorn", marker = "extra == 'api'", specifier = ">=0.30" },
 ]
-provides-extras = ["fmp", "greeks", "api"]
+provides-extras = ["api", "fmp", "greeks"]
 
 [package.metadata.requires-dev]
 dev = [
