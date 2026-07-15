@@ -1,5 +1,8 @@
 {% import "_icons.html" as icon %}
 {% set k = c.contract %}
+{# default(none): old stored snapshots predate these fields, so the key may be absent #}
+{% set fs = c.fundamental_score|default(none) %}
+{% set pp = c.peer_percentile|default(none) %}
 <tr class="detail">
   <td colspan="13">
     <div class="detail">
@@ -15,8 +18,8 @@
             &middot; OI {{ k.open_interest if k.open_interest is not none else "—" }}</li>
         <li>Premium {{ c.premium|num2 }} &middot; collateral {{ c.collateral|num2 }}
             &middot; annualized yield {{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</li>
-        <li>Strength {{ (c.fundamental_score * 100)|round|int ~ "/100" if c.fundamental_score is not none else "—" }}
-            &middot; peers {{ "%.2f"|format(c.peer_percentile) if c.peer_percentile is not none else "—" }}
+        <li>Strength {{ (fs * 100)|round|int ~ "/100" if fs is not none else "—" }}
+            &middot; peers {{ "%.2f"|format(pp) if pp is not none else "—" }}
             &middot; blended score {{ "%.2f"|format(c.score) if c.score is not none else "—" }}
             {% if c.next_earnings %}&middot; next earnings {{ c.next_earnings }}{% endif %}
             {% if c.has_weeklys %}&middot; weeklys{% endif %}</li>

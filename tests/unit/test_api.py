@@ -348,6 +348,22 @@ def test_results_sort_by_column(tmp_path) -> None:
     assert "/runs/j/results?sort=" in desc.text  # headers are sortable links
 
 
+def test_results_render_legacy_snapshot_missing_new_fields(tmp_path) -> None:
+    # a snapshot stored before strength/peer_percentile existed lacks those keys; the results
+    # table must still render (Jinja yields Undefined for a missing dict key, not None).
+    runner = _runner(_FakeService(), tmp_path)
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    legacy = _candidate("AAA").model_dump(mode="json")
+    legacy.pop("peer_percentile", None)
+    legacy.pop("fundamental_score", None)
+    runner.store.finish("j", "done", result=[legacy])
+    r = _client(runner).get("/runs/j/results")
+    assert r.status_code == 200 and "AAA" in r.text and "—" in r.text  # graceful blanks
+    # the detail fragment for the same legacy row must not crash either
+    d = _client(runner).get("/runs/j/candidates/AAA")
+    assert d.status_code == 200
+
+
 def test_num2_filter_rounds_floats() -> None:
     from wheel_screener.api.app import _num2
 
