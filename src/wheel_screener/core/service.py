@@ -123,7 +123,14 @@ class ScreenerService:
             if criteria.max_runtime_seconds is not None
             else None
         )
-        chains = pull_chains(self.chains, survivors, filt, deadline=deadline, cancel=cancel)
+        chains, complete = pull_chains(
+            self.chains, survivors, filt, deadline=deadline, cancel=cancel
+        )
+        if not complete:
+            logger.warning(
+                "screen returned PARTIAL results — the chain pull was cut short (timeout/cancel); "
+                "some qualifying names may be missing"
+            )
 
         candidates: list[CandidateResult] = []
         for u in survivors:

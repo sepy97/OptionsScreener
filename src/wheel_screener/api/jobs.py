@@ -159,7 +159,7 @@ class JobRunner:
         try:
             self.store.create(job_id, datetime.now(tz=UTC).isoformat())
             thread = threading.Thread(
-                target=self._run, args=(job_id, criteria, cancel), daemon=True
+                target=self._run_and_release, args=(job_id, criteria, cancel), daemon=True
             )
             self._threads[job_id] = thread
             thread.start()
@@ -172,15 +172,29 @@ class JobRunner:
             raise
         return job_id
 
+    def _run_and_release(
+        self, job_id: str, criteria: ScreenCriteria, cancel: threading.Event
+    ) -> None:
+        """Thread target for start(): run the job, then release the single-in-flight slot."""
+        try:
+            self._run(job_id, criteria, cancel)
+        finally:
+            with self._lock:
+                self._active = None
+
     def run_blocking(self, criteria: ScreenCriteria) -> str:
         """Run a screen synchronously and store it; returns the job id. For a one-shot caller
         (CLI / cron precompute) that wants the result persisted for the web to serve — unlike
-        start(), no thread and no single-in-flight gate."""
+        start(), no thread and no single-in-flight gate (so it never touches ``_active``)."""
         job_id = uuid.uuid4().hex
         cancel = threading.Event()
         self._cancels[job_id] = cancel
-        self.store.create(job_id, datetime.now(tz=UTC).isoformat())
-        self._run(job_id, criteria, cancel)
+        try:
+            self.store.create(job_id, datetime.now(tz=UTC).isoformat())
+            self._run(job_id, criteria, cancel)  # cleans up _cancels/_threads in its finally
+        except Exception:
+            self._cancels.pop(job_id, None)  # store.create failed before _run could clean up
+            raise
         return job_id
 
     def cancel(self, job_id: str) -> None:
@@ -212,8 +226,8 @@ class JobRunner:
         except Exception as e:  # noqa: BLE001 - any failure becomes a recorded job error
             self.store.finish(job_id, "failed", error={"type": "InternalError", "detail": str(e)})
         finally:
+            # job-scoped cleanup only; the single-in-flight slot (_active) is the caller's, since
+            # only start() holds it (run_blocking is a one-shot that doesn't).
             core_logger.removeHandler(handler)
-            with self._lock:
-                self._active = None
             self._cancels.pop(job_id, None)
             self._threads.pop(job_id, None)
