@@ -149,7 +149,7 @@ def test_search_route_renders_puts() -> None:
         r = TestClient(app).post("/search", data={"ticker": "aaa", "top_n": 5})
         assert r.status_code == 200
         assert "AAA" in r.text and "Breakeven" in r.text
-        assert "strength 70/100" in r.text and "0.62 vs peers" in r.text
+        assert "strength 70/100" in r.text and "62% vs peers" in r.text
         blank = TestClient(app).post("/search", data={"ticker": "", "top_n": 5})
         assert blank.status_code == 422  # empty ticker
     finally:
@@ -522,12 +522,16 @@ def test_num2_filter_rounds_floats() -> None:
 
 def test_results_summary_and_emphasis(tmp_path) -> None:
     runner = _runner(_FakeService(), tmp_path)
-    _done_job(runner, _candidate("AAA", yld=0.30), _candidate("BBB", yld=0.10))
+    _done_job(
+        runner, _candidate("AAA", yld=0.30, score=0.8), _candidate("BBB", yld=0.10, score=0.3)
+    )
     r = _client(runner).get("/runs/j/results")
     assert r.status_code == 200
     assert "result-stats" in r.text and "yield" in r.text  # summary stat line
     assert "y-hi" in r.text and "y-lo" in r.text  # yield tiers (0.30 -> hi, 0.10 -> lo)
     assert "score-cell" in r.text and "--pct:" in r.text  # in-cell score bar
+    assert "sc-hi" in r.text and "sc-lo" in r.text  # score green→red tiers (0.8 -> hi, 0.3 -> lo)
+    assert "$80.00" in r.text  # strike rendered as currency
 
 
 def test_export_csv(tmp_path) -> None:
