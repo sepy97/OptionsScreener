@@ -39,6 +39,13 @@ _KEY_METRICS = {
 }
 _STATEMENT_YEARS = 3  # latest N fiscal years scanned for sign inputs (coalesced per symbol)
 
+# the only profile columns the universe filter + Underlying need — projected at load so FMP's
+# fat text columns (description, etc.) never materialize (the main memory win of the lazy load).
+_PROFILE_COLS = [
+    "symbol", "companyName", "exchange", "sector", "price", "marketCap", "averageVolume",
+    "isEtf", "isFund", "isAdr", "isActivelyTrading", "industry", "fullTimeEmployees",
+]
+
 # Names that aren't common stock: notes/baby-bonds, preferreds, warrants, depositary
 # shares, and partnerships (MLP units). Matched case-insensitively against companyName.
 _NONCOMMON_NAME = (
@@ -61,27 +68,32 @@ class LocalFundamentalsProvider:
         self._overlay_mtime: float | None = None
         self._lock = threading.Lock()  # guards lazy load + overlay reload when shared (web)
 
-    # --- loading -------------------------------------------------------------
-    def _read(self, name: str) -> pl.DataFrame:
-        return pl.read_csv(self._dir / name, infer_schema_length=0)
+    # --- loading (lazy: scan + project so only the needed columns ever materialize) ----------
+    def _scan(self, name: str) -> pl.LazyFrame:
+        return pl.scan_csv(self._dir / name, infer_schema_length=0)
 
-    def _latest_statement(self, prefix: str, cols: list[str]) -> pl.DataFrame:
-        """Coalesce the latest available fiscal year per symbol (handles filing lag)."""
+    def _latest_statement(self, prefix: str, cols: list[str]) -> pl.LazyFrame:
+        """Coalesce the latest available fiscal year per symbol (handles filing lag), lazily.
+
+        Per-column ``sort_by(fiscalYear).last()`` picks the newest year order-independently — no
+        reliance on a global sort surviving the group-by."""
         files = sorted(self._dir.glob(f"{prefix}_*.csv"), reverse=True)[:_STATEMENT_YEARS]
+        empty = pl.DataFrame({"symbol": []}, schema={"symbol": pl.Utf8}).lazy()
         if not files:
-            return pl.DataFrame({"symbol": []}, schema={"symbol": pl.Utf8})
-        df = pl.concat(
-            [pl.read_csv(f, infer_schema_length=0) for f in files], how="vertical_relaxed"
+            return empty
+        lf = pl.concat(
+            [pl.scan_csv(f, infer_schema_length=0) for f in files], how="vertical_relaxed"
         )
-        keep = [c for c in ["symbol", "fiscalYear", *cols] if c in df.columns]
-        latest = (
-            df.select(keep)
+        avail = lf.collect_schema().names()
+        value_cols = [c for c in cols if c in avail]
+        if "fiscalYear" not in avail or not value_cols:
+            return empty
+        return (
+            lf.select(["symbol", "fiscalYear", *value_cols])
             .with_columns(pl.col("fiscalYear").cast(pl.Int64, strict=False))
-            .sort("fiscalYear")
             .group_by("symbol")
-            .last()
+            .agg([pl.col(c).sort_by("fiscalYear").last() for c in value_cols])
         )
-        return latest.drop("fiscalYear")  # drop after picking latest; avoids join collisions
 
     def _ensure_loaded(self) -> None:
         if self._metrics is not None:
@@ -96,22 +108,29 @@ class LocalFundamentalsProvider:
             raise FileNotFoundError(
                 f"no profile-bulk CSVs in {self._dir} — run tools/fmp_bulk_import.py first"
             )
-        self._profiles = pl.concat(
-            [pl.read_csv(p, infer_schema_length=0) for p in parts], how="vertical_relaxed"
-        ).with_columns(
-            pl.col("price").cast(pl.Float64, strict=False),
-            pl.col("marketCap").cast(pl.Float64, strict=False),
+        prof = pl.concat(
+            [pl.scan_csv(p, infer_schema_length=0) for p in parts], how="vertical_relaxed"
+        )
+        keep = [c for c in _PROFILE_COLS if c in prof.collect_schema().names()]
+        self._profiles = (
+            prof.select(keep)
+            .with_columns(
+                [pl.col(c).cast(pl.Float64, strict=False) for c in ("price", "marketCap")
+                 if c in keep]
+            )
+            .collect()
         )
 
-        def sel(df: pl.DataFrame, mapping: dict[str, str]) -> pl.DataFrame:
-            present = {dst: src for dst, src in mapping.items() if src in df.columns}
-            return df.select(["symbol", *[pl.col(src).alias(dst) for dst, src in present.items()]])
+        def sel(lf: pl.LazyFrame, mapping: dict[str, str]) -> pl.LazyFrame:
+            avail = lf.collect_schema().names()
+            present = {dst: src for dst, src in mapping.items() if src in avail}
+            return lf.select(["symbol", *[pl.col(src).alias(dst) for dst, src in present.items()]])
 
-        m = sel(self._read("ratios-ttm-bulk.csv"), _RATIOS)
-        km = sel(self._read("key-metrics-ttm-bulk.csv"), _KEY_METRICS)
-        m = m.join(km, on="symbol", how="full", coalesce=True)
-        dcf = self._read("dcf-bulk.csv").select(
-            ["symbol", pl.col("dcf").alias("dcf"), pl.col("Stock Price").alias("price")]
+        m = sel(self._scan("ratios-ttm-bulk.csv"), _RATIOS)
+        m = m.join(sel(self._scan("key-metrics-ttm-bulk.csv"), _KEY_METRICS),
+                   on="symbol", how="full", coalesce=True)
+        dcf = self._scan("dcf-bulk.csv").select(
+            [pl.col("symbol"), pl.col("dcf"), pl.col("Stock Price").alias("price")]
         )
         m = m.join(dcf, on="symbol", how="full", coalesce=True)
         m = m.join(
@@ -119,14 +138,15 @@ class LocalFundamentalsProvider:
             on="symbol", how="full", coalesce=True,
         )
         bal = self._latest_statement("balance-sheet-statement-bulk", ["totalStockholdersEquity"])
-        if "totalStockholdersEquity" in bal.columns:
+        if "totalStockholdersEquity" in bal.collect_schema().names():
             bal = bal.rename({"totalStockholdersEquity": "total_equity"})
         m = m.join(bal, on="symbol", how="full", coalesce=True)
 
-        float_cols = [c for c in m.columns if c != "symbol"]
+        float_cols = [c for c in m.collect_schema().names() if c != "symbol"]
+        # collect ONCE — projection pushdown means only these ~15 columns are ever materialized
         self._metrics = m.with_columns(
             [pl.col(c).cast(pl.Float64, strict=False) for c in float_cols]
-        )
+        ).collect()
 
     # --- port methods --------------------------------------------------------
     def screen_universe(self, criteria: ScreenCriteria) -> list[Underlying]:
