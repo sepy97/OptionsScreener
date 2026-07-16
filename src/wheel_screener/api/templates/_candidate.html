@@ -10,16 +10,16 @@
          aria-label="close">{{ icon.close() }}</a>
       <strong>{{ c.symbol }}</strong> &middot; {{ k.option_symbol }} (put)
       <ul>
-        <li>Strike {{ k.strike|num2 }} &middot; exp {{ k.expiration }} ({{ k.dte }} DTE)</li>
-        <li>Bid {{ k.bid|num2 }} / Ask {{ k.ask|num2 }} / Mid {{ k.mid|num2 }}{% if k.spread_pct is not none %}
+        <li>Strike ${{ k.strike|num2 }} &middot; exp {{ k.expiration }} ({{ k.dte }} DTE)</li>
+        <li>Bid ${{ k.bid|num2 }} / Ask ${{ k.ask|num2 }} / Mid ${{ k.mid|num2 }}{% if k.spread_pct is not none %}
             &middot; spread {{ "%.1f%%"|format(k.spread_pct * 100) }}{% endif %}</li>
         <li>Δ {{ "%.3f"|format(k.delta) if k.delta is not none else "—" }}
             &middot; IV {{ "%.0f%%"|format(k.implied_volatility * 100) if k.implied_volatility is not none else "—" }}
             &middot; OI {{ k.open_interest if k.open_interest is not none else "—" }}</li>
-        <li>Premium {{ c.premium|num2 }} &middot; collateral {{ c.collateral|num2 }}
+        <li>Premium ${{ c.premium|num2 }} &middot; collateral ${{ c.collateral|num2 }}
             &middot; annualized yield {{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</li>
         <li>Strength {{ (fs * 100)|round|int ~ "/100" if fs is not none else "—" }}
-            &middot; peers {{ "%.2f"|format(pp) if pp is not none else "—" }}
+            &middot; peers {{ (pp * 100)|round|int ~ "%" if pp is not none else "—" }}
             &middot; blended score {{ "%.2f"|format(c.score) if c.score is not none else "—" }}
             {% if c.next_earnings %}&middot; next earnings {{ c.next_earnings }}{% endif %}
             {% if c.has_weeklys %}&middot; weeklys{% endif %}</li>

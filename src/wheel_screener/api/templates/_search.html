@@ -12,13 +12,13 @@
 {% endmacro %}
 <article>
   <header class="results-head">
-    <strong>{{ r.symbol }} · {{ n }} sellable put{{ '' if n == 1 else 's' }}</strong>
+    <strong>{{ r.symbol }}</strong>
     {% if r.passes_fundamentals is false %}
     <span class="fund-note fund-bad">fails gate: {{ r.gate_reasons|join(', ') }}</span>
     {% elif r.fundamental_score is not none %}
     <span class="fund-note" title="absolute financial strength (0–100), from fixed value/quality/safety bars">strength {{ (r.fundamental_score * 100)|round|int }}/100</span>
     {% if r.peer_percentile is not none %}
-    <span class="fund-note" title="percentile vs the $20–200 screened field (0–1)">{{ "%.2f"|format(r.peer_percentile) }} vs peers</span>
+    <span class="fund-note" title="percentile vs the $20–200 screened field (0–100)">{{ (r.peer_percentile * 100)|round|int }}% vs peers</span>
     {% else %}
     <span class="fund-note" title="outside the $20–200 screened universe, so no peer percentile">outside screened field</span>
     {% endif %}
@@ -45,19 +45,19 @@
         {% for c in r.puts %}
         {% set k = c.contract %}
         <tr>
-          <td>{{ k.strike|num2 }}</td>
+          <td>${{ k.strike|num2 }}</td>
           <td>{{ k.expiration }}{% if r.next_earnings and r.next_earnings <= k.expiration %}
             <span title="earnings before expiry">{{ icon.warning() }}</span>{% endif %}</td>
           <td>{{ k.dte }}</td>
           <td>{{ "%.2f"|format(k.delta) if k.delta is not none else "—" }}</td>
           <td>{{ "%.0f%%"|format(k.implied_volatility * 100) if k.implied_volatility is not none else "—" }}</td>
-          <td>{{ k.bid|num2 }}</td>
-          <td>{{ k.mid|num2 }}</td>
+          <td>${{ k.bid|num2 }}</td>
+          <td>${{ k.mid|num2 }}</td>
           <td>{{ "%.1f%%"|format(k.spread_pct * 100) if k.spread_pct is not none else "—" }}</td>
           <td>{{ k.open_interest if k.open_interest is not none else "—" }}</td>
           <td class="{% if c.annualized_yield is not none %}{{ 'y-hi' if c.annualized_yield >= 0.25 else ('y-mid' if c.annualized_yield >= 0.15 else 'y-lo') }}{% endif %}">{{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</td>
-          <td>{{ (k.strike - (c.premium or 0.0))|num2 }}</td>
-          <td>{{ c.collateral|usd }}</td>
+          <td>${{ (k.strike - (c.premium or 0.0))|num2 }}</td>
+          <td>${{ c.collateral|usd }}</td>
         </tr>
         {% endfor %}
       </tbody>
