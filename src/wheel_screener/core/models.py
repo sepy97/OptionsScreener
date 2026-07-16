@@ -70,6 +70,9 @@ class ScreenCriteria(BaseModel):
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
     min_open_interest: int = 100
     max_bid_ask_spread_pct: float = 0.10
+    # optional IV floor on the selected put (None = off). Elevated IV = richer premium; when set,
+    # a contract must have a known implied vol at or above this fraction (0.40 == 40%) to qualify.
+    min_iv: float | None = None
     # wall-clock budget for the chain-pull stage (None = unbounded); past it, partial results.
     # Default 600s so a screen can't run forever and jam the single in-flight slot.
     max_runtime_seconds: float | None = 600.0

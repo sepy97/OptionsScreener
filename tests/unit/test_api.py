@@ -63,8 +63,10 @@ class _FakeService:
         self._error = error
         self._gate = gate
         self._wait_cancel = wait_cancel
+        self.seen_criteria = None  # last criteria run_screen was called with (assert form wiring)
 
     def run_screen(self, criteria, today, *, cancel=None):
+        self.seen_criteria = criteria
         if self._gate is not None:
             self._gate.wait(2.0)
         if self._wait_cancel and cancel is not None:
@@ -156,6 +158,20 @@ def test_search_route_renders_puts() -> None:
         app.dependency_overrides.clear()
 
 
+def test_search_threads_dte_and_delta_into_sort_and_export() -> None:
+    app.dependency_overrides[get_service] = lambda: _FakeService(result=[_candidate("AAA")])
+    try:
+        r = TestClient(app).post("/search", data={
+            "ticker": "aaa", "top_n": 5, "min_dte": 14, "max_dte": 60, "target_delta": 0.30,
+        })
+        assert r.status_code == 200
+        # export link + sort hx-vals must carry the user's DTE/delta, not revert to defaults
+        assert "min_dte=14" in r.text and "max_dte=60" in r.text and "target_delta=0.3" in r.text
+        assert '"min_dte": 14' in r.text and '"target_delta": 0.3' in r.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_search_route_sort_and_export() -> None:
     svc = _FakeService(result=[_candidate("AAA", yld=0.10), _candidate("BBB", yld=0.90)])
     app.dependency_overrides[get_service] = lambda: svc
@@ -232,6 +248,35 @@ def test_screen_request_and_criteria_default_to_a_timeout() -> None:
     assert ScreenCriteria().max_runtime_seconds == 600.0  # CLI paths (refresh-screen) bounded too
 
 
+def test_to_criteria_maps_options_knobs_and_negates_delta() -> None:
+    from wheel_screener.api.schemas import ScreenRequest
+
+    c = ScreenRequest(
+        min_price=30, max_price=150, target_delta=0.25, max_abs_delta=0.35,
+        min_open_interest=250, max_spread_pct=0.08, min_iv=0.4,
+    ).to_criteria()
+    assert (c.min_price, c.max_price) == (30.0, 150.0)
+    assert c.target_delta == -0.25  # entered as a magnitude; stored as the put's signed delta
+    assert c.max_abs_delta == 0.35 and c.min_open_interest == 250
+    assert c.max_bid_ask_spread_pct == 0.08 and c.min_iv == 0.4
+    d = ScreenRequest().to_criteria()  # defaults preserve prior behavior
+    assert (d.min_price, d.max_price, d.target_delta, d.min_iv) == (20.0, 200.0, -0.20, None)
+
+
+def test_screen_request_rejects_inverted_ranges() -> None:
+    import pytest
+    from pydantic import ValidationError
+
+    from wheel_screener.api.schemas import ScreenRequest
+
+    with pytest.raises(ValidationError):
+        ScreenRequest(min_price=200, max_price=20)          # inverted price band
+    with pytest.raises(ValidationError):
+        ScreenRequest(target_delta=0.5, max_abs_delta=0.3)  # target beyond the |delta| cap
+    with pytest.raises(ValidationError):
+        ScreenRequest(min_dte=40, max_dte=20)               # inverted DTE window
+
+
 def test_body_size_gate_rejects_oversized_post() -> None:
     # a body over the 1MB cap is rejected before routing (declared Content-Length)
     r = TestClient(app).post("/search", data={"ticker": "a" * 2_000_000})
@@ -306,6 +351,10 @@ def test_dashboard_renders_form(tmp_path) -> None:
     assert "Rank by" in r.text and "Higher yield" in r.text and "Better quality" in r.text
     # DTE is now a primary control; names-to-check moved into Advanced
     assert 'name="min_dte"' in r.text and "Advanced filters" in r.text
+    # options-quality knobs (#90) are adjustable in Advanced
+    for name in ("min_price", "max_price", "target_delta", "max_abs_delta",
+                 "min_open_interest", "max_spread_pct", "min_iv"):
+        assert f'name="{name}"' in r.text
 
 
 def test_nav_has_both_tabs_and_marks_active(tmp_path) -> None:
@@ -320,6 +369,9 @@ def test_search_page_renders_its_own_form() -> None:
     assert r.status_code == 200
     assert "Search a ticker" in r.text and 'hx-post="/search"' in r.text
     assert 'name="ticker"' in r.text
+    # the search pane exposes target delta + DTE too (#90)
+    for name in ("target_delta", "min_dte", "max_dte"):
+        assert f'name="{name}"' in r.text
 
 
 def test_run_flow_polls_then_renders_results(tmp_path) -> None:
@@ -331,6 +383,22 @@ def test_run_flow_polls_then_renders_results(tmp_path) -> None:
     runner.wait(job_id)
     page = client.get(f"/runs/{job_id}/progress")
     assert page.status_code == 200 and "AAA" in page.text and "candidate" in page.text.lower()
+
+
+def test_run_form_wires_options_knobs_into_criteria(tmp_path) -> None:
+    svc = _FakeService(result=[_candidate()])
+    runner = _runner(svc, tmp_path)
+    started = _client(runner).post("/runs", data={
+        "top_n": 10, "min_dte": 21, "max_dte": 35, "min_price": 30, "max_price": 150,
+        "target_delta": 0.25, "max_abs_delta": 0.35, "min_open_interest": 250,
+        "max_spread_pct": 0.08, "min_iv": "0.4",
+    })
+    assert started.status_code == 200  # accepted (the poller fragment), not a 422 validation error
+    runner.wait(_job_id_from(started.text))
+    c = svc.seen_criteria  # the form field names reached ScreenCriteria intact
+    assert c is not None and (c.min_price, c.max_price) == (30.0, 150.0)
+    assert c.target_delta == -0.25 and c.max_abs_delta == 0.35
+    assert c.min_open_interest == 250 and c.max_bid_ask_spread_pct == 0.08 and c.min_iv == 0.4
 
 
 def test_run_failure_renders_typed_error(tmp_path) -> None:

@@ -14,6 +14,22 @@
           <input type="number" name="top_n" value="5" min="1" max="25">
         </label>
       </div>
+      <div class="grid">
+        <div>
+          <label for="s_min_dte">Days to expiration (DTE)</label>
+          <fieldset role="group">
+            <input type="number" id="s_min_dte" name="min_dte" value="7" min="1" max="400"
+                   aria-label="Minimum DTE">
+            <input type="number" name="max_dte" value="45" min="1" max="400"
+                   aria-label="Maximum DTE">
+          </fieldset>
+          <small>expiry window to scan — wider spans more expiries</small>
+        </div>
+        <label>Target delta
+          <input type="number" name="target_delta" value="0.20" min="0.01" max="1" step="0.01">
+          <small>put delta magnitude — 0.20 ≈ 20% assignment odds</small>
+        </label>
+      </div>
       <button type="submit" class="run-btn">Find CSPs</button>
     </form>
     <div id="search-results"></div>

@@ -46,6 +46,46 @@
       </label>
       <label>Timeout (s) <input type="number" name="timeout_seconds" placeholder="(none)"></label>
     </div>
+    <hr>
+    <div class="grid">
+      <div>
+        <label for="min_price">Underlying price range ($)</label>
+        <fieldset role="group">
+          <input type="number" id="min_price" name="min_price" value="{{ defaults.min_price }}"
+                 min="0" step="1" aria-label="Minimum underlying price">
+          <input type="number" name="max_price" value="{{ defaults.max_price }}"
+                 min="0" step="1" aria-label="Maximum underlying price">
+        </fieldset>
+        <small>only screen names trading in this band</small>
+      </div>
+      <div>
+        <label for="target_delta">Put delta — target / max</label>
+        <fieldset role="group">
+          <input type="number" id="target_delta" name="target_delta"
+                 value="{{ defaults.target_delta }}" min="0.01" max="1" step="0.01"
+                 aria-label="Target delta">
+          <input type="number" name="max_abs_delta" value="{{ defaults.max_abs_delta }}"
+                 min="0.01" max="1" step="0.01" aria-label="Max absolute delta">
+        </fieldset>
+        <small>0.20 ≈ 20% assignment odds; max caps how deep to allow</small>
+      </div>
+    </div>
+    <div class="grid">
+      <label>Min open interest
+        <input type="number" name="min_open_interest" value="{{ defaults.min_open_interest }}" min="0">
+        <small>contract liquidity floor</small>
+      </label>
+      <label>Max bid-ask spread
+        <input type="number" name="max_spread_pct" value="{{ defaults.max_spread_pct }}"
+               min="0.01" max="1" step="0.01">
+        <small>0.10 = 10% of mid — wider allows looser fills</small>
+      </label>
+      <label>Min IV
+        <input type="number" name="min_iv" value="{{ defaults.min_iv or '' }}"
+               min="0" step="0.05" placeholder="(off)">
+        <small>optional — 0.40 = 40% implied-vol floor</small>
+      </label>
+    </div>
   </details>
   <button type="submit" class="run-btn">Run screen</button>
 </form>
