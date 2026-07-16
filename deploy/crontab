@@ -1,0 +1,18 @@
+# steadybull.net data-refresh schedule.
+# Install for the deploy user:  crontab /srv/steadybull/deploy/crontab   (replaces their crontab)
+# Times are LOCAL (droplet TZ = America/New_York, set during provisioning). Each job runs the CLI
+# inside the running app container; the CLI's own logs land in /data/logs/wheel-screener.log, and
+# cron-level errors (docker down, etc.) go to $HOME/steadybull-cron.log.
+SHELL=/bin/sh
+PATH=/usr/local/bin:/usr/bin:/bin
+
+# earnings calendar — daily, pre-market (drives the earnings blackout)
+0 6 * * *  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-earnings >> $HOME/steadybull-cron.log 2>&1
+
+# fundamentals for recent reporters — daily, right after the earnings refresh
+30 6 * * *  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-fundamentals >> $HOME/steadybull-cron.log 2>&1
+
+# precompute a fresh screen through the market day (Mon–Fri) so the dashboard stays current.
+# (each run briefly double-loads the fundamentals store in a second process; fine with swap —
+#  the lazy-load issue would remove the double load.)
+0 10,12,14,16 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen >> $HOME/steadybull-cron.log 2>&1

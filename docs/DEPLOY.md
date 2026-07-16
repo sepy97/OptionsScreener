@@ -65,14 +65,20 @@ gate is on.
 
 ## Scheduled refresh (cron on the host)
 
-Keep the data current by exec-ing the CLI inside the running container:
+The refresh jobs (earnings + post-earnings fundamentals daily, and a precomputed screen a few
+times per market day so the dashboard stays current) live in [`deploy/crontab`](../deploy/crontab).
+Install them for the deploy user:
 
-```cron
-# daily earnings + post-earnings fundamentals; precompute a fresh screen a few times per market day
-15 6 * * *      cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-earnings
-30 6 * * *      cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-fundamentals
-0 10,13,16 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen
+```bash
+# first, confirm the command works interactively (writes /data/earnings_calendar.csv):
+cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-earnings
+# then install the schedule (replaces the user's crontab — dedicated droplet, so that's fine):
+crontab /srv/steadybull/deploy/crontab
+crontab -l        # verify
 ```
+
+Cron-level errors go to `$HOME/steadybull-cron.log`; the CLI's own logs are in
+`/data/logs/wheel-screener.log`. Times are in the droplet's local timezone (America/New_York).
 
 ## Releasing (deploy-on-tag)
 
