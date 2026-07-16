@@ -22,7 +22,9 @@ class ScreenRequest(BaseModel):
     min_yield: float | None = Field(0.10, ge=0.0, description="Drop candidates below this yield.")
     min_dte: int = Field(21, ge=1, le=400)  # ~3 weeks
     max_dte: int = Field(35, ge=1, le=400)  # ~5 weeks
-    timeout_seconds: float | None = Field(None, gt=0.0, description="Wall-clock budget; partials.")
+    timeout_seconds: float | None = Field(
+        600.0, gt=0.0, description="Wall-clock budget (default 10 min); past it, partial results."
+    )
 
     @model_validator(mode="after")
     def _check_dte_window(self) -> ScreenRequest:

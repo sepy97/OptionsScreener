@@ -3,6 +3,9 @@
 # global block (`{ email you@example.com }`) to get expiry notices.
 steadybull.net, www.steadybull.net {
 	encode zstd gzip
+	request_body {
+		max_size 1MB
+	}
 	# retry a failed dial for up to 20s so a request during the app's cold-start store-warm
 	# waits and succeeds instead of returning a 502 (the app binds :8000 only after warming).
 	reverse_proxy app:8000 {

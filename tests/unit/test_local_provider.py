@@ -105,6 +105,17 @@ def test_overlay_overrides_bulk_metrics(store: Path) -> None:
     assert fm.pe == 7.5 and fm.roe == 0.30 and fm.fcf_yield == 0.08  # overlay wins over bulk
 
 
+def test_write_overlay_is_atomic(store: Path) -> None:
+    # writes via a temp file + atomic rename, so a concurrent reader never sees a partial file
+    from wheel_screener.adapters.local.overlay import OVERLAY_FILENAME, read_overlay, write_overlay
+    from wheel_screener.core.models import FundamentalMetrics
+
+    write_overlay(str(store), {"GOOD": FundamentalMetrics(pe=7.5)})
+    assert (store / OVERLAY_FILENAME).exists()
+    assert not (store / (OVERLAY_FILENAME + ".tmp")).exists()  # no leftover temp
+    assert read_overlay(str(store))["GOOD"].pe == 7.5
+
+
 def test_known_symbols(store: Path) -> None:
     assert "GOOD" in LocalFundamentalsProvider(str(store)).known_symbols()
 

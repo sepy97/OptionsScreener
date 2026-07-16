@@ -7,6 +7,7 @@ earnings blackout still works on the cheap Starter key; without one, blackout is
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from datetime import date
@@ -17,6 +18,8 @@ import polars as pl
 
 from wheel_screener.adapters.local.overlay import OVERLAY_FILENAME, read_overlay
 from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
+
+logger = logging.getLogger(__name__)
 
 # FundamentalMetrics field -> source bulk column
 _RATIOS = {
@@ -203,16 +206,23 @@ class LocalFundamentalsProvider:
         return set(self._profiles.get_column("symbol").to_list())
 
     def _current_overlay(self) -> dict[str, FundamentalMetrics]:
-        """The overlay, reloaded if overlay_metrics.csv changed — so a long-lived server
-        picks up a refresh-fundamentals run without a restart."""
-        try:
-            mtime: float | None = (self._dir / OVERLAY_FILENAME).stat().st_mtime
-        except OSError:
-            mtime = None
+        """The overlay, reloaded if overlay_metrics.csv changed — so a long-lived server picks up a
+        refresh-fundamentals run without a restart. The stat + reload happen under the lock (so the
+        mtime always matches the loaded content), and a transient read failure keeps the last-good
+        overlay rather than crashing the request."""
         with self._lock:
+            try:
+                mtime: float | None = (self._dir / OVERLAY_FILENAME).stat().st_mtime
+            except OSError:
+                mtime = None
             if self._overlay is None or mtime != self._overlay_mtime:
-                self._overlay = read_overlay(str(self._dir))
-                self._overlay_mtime = mtime
+                try:
+                    self._overlay = read_overlay(str(self._dir))
+                    self._overlay_mtime = mtime
+                except Exception as e:  # noqa: BLE001 - keep the last-good overlay; retry next call
+                    logger.warning("overlay reload failed, keeping previous: %s", e)
+                    if self._overlay is None:
+                        self._overlay = {}
             return self._overlay
 
     def _metrics_for(self, symbols: list[str]) -> dict[str, FundamentalMetrics]:

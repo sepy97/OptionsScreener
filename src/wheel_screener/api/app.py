@@ -143,6 +143,20 @@ async def _basic_auth_gate(request: Request, call_next):
     return await call_next(request)
 
 
+_MAX_BODY_BYTES = 1_000_000  # 1 MB — the POST forms are tiny; reject anything absurd
+
+
+@app.middleware("http")
+async def _body_size_gate(request: Request, call_next):
+    """Reject oversized request bodies (declared Content-Length) before routing — a cheap OOM
+    guard. Caddy's request_body max_size is the real edge enforcement; this is the app backstop."""
+    if request.method in ("POST", "PUT", "PATCH"):
+        cl = request.headers.get("content-length")
+        if cl is not None and cl.isdigit() and int(cl) > _MAX_BODY_BYTES:
+            return Response("Request body too large.", status_code=413)
+    return await call_next(request)
+
+
 @app.middleware("http")
 async def _rate_limit_gate(request: Request, call_next):
     """Per-IP throttle on the expensive endpoints (screen starts + search); cheap reads pass."""
