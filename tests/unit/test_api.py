@@ -378,6 +378,22 @@ def test_check_basic_auth_pure() -> None:
     assert not _path_exempt("/") and not _path_exempt("/runs/j/results")
 
 
+def test_rate_limit_throttles_expensive_endpoints() -> None:
+    from wheel_screener.api.ratelimit import SlidingWindowLimiter
+
+    app.dependency_overrides[get_service] = lambda: _FakeService(result=[_candidate("AAA")])
+    app.state.rate_limiter = SlidingWindowLimiter(per_window=2)  # budget of 2 searches
+    try:
+        c = TestClient(app)
+        assert c.post("/search", data={"ticker": "aaa", "top_n": 5}).status_code == 200
+        assert c.post("/search", data={"ticker": "aaa", "top_n": 5}).status_code == 200
+        r = c.post("/search", data={"ticker": "aaa", "top_n": 5})  # 3rd -> throttled
+        assert r.status_code == 429 and r.headers.get("retry-after") == "60"
+    finally:
+        app.state.rate_limiter = None
+        app.dependency_overrides.clear()
+
+
 def test_health_reflects_active_chain_source() -> None:
     from wheel_screener.api.deps import get_service, get_settings
     from wheel_screener.config import AlpacaSettings, Settings

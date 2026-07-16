@@ -14,6 +14,7 @@ import csv
 import io
 import logging
 import secrets
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -28,6 +29,7 @@ from pydantic import ValidationError
 from wheel_screener import __version__
 from wheel_screener.api.deps import get_job_runner, get_service, get_settings
 from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
+from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
 from wheel_screener.composition import build_service
 from wheel_screener.config import Settings
@@ -109,6 +111,10 @@ async def lifespan(app: FastAPI):
     app.state.auth = _resolve_auth(settings)  # raises if AUTH__REQUIRED but no password (prod)
     if app.state.auth is None:
         logger.warning("web auth DISABLED (no AUTH__PASSWORD) — set AUTH__REQUIRED=true in prod")
+    app.state.rate_limiter = (
+        SlidingWindowLimiter(settings.rate_limit.per_minute)
+        if settings.rate_limit.enabled else None
+    )
     app.state.job_runner = JobRunner(service, JobStore(settings.jobs_db_path))
     # let pipeline INFO logs through so background jobs can capture stage progress
     logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
@@ -133,6 +139,24 @@ async def _basic_auth_gate(request: Request, call_next):
             return Response(
                 status_code=401,
                 headers={"WWW-Authenticate": 'Basic realm="wheel-screener"'},
+            )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def _rate_limit_gate(request: Request, call_next):
+    """Per-IP throttle on the expensive endpoints (screen starts + search); cheap reads pass."""
+    limiter = getattr(request.app.state, "rate_limiter", None)
+    if limiter is not None and is_expensive(request.method, request.url.path):
+        ip = client_ip(
+            request.headers.get("x-forwarded-for"),
+            request.client.host if request.client else "",
+        )
+        if not limiter.allow(ip, time.monotonic()):
+            return Response(
+                "Rate limit exceeded — please slow down.",
+                status_code=429,
+                headers={"Retry-After": "60"},
             )
     return await call_next(request)
 

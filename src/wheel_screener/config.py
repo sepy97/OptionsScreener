@@ -80,6 +80,15 @@ class AuthSettings(BaseModel):
     required: bool = False  # fail closed: refuse to start unauthenticated when true
 
 
+class RateLimitSettings(BaseModel):
+    """Per-IP throttle on the EXPENSIVE web endpoints (screen starts + ticker search) — protects
+    the public instance's shared API quota and the small droplet from abuse. Cheap reads (the
+    dashboard, 2s polling, /health, /static) are never limited. On by default."""
+
+    enabled: bool = True
+    per_minute: int = 20  # expensive requests allowed per client IP per 60s
+
+
 class LogSettings(BaseModel):
     """Diagnostic logging. The console level follows -v/-vv; the rotating file always
     captures ``file_level`` and up, so cron'd runs leave a recoverable history."""
@@ -105,6 +114,7 @@ class Settings(BaseSettings):
     iv_rank: IvRankSettings = Field(default_factory=IvRankSettings)
     log: LogSettings = Field(default_factory=LogSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
+    rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
 
     # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)
     chain_source: str = "schwab"
