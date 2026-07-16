@@ -180,6 +180,17 @@ def test_run_blocking_stores_done_result(tmp_path) -> None:
     assert len(latest["result"]) == 1 and latest["result"][0]["symbol"] == "AAA"
 
 
+def test_run_blocking_does_not_hold_or_clobber_the_slot(tmp_path) -> None:
+    # a one-shot precompute must NOT hold the single-in-flight slot or leak cancel/thread state,
+    # and must leave a subsequent web start() able to run (not wedged).
+    runner = _runner(_FakeService(result=[_candidate()]), tmp_path)
+    runner.run_blocking(ScreenCriteria())
+    assert runner._active is None and runner._cancels == {} and runner._threads == {}
+    jid = runner.start(ScreenCriteria())
+    runner.wait(jid)
+    assert runner.get(jid)["status"] == "done"
+
+
 def test_unknown_job_returns_404(tmp_path) -> None:
     assert _client(_runner(_FakeService(), tmp_path)).get("/screen/nope").status_code == 404
 

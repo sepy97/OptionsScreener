@@ -24,22 +24,23 @@ def pull_chains(
     deadline: float | None = None,
     cancel: threading.Event | None = None,
     monotonic: Callable[[], float] = time.monotonic,
-) -> dict[str, ChainSnapshot]:
+) -> tuple[dict[str, ChainSnapshot], bool]:
     """Fetch a chain per survivor concurrently (bounded by the provider's max_concurrency).
 
-    Per-symbol data errors are logged and skipped; systemic failures (auth/rate/outage)
-    PROPAGATE so the caller can surface them. If a ``deadline`` (monotonic seconds) passes
-    or ``cancel`` is set, collection stops and whatever completed so far is returned
-    (partial) rather than blocking — this is what makes the run cancellable + time-bounded.
+    Returns ``(chains, complete)``. ``complete`` is False when a ``deadline`` (monotonic seconds)
+    or ``cancel`` cut the scan short, so the caller can flag the run as PARTIAL instead of silently
+    treating a timed-out run as a complete one. Per-symbol data errors are logged and skipped (still
+    a complete scan); systemic failures (auth/rate/outage) PROPAGATE so the caller can surface them.
     """
     if not survivors:
-        return {}
+        return {}, True
     if deadline is not None and monotonic() >= deadline:
         logger.warning("chain pull skipped: no time budget remaining")
-        return {}
+        return {}, False
 
     workers = max(1, provider.capabilities().max_concurrency)
     out: dict[str, ChainSnapshot] = {}
+    complete = True
     with ThreadPoolExecutor(max_workers=workers) as pool:
         futures = {pool.submit(provider.get_chain, u.symbol, filt): u.symbol for u in survivors}
         wait_for = None if deadline is None else max(0.0, deadline - monotonic())
@@ -49,6 +50,7 @@ def pull_chains(
                     logger.warning(
                         "chain pull cancelled; %d/%d collected", len(out), len(survivors)
                     )
+                    complete = False
                     break
                 symbol = futures[fut]
                 try:
@@ -61,8 +63,9 @@ def pull_chains(
                     logger.warning("dropping %s: unexpected error (%s)", symbol, e)
         except FuturesTimeout:
             logger.warning("chain pull timed out; %d/%d collected", len(out), len(survivors))
+            complete = False
         finally:
             for f in futures:
                 f.cancel()  # cancel any not-yet-started pulls
     logger.info("chains: %d/%d survivors returned a chain", len(out), len(survivors))
-    return out
+    return out, complete

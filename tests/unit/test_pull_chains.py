@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 import pytest
 
@@ -31,8 +32,9 @@ def _u(sym: str) -> Underlying:
 
 def test_pull_chains_skips_per_symbol_data_error() -> None:
     prov = _FakeChains({"AAA": None, "BBB": ProviderDataError("bad payload")})
-    out = pull_chains(prov, [_u("AAA"), _u("BBB")], ChainFilter())
+    out, complete = pull_chains(prov, [_u("AAA"), _u("BBB")], ChainFilter())
     assert set(out) == {"AAA"}  # one bad symbol dropped, scan continues
+    assert complete is True  # a per-symbol drop is still a COMPLETE scan (everyone was tried)
 
 
 def test_pull_chains_reraises_systemic_error() -> None:
@@ -45,11 +47,11 @@ def test_pull_chains_reraises_systemic_error() -> None:
 def test_pull_chains_skips_when_deadline_already_passed() -> None:
     prov = _FakeChains({"AAA": None, "BBB": None})
     # injected clock reads 10.0; deadline is 5.0 -> no budget left
-    out = pull_chains(
+    out, complete = pull_chains(
         prov, [_u("AAA"), _u("BBB")], ChainFilter(),
         deadline=5.0, monotonic=lambda: 10.0,
     )
-    assert out == {}
+    assert out == {} and complete is False  # no budget -> nothing scanned, flagged incomplete
 
 
 class _CancelOnNth:
@@ -73,7 +75,28 @@ class _CancelOnNth:
 def test_pull_chains_cancellation_returns_partial() -> None:
     cancel = threading.Event()
     prov = _CancelOnNth(cancel, trip_on=2)  # cancel set while fetching the 2nd name
-    out = pull_chains(
+    out, complete = pull_chains(
         prov, [_u("AAA"), _u("BBB"), _u("CCC")], ChainFilter(), cancel=cancel
     )
     assert "AAA" in out and "CCC" not in out and len(out) < 3  # partial, not all-or-nothing
+    assert complete is False  # cancel cut it short
+
+
+class _SlowChains:
+    """Every pull sleeps, so a short deadline forces a timeout."""
+
+    def get_chain(self, symbol: str, filt: ChainFilter) -> ChainSnapshot:
+        time.sleep(0.3)
+        return ChainSnapshot(underlying_symbol=symbol, contracts=[])
+
+    def capabilities(self) -> ProviderCaps:
+        return ProviderCaps(name="fake", max_concurrency=1)
+
+
+def test_pull_chains_timeout_flags_incomplete() -> None:
+    # wait_for = 0.05s but each pull takes 0.3s -> FuturesTimeout -> partial AND flagged incomplete
+    out, complete = pull_chains(
+        _SlowChains(), [_u("AAA"), _u("BBB")], ChainFilter(),
+        deadline=0.05, monotonic=lambda: 0.0,
+    )
+    assert complete is False and len(out) < 2  # the silent-timeout bug: now surfaced via `complete`
