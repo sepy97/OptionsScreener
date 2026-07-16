@@ -208,12 +208,14 @@ in [docs/TODO.md](docs/TODO.md).
 
 ## Status
 
-**v0.2.0 — web UI + Alpaca.** Working end-to-end and live-validated: local fundamentals → Schwab
-**or Alpaca** chains → ranked CSP shortlist, with the earnings blackout, conservative bid-based
-yields, and a blended fundamental+yield ranking. A server-rendered **web UI** (FastAPI + HTMX) runs,
-cancels, and displays screens with live progress, sortable results, per-candidate detail, an instant
-precomputed dashboard, and CSV export. Hardened for real-world failures — typed provider errors,
-retry/backoff, run timeout + cancellation + partial results, no silent masking, no raw tracebacks,
-and verbosity-controlled logging with an always-on rotating log file. The UI is intentionally
-preliminary (see [`docs/UI_STATUS.md`](docs/UI_STATUS.md)); auth + deployment (DigitalOcean) and a
-native/Swift front-end are the next layers.
+**v1.0.0 — deployed.** Live in production at **steadybull.net** — Dockerized (app + Caddy auto-TLS)
+on a DigitalOcean droplet, behind an HTTP Basic-Auth gate (fail-closed), with **Alpaca** as the
+chain source (key/secret, no OAuth). The pipeline: local fundamentals → Alpaca (or Schwab) chains →
+ranked CSP shortlist, with the earnings blackout, conservative bid-based yields, an **absolute
+financial-strength rating** (0–100, shown beside a peer percentile), and a strength×yield ranking.
+A server-rendered **web UI** (FastAPI + HTMX) runs, cancels, and displays screens with live progress,
+sortable results, per-candidate detail, an instant precomputed dashboard, single-ticker search, and
+CSV export. Hardened for real-world failures — typed provider errors, retry/backoff, run timeout +
+cancellation + partial results, no raw tracebacks, and verbosity-controlled logging. See
+[`docs/DEPLOY.md`](docs/DEPLOY.md) for the deploy runbook. The UI is intentionally preliminary
+(see [`docs/UI_STATUS.md`](docs/UI_STATUS.md)); a native/Swift front-end is a possible next layer.
