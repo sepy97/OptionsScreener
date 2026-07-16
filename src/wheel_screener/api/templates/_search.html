@@ -4,10 +4,14 @@
 {% set sk = sort_key|default('') %}
 {% set so = sort_order|default('desc') %}
 {% set tn = top_n|default(n) %}
+{# carry the search's DTE/delta so re-sorting and export don't revert them to defaults #}
+{% set s_min_dte = min_dte|default(7) %}
+{% set s_max_dte = max_dte|default(45) %}
+{% set s_target_delta = target_delta|default(0.20) %}
 {% macro sortlink(label, key) %}
   {% set nxt = 'asc' if (sk == key and so == 'desc') else 'desc' %}
   <th><a href="#" hx-post="/search" hx-target="#search-results" hx-swap="innerHTML"
-         hx-vals='{"ticker": "{{ r.symbol }}", "top_n": {{ tn }}, "sort": "{{ key }}", "order": "{{ nxt }}"}'
+         hx-vals='{"ticker": "{{ r.symbol }}", "top_n": {{ tn }}, "min_dte": {{ s_min_dte }}, "max_dte": {{ s_max_dte }}, "target_delta": {{ s_target_delta }}, "sort": "{{ key }}", "order": "{{ nxt }}"}'
       >{{ label }}{% if sk == key %} {{ icon.chevron(so) }}{% endif %}</a></th>
 {% endmacro %}
 <article>
@@ -26,8 +30,8 @@
     <span class="fund-note" title="ticker isn't in the local fundamentals store">no fundamentals</span>
     {% endif %}
     {% if r.next_earnings %}<span class="badge">{{ icon.warning() }} earnings {{ r.next_earnings }}</span>{% endif %}
-    {% if r.puts %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}" role="button"
-       class="secondary outline export-btn" download>{{ icon.download() }} Export CSV</a>{% endif %}
+    {% if r.puts %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}&min_dte={{ s_min_dte }}&max_dte={{ s_max_dte }}&target_delta={{ s_target_delta }}"
+       role="button" class="secondary outline export-btn" download>{{ icon.download() }} Export CSV</a>{% endif %}
   </header>
   {% if r.puts %}
   <figure>

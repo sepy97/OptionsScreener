@@ -41,8 +41,8 @@ def put_yield(c: OptionContract) -> float | None:
 
 def _eligible_puts(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> list[OptionContract]:
     """Puts that pass the sellability gates: PUT with a delta, DTE within [min,max] (±tolerance),
-    |delta| <= max_abs_delta, open interest >= min, a real sellable bid (>0), and a computable
-    bid/ask spread within the limit."""
+    |delta| <= max_abs_delta, open interest >= min, a real sellable bid (>0), a computable
+    bid/ask spread within the limit, and (when a min_iv floor is set) a known IV >= it."""
     lo, hi, tol = criteria.min_dte, criteria.max_dte, criteria.dte_tolerance
     return [
         c
@@ -56,6 +56,10 @@ def _eligible_puts(snapshot: ChainSnapshot, criteria: ScreenCriteria) -> list[Op
         and c.bid > 0
         and c.spread_pct is not None
         and c.spread_pct <= criteria.max_bid_ask_spread_pct
+        and (
+            criteria.min_iv is None
+            or (c.implied_volatility is not None and c.implied_volatility >= criteria.min_iv)
+        )
     ]
 
 

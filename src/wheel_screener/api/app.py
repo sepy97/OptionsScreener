@@ -418,7 +418,7 @@ def search_page(request: Request):
 
 def _search(service: ScreenerService, ticker: str, top_n: int, min_dte: int, max_dte: int,
             target_delta: float):
-    criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=target_delta)
+    criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=-abs(target_delta))
     return service.search_ticker((ticker or "").strip().upper(), criteria, date.today(), n=top_n)
 
 
@@ -429,7 +429,7 @@ def search_route(
     top_n: int = Form(5),
     min_dte: int = Form(7),
     max_dte: int = Form(45),
-    target_delta: float = Form(-0.20),
+    target_delta: float = Form(0.20),
     sort: str = Form(""),
     order: str = Form("desc"),
     service: ScreenerService = Depends(get_service),
@@ -449,7 +449,8 @@ def search_route(
         result.puts.sort(key=keyfn, reverse=(order != "asc"))
     return templates.TemplateResponse(
         request, "_search.html",
-        {"result": result, "top_n": top_n, "sort_key": sort, "sort_order": order},
+        {"result": result, "top_n": top_n, "sort_key": sort, "sort_order": order,
+         "min_dte": min_dte, "max_dte": max_dte, "target_delta": target_delta},
     )
 
 
@@ -459,7 +460,7 @@ def search_export(
     top_n: int = 5,
     min_dte: int = 7,
     max_dte: int = 45,
-    target_delta: float = -0.20,
+    target_delta: float = 0.20,
     service: ScreenerService = Depends(get_service),
 ) -> Response:
     """Download a ticker's top-N puts as CSV."""
@@ -484,6 +485,13 @@ def start_run(
     min_dte: int = Form(21),
     max_dte: int = Form(35),
     timeout_seconds: str = Form(""),
+    min_price: float = Form(20.0),
+    max_price: float = Form(200.0),
+    target_delta: float = Form(0.20),
+    max_abs_delta: float = Form(0.30),
+    min_open_interest: int = Form(100),
+    max_spread_pct: float = Form(0.10),
+    min_iv: str = Form(""),
     runner: JobRunner = Depends(get_job_runner),
 ):
     try:
@@ -492,6 +500,10 @@ def start_run(
             min_dollar_volume=float((min_dollar_volume or "").replace(",", "").strip() or 0),
             min_yield=_opt_float(min_yield),
             min_dte=min_dte, max_dte=max_dte, timeout_seconds=_opt_float(timeout_seconds),
+            min_price=min_price, max_price=max_price,
+            target_delta=target_delta, max_abs_delta=max_abs_delta,
+            min_open_interest=min_open_interest, max_spread_pct=max_spread_pct,
+            min_iv=_opt_float(min_iv),
         )
     except (ValidationError, ValueError) as e:
         return templates.TemplateResponse(

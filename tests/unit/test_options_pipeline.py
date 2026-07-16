@@ -19,7 +19,7 @@ from wheel_screener.core.service import ScreenerService
 _BASE = date(2026, 6, 22)
 
 
-def _put(strike, delta, dte, bid, oi=500, spread=0.02):
+def _put(strike, delta, dte, bid, oi=500, spread=0.02, iv=None):
     return OptionContract(
         underlying_symbol="AAA",
         option_symbol=f"AAA-{dte}-{int(strike)}",
@@ -31,6 +31,7 @@ def _put(strike, delta, dte, bid, oi=500, spread=0.02):
         bid=bid,
         ask=round(bid * (1 + spread), 4),
         open_interest=oi,
+        implied_volatility=iv,
     )
 
 
@@ -55,6 +56,19 @@ def test_select_put_applies_gates():
     assert select_put(_chain([_put(90, -0.40, 40, 1.5)]), crit) is None  # |delta|>0.30
     assert select_put(_chain([_put(90, -0.20, 10, 1.5)]), crit) is None  # DTE below window
     assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # bid 0 = unsellable
+
+
+def test_select_put_min_iv_floor():
+    # min_iv is off by default; when set, a put needs a known IV at or above the floor.
+    base = _put(90, -0.20, 40, 1.5, iv=0.45)
+    win = ScreenCriteria(min_dte=30, max_dte=45)
+    lo = win.model_copy(update={"min_iv": 0.40})
+    hi = win.model_copy(update={"min_iv": 0.60})
+    assert select_put(_chain([base]), win) is not None   # floor off -> keep
+    assert select_put(_chain([base]), lo) is not None    # IV 0.45 >= 0.40 floor -> keep
+    assert select_put(_chain([base]), hi) is None        # IV 0.45 < 0.60 floor -> drop
+    no_iv = _put(90, -0.20, 40, 1.5, iv=None)
+    assert select_put(_chain([no_iv]), lo) is None       # unknown IV drops when a floor is set
 
 
 def test_select_put_dte_is_strict_by_default_tolerance_is_opt_in():
