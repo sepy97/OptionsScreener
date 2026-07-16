@@ -9,7 +9,7 @@ import pytest
 
 pytest.importorskip("fastapi")  # only runs when the `api` extra is installed
 
-from datetime import UTC, date, datetime  # noqa: E402
+from datetime import UTC, date, datetime, timedelta  # noqa: E402
 
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -211,9 +211,31 @@ def test_cancel_after_done_reports_terminal_status(tmp_path) -> None:
 
 def test_restart_marks_stuck_running_jobs_failed(tmp_path) -> None:
     path = str(tmp_path / "jobs.sqlite")
-    JobStore(path).create("stuck", "2026-01-01T00:00:00Z")  # left 'running'
+    JobStore(path).create("stuck", datetime.now(tz=UTC).isoformat())  # recent, left 'running'
     job = JobStore(path).get("stuck")  # a fresh store = a restart -> reconciles
     assert job["status"] == "failed" and job["error"]["type"] == "Interrupted"
+
+
+def test_old_finished_jobs_are_pruned_on_restart(tmp_path) -> None:
+    path = str(tmp_path / "jobs.sqlite")
+    s = JobStore(path)
+    s.create("ancient", (datetime.now(tz=UTC) - timedelta(days=40)).isoformat())
+    s.finish("ancient", "done", result=[])
+    assert JobStore(path).get("ancient") is None  # older than retention -> pruned at startup
+
+
+def test_screen_request_and_criteria_default_to_a_timeout() -> None:
+    from wheel_screener.api.schemas import ScreenRequest
+
+    assert ScreenRequest().timeout_seconds == 600.0
+    assert ScreenRequest().to_criteria().max_runtime_seconds == 600.0
+    assert ScreenCriteria().max_runtime_seconds == 600.0  # CLI paths (refresh-screen) bounded too
+
+
+def test_body_size_gate_rejects_oversized_post() -> None:
+    # a body over the 1MB cap is rejected before routing (declared Content-Length)
+    r = TestClient(app).post("/search", data={"ticker": "a" * 2_000_000})
+    assert r.status_code == 413
 
 
 def test_start_failure_does_not_wedge_runner(tmp_path) -> None:

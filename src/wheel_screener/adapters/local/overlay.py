@@ -45,5 +45,7 @@ def write_overlay(data_dir: str, metrics: dict[str, FundamentalMetrics]) -> int:
     schema = {"symbol": pl.Utf8, **{f: pl.Float64 for f in _FIELDS}}
     path = _path(data_dir)
     path.parent.mkdir(parents=True, exist_ok=True)
-    pl.DataFrame(rows, schema=schema).write_csv(path)
+    tmp = path.with_name(path.name + ".tmp")
+    pl.DataFrame(rows, schema=schema).write_csv(tmp)
+    os.replace(tmp, path)  # atomic swap — a concurrent reader never sees a half-written file
     return len(rows)

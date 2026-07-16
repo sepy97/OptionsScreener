@@ -15,12 +15,14 @@ import os
 import sqlite3
 import threading
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from wheel_screener.core.errors import ProviderError
 from wheel_screener.core.models import ScreenCriteria
 from wheel_screener.core.service import ScreenerService
+
+_JOB_RETENTION_DAYS = 30  # prune finished jobs older than this so the table stays bounded
 
 
 class JobBusyError(Exception):
@@ -51,6 +53,10 @@ class JobStore:
                 "UPDATE jobs SET status='failed', error=? WHERE status='running'",
                 (json.dumps({"type": "Interrupted", "detail": "interrupted by a restart"}),),
             )
+            # prune old finished jobs so the table can't grow without bound (ISO timestamps sort
+            # chronologically, so a string comparison is correct here)
+            cutoff = (datetime.now(tz=UTC) - timedelta(days=_JOB_RETENTION_DAYS)).isoformat()
+            conn.execute("DELETE FROM jobs WHERE created_at < ?", (cutoff,))
             conn.commit()
         finally:
             conn.close()
