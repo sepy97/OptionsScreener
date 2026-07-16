@@ -9,7 +9,11 @@ services:
     environment:
       # production posture (override anything from .env)
       CHAIN_SOURCE: alpaca # key/secret, no OAuth — the prod chain source
-      AUTH__REQUIRED: "true" # fail closed: refuse to start without AUTH__PASSWORD
+      # PUBLIC instance: the login gate is intentionally OFF. AUTH__PASSWORD="" forces it off even
+      # if .env sets one; AUTH__REQUIRED=false so the app doesn't fail-closed. To re-enable auth:
+      # delete these two lines and set AUTH__PASSWORD in .env.
+      AUTH__REQUIRED: "false"
+      AUTH__PASSWORD: ""
       # runtime paths -> the mounted volume
       DATA_DIR: /data/fundamentals
       EARNINGS_PATH: /data/earnings_calendar.csv

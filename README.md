@@ -208,9 +208,10 @@ in [docs/TODO.md](docs/TODO.md).
 
 ## Status
 
-**v1.0.0 — deployed.** Live in production at **steadybull.net** — Dockerized (app + Caddy auto-TLS)
-on a DigitalOcean droplet, behind an HTTP Basic-Auth gate (fail-closed), with **Alpaca** as the
-chain source (key/secret, no OAuth). The pipeline: local fundamentals → Alpaca (or Schwab) chains →
+**Deployed.** Live in production at **steadybull.net** — Dockerized (app + Caddy auto-TLS)
+on a DigitalOcean droplet, with **Alpaca** as the chain source (key/secret, no OAuth). An optional
+HTTP Basic-Auth gate (fail-closed) is built in but off for the public instance — one line in
+`docker-compose.yml` re-enables it. The pipeline: local fundamentals → Alpaca (or Schwab) chains →
 ranked CSP shortlist, with the earnings blackout, conservative bid-based yields, an **absolute
 financial-strength rating** (0–100, shown beside a peer percentile), and a strength×yield ranking.
 A server-rendered **web UI** (FastAPI + HTMX) runs, cancels, and displays screens with live progress,
