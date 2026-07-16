@@ -53,7 +53,8 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy over SSH (droplet checks out the tag + rebuilds)
+      - name: Deploy over SSH (capture current ref, checkout tag, rebuild)
+        id: deploy
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
@@ -64,9 +65,14 @@ jobs:
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          # REF is validated as a strict vX.Y.Z tag above, so it's safe to interpolate here
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
-            "set -e; cd /srv/steadybull && git fetch --tags --force && git checkout '$REF' && docker compose up -d --build"
+          SSH="ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes $DEPLOY_USER@$DEPLOY_HOST"
+          # remember the currently-deployed commit so a failed deploy can roll back to it
+          prev=$($SSH "git -C /srv/steadybull rev-parse HEAD")
+          echo "prev=$prev" >> "$GITHUB_OUTPUT"
+          echo "current deployed ref: $prev"
+          # REF is validated as a strict vX.Y.Z tag above, so it's safe to interpolate here.
+          # caddy reload picks up any Caddyfile change (bind-mounted, so a rebuild alone won't).
+          $SSH "set -e; cd /srv/steadybull; git fetch --tags --force; git checkout '$REF'; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
 
       - name: Verify public health
         run: |
@@ -76,4 +82,22 @@ jobs:
             fi
             echo "waiting for the app to come up... ($i/40)"; sleep 5
           done
-          echo "::error::health check failed after deploy"; exit 1
+          echo "::error::health check failed after deploying ${{ steps.t.outputs.ref }}"; exit 1
+
+      - name: Auto-rollback to the previous ref on failure
+        if: failure() && steps.deploy.outputs.prev != ''
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          PREV: ${{ steps.deploy.outputs.prev }}
+        run: |
+          SSH="ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes $DEPLOY_USER@$DEPLOY_HOST"
+          echo "::warning::deploy unhealthy — rolling back to $PREV"
+          $SSH "set -e; cd /srv/steadybull; git checkout '$PREV'; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
+          for i in $(seq 1 40); do
+            if curl -fsS https://steadybull.net/health | grep -q '"status"'; then
+              echo "rolled back to $PREV and healthy"; exit 0
+            fi
+            echo "waiting after rollback... ($i/40)"; sleep 5
+          done
+          echo "::error::rollback health check ALSO failed — manual intervention needed"; exit 1

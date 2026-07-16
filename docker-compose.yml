@@ -5,6 +5,10 @@ services:
     build: .
     image: wheel-screener:latest
     restart: unless-stopped
+    # bound the app so a runaway (OOM) can't take the whole 2GB box (and Caddy) down with it —
+    # it gets killed + restarted (unless-stopped has backoff) while Caddy stays up. Generous enough
+    # for the normal ~512MB + a refresh-screen exec double-load; swap (memswap default 2x) backs it.
+    mem_limit: 1700m
     env_file: .env # secrets: AUTH__PASSWORD, ALPACA__API_KEY/API_SECRET, FMP__API_KEY, ...
     environment:
       # production posture (override anything from .env)
