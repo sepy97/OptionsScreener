@@ -1,0 +1,79 @@
+name: Deploy
+
+# Deploys a released version to the droplet. Fires automatically when a vX.Y.Z tag is pushed, and
+# can be run manually (workflow_dispatch) against any existing tag — e.g. to test or roll back.
+# Secrets required: DEPLOY_SSH_KEY (private key authorized on the droplet), DEPLOY_HOST, DEPLOY_USER.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Version tag to deploy (e.g. v1.0.0)"
+        required: true
+
+concurrency:
+  group: deploy-steadybull
+  cancel-in-progress: false # never interrupt an in-flight deploy
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve target tag
+        id: t
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ref='${{ inputs.ref }}'
+          else
+            ref='${{ github.ref_name }}'
+          fi
+          # accept only a strict vX.Y.Z tag — this value is later interpolated into a remote command
+          case "$ref" in
+            v[0-9]*.[0-9]*.[0-9]*) : ;;
+            *) echo "::error::refusing to deploy non-release ref '$ref'"; exit 1 ;;
+          esac
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.t.outputs.ref }}
+
+      - name: Guard — tag must match the code version
+        run: |
+          tag='${{ steps.t.outputs.ref }}'
+          code="v$(sed -n 's/^__version__ = "\(.*\)"/\1/p' src/wheel_screener/__init__.py)"
+          echo "tag=$tag  code=$code"
+          if [ "$tag" != "$code" ]; then
+            echo "::error::tag $tag does not match code version $code — refusing to deploy"
+            exit 1
+          fi
+
+      - name: Deploy over SSH (droplet checks out the tag + rebuilds)
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          REF: ${{ steps.t.outputs.ref }}
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          # REF is validated as a strict vX.Y.Z tag above, so it's safe to interpolate here
+          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes "$DEPLOY_USER@$DEPLOY_HOST" \
+            "set -e; cd /srv/steadybull && git fetch --tags --force && git checkout '$REF' && docker compose up -d --build"
+
+      - name: Verify public health
+        run: |
+          for i in $(seq 1 40); do
+            if curl -fsS https://steadybull.net/health | grep -q '"status"'; then
+              echo "deploy healthy:"; curl -s https://steadybull.net/health; echo; exit 0
+            fi
+            echo "waiting for the app to come up... ($i/40)"; sleep 5
+          done
+          echo "::error::health check failed after deploy"; exit 1
