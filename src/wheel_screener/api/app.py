@@ -395,17 +395,25 @@ def cancel_screen(
 
 
 @app.get("/")
-def dashboard(request: Request, runner: JobRunner = Depends(get_job_runner)):
+def screener_page(request: Request, runner: JobRunner = Depends(get_job_runner)):
+    """The Screener tab (home): the run form + the latest precomputed results."""
     latest = runner.store.latest_done()
     age, stale = _humanize_age(latest["created_at"]) if latest else ("", False)
     return templates.TemplateResponse(
-        request, "dashboard.html",
+        request, "screener.html",
         {
+            "active_tab": "screener",
             "defaults": ScreenRequest(), "latest": latest, "latest_age": age,
             "latest_stale": stale,
             "summary": _results_summary(latest["result"] if latest else None),
         },
     )
+
+
+@app.get("/search")
+def search_page(request: Request):
+    """The Search tab: the single-ticker lookup form (results load via POST /search)."""
+    return templates.TemplateResponse(request, "search.html", {"active_tab": "search"})
 
 
 def _search(service: ScreenerService, ticker: str, top_n: int, min_dte: int, max_dte: int,

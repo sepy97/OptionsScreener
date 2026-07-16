@@ -37,6 +37,16 @@ body { background: #f5f7f9; -webkit-font-smoothing: antialiased; }
 .brand-mark { width: 1.15em; height: 1.15em; }
 .brand-sub { font-size: 0.875rem; color: var(--pico-muted-color); }
 
+/* --- primary nav: Screener | Search tabs --- */
+.app-nav { background: #fff; border-bottom: 1px solid var(--border); }
+.app-nav__inner { display: flex; gap: 0.25rem; }
+.nav-tab {
+  padding: 0.7rem 1rem; font-weight: 600; font-size: 0.95rem; text-decoration: none;
+  color: var(--pico-muted-color); border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.nav-tab:hover { color: var(--wheel-accent); }
+.nav-tab.active { color: var(--wheel-accent-strong); border-bottom-color: var(--wheel-accent); }
+
 /* --- layout / cards --- */
 main.container { max-width: min(1440px, calc(100vw - 2rem)); }   /* wide enough for the full table */
 main.container > article, main.container > section { margin-bottom: 1rem; }
