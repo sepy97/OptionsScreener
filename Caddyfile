@@ -3,7 +3,12 @@
 # global block (`{ email you@example.com }`) to get expiry notices.
 steadybull.net, www.steadybull.net {
 	encode zstd gzip
-	reverse_proxy app:8000
+	# retry a failed dial for up to 20s so a request during the app's cold-start store-warm
+	# waits and succeeds instead of returning a 502 (the app binds :8000 only after warming).
+	reverse_proxy app:8000 {
+		lb_try_duration 20s
+		lb_try_interval 500ms
+	}
 	header {
 		Strict-Transport-Security "max-age=31536000;"
 		X-Content-Type-Options nosniff
