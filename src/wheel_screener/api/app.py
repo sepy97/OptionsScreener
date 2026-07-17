@@ -13,6 +13,7 @@ import base64
 import csv
 import io
 import logging
+import re
 import secrets
 import time
 from contextlib import asynccontextmanager
@@ -226,6 +227,45 @@ def _usd(v: object) -> str:
 
 
 templates.env.filters["usd"] = _usd
+
+
+# The pipeline logs one stage line each (captured into job['progress']); we recover the funnel
+# counts from those strings so a finished screen can show Universe -> ... -> Candidates, with no
+# pipeline instrumentation. %d formatting means no thousands commas, so \d+ matches cleanly.
+_FUNNEL_STAGES = (
+    ("Universe", re.compile(r"^universe: (\d+) names")),
+    ("Fundamentals", re.compile(r"^fundamentals: (\d+)/")),
+    ("Chains", re.compile(r"^chains: (\d+)/")),
+)
+
+
+def _funnel(job: object) -> list[dict]:
+    """Stage counts for a finished screen, parsed from its captured log lines + result length.
+    Returns [] when the upstream stage lines aren't present (partial/legacy run) so the funnel is
+    simply omitted rather than shown half-empty."""
+    if not isinstance(job, dict):
+        return []
+    counts: dict[str, int] = {}
+    for line in job.get("progress") or []:
+        for label, pattern in _FUNNEL_STAGES:
+            m = pattern.match(str(line))
+            if m:
+                counts[label] = int(m.group(1))  # last occurrence wins (survives a retry)
+    if "Universe" not in counts:
+        return []
+    result = job.get("result")
+    if result is not None:
+        counts["Candidates"] = len(result)
+    order = [label for label, _ in _FUNNEL_STAGES] + ["Candidates"]
+    top = counts["Universe"] or 1
+    return [
+        {"label": label, "count": counts[label], "pct": round(100 * counts[label] / top, 1)}
+        for label in order
+        if label in counts
+    ]
+
+
+templates.env.filters["funnel"] = _funnel
 
 
 def _opt_float(raw: str) -> float | None:

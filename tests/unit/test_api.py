@@ -604,6 +604,40 @@ def test_results_summary_and_emphasis(tmp_path) -> None:
     assert "$80.00" in r.text  # strike rendered as currency
 
 
+_FUNNEL_LOGS = [
+    "universe: 1842 names ($20-200, nasdaq/nyse)",
+    "fundamentals: 312/1842 passed gates · 5 blacked out (earnings ≤35d) · top 150 kept",
+    "chains: 150/150 survivors returned a chain",
+]
+
+
+def test_funnel_parses_stage_counts() -> None:
+    from wheel_screener.api.app import _funnel
+
+    stages = _funnel({"progress": _FUNNEL_LOGS, "result": [{"symbol": "AAA"}] * 28})
+    assert [s["label"] for s in stages] == ["Universe", "Fundamentals", "Chains", "Candidates"]
+    assert [s["count"] for s in stages] == [1842, 312, 150, 28]
+    assert stages[0]["pct"] == 100.0 and stages[-1]["pct"] == round(100 * 28 / 1842, 1)
+    # no universe line -> no funnel; non-dict -> no funnel
+    assert _funnel({"progress": ["chains: 5/5 survivors returned a chain"], "result": []}) == []
+    assert _funnel(None) == []
+
+
+def test_results_render_funnel_from_progress(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.set_progress("j", _FUNNEL_LOGS)
+    runner.store.finish("j", "done", result=[_candidate("AAA").model_dump(mode="json")])
+    r = _client(runner).get("/runs/j/progress")  # done -> _results.html
+    assert r.status_code == 200 and "funnel-stage" in r.text
+    assert "Universe" in r.text and "1,842" in r.text and "Candidates" in r.text
+    # a run with no stage logs (legacy/partial) shows no funnel, just the table
+    runner.store.create("j2", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j2", "done", result=[_candidate("AAA").model_dump(mode="json")])
+    r2 = _client(runner).get("/runs/j2/progress")
+    assert r2.status_code == 200 and "funnel-stage" not in r2.text
+
+
 def test_export_csv(tmp_path) -> None:
     runner = _runner(_FakeService(), tmp_path)
     _done_job(runner, _candidate("AAA"))
