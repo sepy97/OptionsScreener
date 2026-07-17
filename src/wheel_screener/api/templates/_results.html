@@ -25,6 +25,18 @@
     <small class="results-hint">click a symbol for detail · click a column to sort</small>
     {% endif %}
   </header>
+  {% set stages = job|funnel %}
+  {% if stages %}
+  <div class="funnel" aria-label="Screen funnel — how the universe narrowed to candidates">
+    {% for s in stages %}
+    <div class="funnel-stage">
+      <span class="funnel-count">{{ s.count|usd }}</span>
+      <span class="funnel-label">{{ s.label }}</span>
+      <span class="funnel-bar"><i style="width: {{ s.pct }}%"></i></span>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
   {% if job.result %}
   <figure>
     <table>
