@@ -1,29 +1,59 @@
 {% import "_icons.html" as icon %}
 {% set k = c.contract %}
-{# default(none): old stored snapshots predate these fields, so the key may be absent #}
+{# default(none)/default([]): old stored snapshots predate these fields, so the key may be absent #}
 {% set fs = c.fundamental_score|default(none) %}
 {% set pp = c.peer_percentile|default(none) %}
+{% set notes = c.notes|default([], true) %}
+{% set und = k.underlying_price %}
+{# put moneyness in %: negative = OTM (strike below spot, the safe zone), positive = ITM (assignment
+   risk). Guard und truthiness so a 0/None underlying can't divide-by-zero. #}
+{% set mny = ((k.strike - und) / und * 100) if (und is not none and und) else none %}
+{# earnings on/before expiry is the one real risk flag. next_earnings/expiration are ISO strings here
+   (the route passes the stored dict), and ISO date strings compare correctly lexicographically. #}
+{% set earn_warn = c.next_earnings and c.next_earnings <= k.expiration %}
 <tr class="detail">
   <td colspan="13">
     <div class="detail">
       <a href="#" class="detail-close" onclick="this.closest('tr').remove();return false;"
          aria-label="close">{{ icon.close() }}</a>
-      <strong>{{ c.symbol }}</strong> &middot; {{ k.option_symbol }} (put)
-      <ul>
-        <li>Strike ${{ k.strike|num2 }} &middot; exp {{ k.expiration }} ({{ k.dte }} DTE)</li>
-        <li>Bid ${{ k.bid|num2 }} / Ask ${{ k.ask|num2 }} / Mid ${{ k.mid|num2 }}{% if k.spread_pct is not none %}
-            &middot; spread {{ "%.1f%%"|format(k.spread_pct * 100) }}{% endif %}</li>
-        <li>Δ {{ "%.3f"|format(k.delta) if k.delta is not none else "—" }}
-            &middot; IV {{ "%.0f%%"|format(k.implied_volatility * 100) if k.implied_volatility is not none else "—" }}
-            &middot; OI {{ k.open_interest if k.open_interest is not none else "—" }}</li>
-        <li>Premium ${{ c.premium|num2 }} &middot; collateral ${{ c.collateral|num2 }}
-            &middot; annualized yield {{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</li>
-        <li>Strength {{ (fs * 100)|round|int ~ "/100" if fs is not none else "—" }}
-            &middot; peers {{ (pp * 100)|round|int ~ "%" if pp is not none else "—" }}
-            &middot; blended score {{ "%.2f"|format(c.score) if c.score is not none else "—" }}
-            {% if c.next_earnings %}&middot; next earnings {{ c.next_earnings }}{% endif %}
-            {% if c.has_weeklys %}&middot; weeklys{% endif %}</li>
-      </ul>
+      <strong>{{ c.symbol }}</strong> <span class="detail-sym">{{ k.option_symbol }} &middot; put</span>
+      {# row-level flags: earnings risk (amber when on/before expiry) + quiet notes otherwise #}
+      {% if c.next_earnings or c.has_weeklys or notes %}
+      <div class="detail-flags">
+        {% if earn_warn %}
+        <span class="badge">{{ icon.warning() }} Earnings {{ c.next_earnings }} &middot; before expiry</span>
+        {% elif c.next_earnings %}
+        <span class="detail-note">Earnings {{ c.next_earnings }} &middot; after expiry</span>
+        {% endif %}
+        {% if c.has_weeklys %}<span class="detail-note">weeklys</span>{% endif %}
+        {% for n in notes %}<span class="detail-note">{{ n }}</span>{% endfor %}
+      </div>
+      {% endif %}
+      <dl class="card-grid">
+        <dt>Contract</dt>
+        <dd><b>${{ k.strike|num2 }}</b> strike &middot; {{ k.expiration }} &middot; {{ k.dte }} DTE
+          {%- if mny is not none %} &middot;
+            {%- if mny <= -0.05 %} <span class="fund-ok">{{ "%.1f%% OTM"|format(-mny) }}</span>
+            {%- elif mny >= 0.05 %} <span class="fund-bad">{{ "%.1f%% ITM"|format(mny) }}</span>
+            {%- else %} ATM{% endif %}{% endif %}</dd>
+
+        <dt>Market</dt>
+        <dd>bid ${{ k.bid|num2 }} / ask ${{ k.ask|num2 }} / mid ${{ k.mid|num2 }}
+          &middot; spread {{ "%.1f%%"|format(k.spread_pct * 100) if k.spread_pct is not none else "—" }}
+          &middot; OI {{ k.open_interest|usd if k.open_interest is not none else "—" }}
+          {%- if k.delta is not none %} &middot; &Delta; {{ "%.2f"|format(k.delta) }}{% endif %}
+          {%- if k.implied_volatility is not none %} &middot; IV {{ "%.0f%%"|format(k.implied_volatility * 100) }}{% endif %}</dd>
+
+        <dt>Return</dt>
+        <dd>premium <b>${{ c.premium|num2 }}</b>
+          &middot; yield {% if c.annualized_yield is not none %}<span class="{{ 'y-hi' if c.annualized_yield >= 0.25 else ('y-mid' if c.annualized_yield >= 0.15 else 'y-lo') }}">{{ "%.1f%%"|format(c.annualized_yield * 100) }}</span>{% else %}—{% endif %}
+          &middot; collateral {% if c.collateral is not none %}${{ c.collateral|usd }}{% else %}—{% endif %}</dd>
+
+        <dt>Fundamentals</dt>
+        <dd><b>{% if fs is not none %}{{ (fs * 100)|round|int }}/100{% else %}—{% endif %}</b> strength
+          &middot; {% if pp is not none %}{{ (pp * 100)|round|int }}%{% else %}—{% endif %} peers
+          &middot; score {% if c.score is not none %}<span class="{{ 'sc-hi' if c.score >= 0.66 else ('sc-mid' if c.score >= 0.40 else 'sc-lo') }}">{{ "%.2f"|format(c.score) }}</span>{% else %}—{% endif %}</dd>
+      </dl>
     </div>
   </td>
 </tr>

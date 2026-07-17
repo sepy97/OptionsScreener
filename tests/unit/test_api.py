@@ -575,9 +575,11 @@ def test_results_render_legacy_snapshot_missing_new_fields(tmp_path) -> None:
     runner.store.finish("j", "done", result=[legacy])
     r = _client(runner).get("/runs/j/results")
     assert r.status_code == 200 and "AAA" in r.text and "—" in r.text  # graceful blanks
-    # the detail fragment for the same legacy row must not crash either
+    # the detail fragment for the same legacy row must not crash either, and renders the card with
+    # the absent strength/peers as graceful blanks (not "None/100")
     d = _client(runner).get("/runs/j/candidates/AAA")
-    assert d.status_code == 200
+    assert d.status_code == 200 and "card-grid" in d.text and "—" in d.text
+    assert "/100" not in d.text  # missing strength shows a blank, not a partial value
 
 
 def test_num2_filter_rounds_floats() -> None:
@@ -629,7 +631,51 @@ def test_candidate_detail_fragment(tmp_path) -> None:
     # a detail ROW (inserted after the data row via afterend), with a close control
     assert r.status_code == 200 and "<tr" in r.text and "detail-close" in r.text
     assert "AAA80P" in r.text and "collateral" in r.text.lower()
+    # structured card (#101): a dl grid with the four mental-model sections, one valid table row
+    assert "card-grid" in r.text
+    for label in ("Contract", "Market", "Return", "Fundamentals"):
+        assert f"<dt>{label}</dt>" in r.text
+    assert r.text.count("</tr>") == 1
     assert client.get("/runs/j/candidates/NOPE").status_code == 404
+
+
+def test_candidate_card_earnings_flag(tmp_path) -> None:
+    from datetime import date
+
+    runner = _runner(_FakeService(), tmp_path)
+    # _candidate's contract expires 2026-08-15; earnings before that is the real risk (amber badge),
+    # earnings after is a quiet note.
+    before = _candidate("AAA").model_copy(update={"next_earnings": date(2026, 8, 10)})
+    after = _candidate("BBB").model_copy(update={"next_earnings": date(2026, 9, 1)})
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done", result=[c.model_dump(mode="json") for c in (before, after)])
+    client = _client(runner)
+    rb = client.get("/runs/j/candidates/AAA").text
+    assert "before expiry" in rb and "badge" in rb          # earnings-before-expiry risk flag
+    ra = client.get("/runs/j/candidates/BBB").text
+    assert "after expiry" in ra and "detail-note" in ra     # quiet note, not the amber risk badge
+
+
+def test_candidate_card_moneyness(tmp_path) -> None:
+    # _candidate's strike is 80; classify vs the underlying and guard divide-by-zero.
+    def _spot(sym, price):
+        c = _candidate(sym)
+        k = c.contract.model_copy(update={"underlying_price": price})
+        return c.model_copy(update={"contract": k})
+
+    runner = _runner(_FakeService(), tmp_path)
+    otm = _spot("AAA", 100.0)   # strike 80 < spot -> put OTM (the safe zone)
+    itm = _spot("BBB", 60.0)    # strike 80 > spot -> put ITM (assignment risk)
+    zero = _spot("CCC", 0.0)    # underlying 0 must not divide-by-zero
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done", result=[c.model_dump(mode="json") for c in (otm, itm, zero)])
+    client = _client(runner)
+    ao = client.get("/runs/j/candidates/AAA").text
+    assert "OTM" in ao and "fund-ok" in ao
+    ai = client.get("/runs/j/candidates/BBB").text
+    assert "ITM" in ai and "fund-bad" in ai
+    az = client.get("/runs/j/candidates/CCC")  # guarded: no divide-by-zero, no moneyness shown
+    assert az.status_code == 200 and "OTM" not in az.text and "ITM" not in az.text
 
 
 def test_results_table_symbol_click_expands_detail(tmp_path) -> None:

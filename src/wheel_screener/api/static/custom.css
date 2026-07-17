@@ -163,8 +163,18 @@ tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); 
   font-size: 0.875rem; background: var(--sunken); white-space: normal;   /* override table nowrap */
   border-left: 3px solid var(--wheel-accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
-.detail ul { margin: 0.4rem 0 0; padding: 0; list-style: none; }
-.detail li { padding: 0.15rem 0; }
+.detail-sym { color: var(--pico-muted-color); font-size: 0.8rem; }
+.detail-flags { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.6rem; margin-top: 0.5rem; }
+/* quiet chips for non-risk flags (earnings-after-expiry, weeklys, notes) — color is reserved for the
+   one real risk, earnings-before-expiry, which uses the amber .badge */
+.detail-note { font-size: 0.75rem; color: var(--pico-muted-color); }
+/* label|value definition grid — the card body (reuses tier colors + badges from the table) */
+.card-grid {
+  display: grid; grid-template-columns: max-content 1fr;
+  align-items: baseline; gap: 0.25rem 0.85rem; margin: 0.5rem 0 0;
+}
+.card-grid dt { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.02em; font-weight: 600; color: var(--pico-muted-color); }
+.card-grid dd { margin: 0; font-variant-numeric: tabular-nums; }
 .detail-close {
   position: absolute; top: 0.5rem; right: 0.5rem;
   display: inline-flex; align-items: center; justify-content: center;
