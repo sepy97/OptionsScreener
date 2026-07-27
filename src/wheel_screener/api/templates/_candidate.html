@@ -8,9 +8,12 @@
 {# put moneyness in %: negative = OTM (strike below spot, the safe zone), positive = ITM (assignment
    risk). Guard und truthiness so a 0/None underlying can't divide-by-zero. #}
 {% set mny = ((k.strike - und) / und * 100) if (und is not none and und) else none %}
-{# earnings on/before expiry is the one real risk flag. next_earnings/expiration are ISO strings here
-   (the route passes the stored dict), and ISO date strings compare correctly lexicographically. #}
-{% set earn_warn = c.next_earnings and c.next_earnings <= k.expiration %}
+{# earnings on/before expiry is the one real risk flag. The engine's verdict (clean/spans/unknown)
+   is authoritative — it accounts for the drift buffer — but old stored snapshots predate the field,
+   so fall back to comparing the dates directly (ISO strings compare correctly here). #}
+{% set earn_status = c.earnings_status|default(none) %}
+{% set earn_warn = earn_status == 'spans' or (earn_status is none and c.next_earnings and c.next_earnings <= k.expiration) %}
+{% set earn_unknown = earn_status == 'unknown' %}
 <tr class="detail">
   <td colspan="13">
     <div class="detail">
@@ -18,10 +21,12 @@
          aria-label="close">{{ icon.close() }}</a>
       <strong>{{ c.symbol }}</strong> <span class="detail-sym">{{ k.option_symbol }} &middot; put</span>
       {# row-level flags: earnings risk (amber when on/before expiry) + quiet notes otherwise #}
-      {% if c.next_earnings or c.has_weeklys or notes %}
+      {% if c.next_earnings or earn_unknown or c.has_weeklys or notes %}
       <div class="detail-flags">
         {% if earn_warn %}
         <span class="badge">{{ icon.warning() }} Earnings {{ c.next_earnings }} &middot; before expiry</span>
+        {% elif earn_unknown %}
+        <span class="badge" title="no earnings date could be established — treat as event risk">{{ icon.warning() }} Earnings date unknown</span>
         {% elif c.next_earnings %}
         <span class="detail-note">Earnings {{ c.next_earnings }} &middot; after expiry</span>
         {% endif %}

@@ -5,6 +5,7 @@ from datetime import date, timedelta
 from wheel_screener.core.models import (
     CandidateResult,
     ChainSnapshot,
+    EarningsStatus,
     FundamentalMetrics,
     OptionContract,
     OptionType,
@@ -123,6 +124,14 @@ def _good() -> FundamentalMetrics:
 
 
 class _FakeFundamentals:
+    """``earnings`` maps symbol -> next report. Note the default is a date far past any test's
+    DTE window, NOT an empty calendar: an empty calendar now means "unknown", which is excluded
+    by default (fail-closed), so a fake that returns {} would filter every candidate away."""
+
+    def __init__(self, earnings: dict[str, date] | None = None) -> None:
+        self.earnings = {"AAA": date(2030, 1, 1)} if earnings is None else earnings
+        self.symbol_lookups: list[str] = []
+
     def screen_universe(self, criteria):
         return [Underlying(symbol="AAA", sector="Technology", market_cap=5e9)]
 
@@ -133,7 +142,12 @@ class _FakeFundamentals:
         return {"AAA": _good()}
 
     def earnings_calendar(self, start, end):
-        return {}
+        return {s: d for s, d in self.earnings.items() if start <= d <= end}
+
+    def next_earnings(self, symbol, on_or_after):
+        self.symbol_lookups.append(symbol)
+        when = self.earnings.get(symbol)
+        return when if when is not None and when >= on_or_after else None
 
 
 class _FakeChains:
@@ -171,7 +185,7 @@ def test_search_ticker_returns_top_puts_with_context():
     assert r.peer_percentile is not None  # AAA is in the ranked universe -> has a percentile
     assert all(c.fundamental_score == r.fundamental_score for c in r.puts)
     assert all(c.peer_percentile == r.peer_percentile for c in r.puts)
-    assert r.next_earnings is None
+    assert r.next_earnings == date(2030, 1, 1) and r.earnings_known
 
 
 def test_run_screen_end_to_end():
@@ -186,3 +200,81 @@ def test_run_screen_end_to_end():
     assert r.annualized_yield and r.annualized_yield > 0
     assert r.collateral == 9000.0
     assert r.fundamental_score is not None
+    assert r.next_earnings == date(2030, 1, 1)  # stamped onto the row, not silently dropped
+    assert r.earnings_status is EarningsStatus.CLEAN
+
+
+# --- the earnings blackout: no short put may span a report (issue #113) ------------------
+
+def test_run_screen_drops_a_contract_whose_life_spans_earnings():
+    """The reported failure, pinned (RDDT: a 27-DTE expiry offered while reporting 22 days out).
+    With the calendar consulted per contract, that expiry cannot reach the results table."""
+    chain = _chain([_put(150, -0.27, 27, 7.51)])  # expires _BASE + 27d
+    fundamentals = _FakeFundamentals({"AAA": _BASE + timedelta(days=18)})  # reports before it
+    service = ScreenerService(fundamentals=fundamentals, chains=_FakeChains(chain))
+    crit = ScreenCriteria(top_n=10, min_dte=7, max_dte=45)
+    assert service.run_screen(crit, _BASE) == []
+
+
+def test_run_screen_picks_the_expiry_that_lands_before_the_report():
+    """A report inside the DTE window must not veto the whole name — the clean nearer expiry is
+    still exactly the trade a put seller wants, and the old name-level blackout threw it away."""
+    chain = _chain([
+        _put(90, -0.20, 14, 1.0),  # expires before the report
+        _put(88, -0.20, 35, 3.0),  # spans it — and pays far more, so yield alone would pick it
+    ])
+    fundamentals = _FakeFundamentals({"AAA": _BASE + timedelta(days=28)})
+    service = ScreenerService(fundamentals=fundamentals, chains=_FakeChains(chain))
+    results = service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE)
+    assert len(results) == 1
+    assert results[0].contract.dte == 14  # the clean expiry, despite the richer one spanning
+    assert results[0].earnings_status is EarningsStatus.CLEAN
+
+
+def test_run_screen_excludes_a_name_with_no_known_earnings_date():
+    """Fail closed: a symbol absent from the calendar is a data gap, not a name that never
+    reports — treating the two alike is what let this ship silently."""
+    chain = _chain([_put(90, -0.20, 27, 1.9)])
+    service = ScreenerService(fundamentals=_FakeFundamentals({}), chains=_FakeChains(chain))
+    crit = ScreenCriteria(top_n=10, min_dte=7, max_dte=45)
+    assert service.run_screen(crit, _BASE) == []
+    # ...and it is kept, flagged, when the operator opts out of the strict policy
+    lenient = crit.model_copy(update={"exclude_unknown_earnings": False})
+    results = service.run_screen(lenient, _BASE)
+    assert len(results) == 1 and results[0].earnings_status is EarningsStatus.UNKNOWN
+
+
+def test_run_screen_resolves_calendar_gaps_per_symbol_before_selecting():
+    """A hole in the bulk calendar is settled against the authoritative per-symbol endpoint —
+    so a coverage gap neither hides a report nor discards a good name."""
+    chain = _chain([_put(90, -0.20, 27, 1.9)])
+    fundamentals = _FakeFundamentals({"AAA": _BASE + timedelta(days=18)})
+    fundamentals.earnings_calendar = lambda start, end: {}  # bulk calendar missing AAA entirely
+    service = ScreenerService(fundamentals=fundamentals, chains=_FakeChains(chain))
+    assert service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE) == []
+    assert fundamentals.symbol_lookups == ["AAA"]  # asked once, authoritatively
+
+
+def test_earnings_buffer_covers_a_date_that_drifts_earlier():
+    """Published dates move. A report two days after expiry is close enough that a drift would
+    put it inside the contract's life, so it counts as spanning."""
+    chain = _chain([_put(90, -0.20, 14, 1.0)])
+    fundamentals = _FakeFundamentals({"AAA": _BASE + timedelta(days=16)})  # 2 days after expiry
+    service = ScreenerService(fundamentals=fundamentals, chains=_FakeChains(chain))
+    crit = ScreenCriteria(top_n=10, min_dte=7, max_dte=45, earnings_buffer_days=2)
+    assert service.run_screen(crit, _BASE) == []
+    no_buffer = crit.model_copy(update={"earnings_buffer_days": 0})
+    assert len(service.run_screen(no_buffer, _BASE)) == 1
+
+
+def test_search_flags_earnings_expiries_without_hiding_them():
+    """Search is a research tool: a typed ticker shows its whole term structure, marked — an
+    empty table would read as 'no contracts' and hide the risk instead of showing it."""
+    chain = _chain([_put(90, -0.20, 14, 1.0), _put(88, -0.20, 35, 3.0)])
+    fundamentals = _FakeFundamentals({"AAA": _BASE + timedelta(days=28)})
+    service = ScreenerService(fundamentals=fundamentals, chains=_FakeChains(chain))
+    r = service.search_ticker("AAA", ScreenCriteria(min_dte=7, max_dte=45), _BASE, n=5)
+    assert [c.contract.dte for c in r.puts] == [14, 35]  # nothing hidden
+    assert [c.earnings_status for c in r.puts] == [EarningsStatus.CLEAN, EarningsStatus.SPANS]
+    assert r.next_earnings == _BASE + timedelta(days=28)
+    assert fundamentals.symbol_lookups == ["AAA"]  # one per-symbol call, not a market-wide pull

@@ -14,7 +14,7 @@ import typer
 from wheel_screener.composition import build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import AuthExpiredError, ProviderError, RateLimitedError
-from wheel_screener.core.models import ScreenCriteria, Underlying
+from wheel_screener.core.models import EarningsStatus, ScreenCriteria, Underlying
 from wheel_screener.logging_config import configure_logging
 
 _F = TypeVar("_F", bound=Callable[..., object])
@@ -156,25 +156,31 @@ def _write_candidates_csv(results, path: str) -> None:
 def refresh_earnings(
     days: int = typer.Option(120, help="Days ahead to fetch earnings for."),
 ) -> None:
-    """Refresh the local earnings calendar from FMP (one cheap call) — powers the blackout."""
+    """Refresh the local earnings-calendar fallback from FMP — used when no API key is available
+    at screen time. (With a key, screens refresh the calendar live on every request.)
+
+    Fails loudly and leaves the previous file untouched rather than writing a truncated calendar:
+    a calendar missing near-term reporters disables the blackout without any visible symptom.
+    """
     from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
+    from wheel_screener.adapters.local.earnings import assert_near_term_coverage, write_calendar
 
     settings = Settings()
     if not settings.fmp.api_key.get_secret_value():
         typer.echo("error: set FMP__API_KEY in .env first.")
         raise typer.Exit(code=1)
     today = date.today()
-    calendar = FmpFundamentalsProvider(settings.fmp).earnings_calendar(
-        today, today + timedelta(days=days)
+    end = today + timedelta(days=days)
+    calendar = FmpFundamentalsProvider(settings.fmp).earnings_calendar(today, end)
+    assert_near_term_coverage(calendar, today)  # raises rather than clobber with a bad file
+    path = write_calendar(
+        settings.earnings_path, calendar, covers_from=today, covers_to=end, fetched=today
     )
-    path = Path(settings.earnings_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", newline="") as f:
-        writer = csv.writer(f)
-        writer.writerow(["symbol", "date"])
-        for symbol, when in sorted(calendar.items()):
-            writer.writerow([symbol, when.isoformat()])
-    typer.echo(f"Wrote {len(calendar)} symbols' next earnings to {path}")
+    soon = sum(1 for when in calendar.values() if when <= today + timedelta(days=21))
+    typer.echo(
+        f"Wrote {len(calendar)} symbols' next earnings to {path} "
+        f"(covers {today}..{end}; {soon} report within 21d)"
+    )
 
 
 @app.command("refresh-fundamentals")
@@ -237,7 +243,11 @@ def _print_search(r: object) -> None:
     strength = f" · strength {round(fs * 100)}/100" if fs is not None else ""
     pct = r.peer_percentile
     peers = f" · {pct:.2f} vs peers" if pct is not None else ""
-    earn = f" · next earnings {r.next_earnings}" if r.next_earnings else ""
+    earn = (
+        f" · next earnings {r.next_earnings}"
+        if r.next_earnings
+        else ("" if r.earnings_known else " · earnings date UNKNOWN")
+    )
     typer.echo(f"{r.symbol}: {len(r.puts)} sellable put(s) · gate {fund}{strength}{peers}{earn}")
     if not r.puts:
         typer.echo("  nothing in the DTE / delta / liquidity window.")
@@ -250,8 +260,7 @@ def _print_search(r: object) -> None:
         k = c.contract
         iv = f"{k.implied_volatility * 100:.0f}%" if k.implied_volatility is not None else "-"
         be = k.strike - (c.premium or 0.0)
-        earns_before = r.next_earnings and r.next_earnings <= k.expiration
-        flag = " <- earnings before exp" if earns_before else ""
+        flag = " <- earnings before exp" if c.earnings_status is EarningsStatus.SPANS else ""
         yld = (c.annualized_yield or 0.0) * 100
         typer.echo(
             f"  {k.strike:>7.2f} {k.expiration!s:>10} {k.dte:>4} {k.delta:>6.2f} {iv:>5} "

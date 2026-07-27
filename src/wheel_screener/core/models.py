@@ -33,6 +33,27 @@ class GreeksSource(StrEnum):
     UNAVAILABLE = "unavailable"
 
 
+class EarningsStatus(StrEnum):
+    """Whether a report lands inside a contract's life — the assignment-risk verdict.
+
+    Three states, not two: ``UNKNOWN`` is NOT ``CLEAN``. Every US equity reports ~4x/year, so a
+    missing calendar entry is far more likely a data gap than a genuine absence — conflating the
+    two is what let an earnings-spanning contract reach the results table (see issue #113).
+    """
+
+    CLEAN = "clean"  # next report lands after expiration — safe to sell
+    SPANS = "spans"  # report on/before expiration (+buffer) — the thing we exclude
+    UNKNOWN = "unknown"  # no date found; treated as unsafe under the default policy
+
+
+class EarningsPolicy(StrEnum):
+    """What to do with a contract whose life spans a report."""
+
+    EXCLUDE = "exclude"  # drop it (screen default — the point of the blackout)
+    FLAG = "flag"  # keep it, but mark it (search default — never silently hide a typed ticker)
+    OFF = "off"  # no earnings handling at all (escape hatch / offline)
+
+
 class ScreenCriteria(BaseModel):
     """Inputs to a screen run. Mirrors the target CSP/wheel trade profile."""
 
@@ -76,8 +97,22 @@ class ScreenCriteria(BaseModel):
     # wall-clock budget for the chain-pull stage (None = unbounded); past it, partial results.
     # Default 600s so a screen can't run forever and jam the single in-flight slot.
     max_runtime_seconds: float | None = 600.0
-    # earnings blackout (also our stand-in for "abnormal IV = event")
-    exclude_earnings_in_window: bool = True
+    # ── earnings blackout (also our stand-in for "abnormal IV = event") ──────────────────
+    # The rule: never hold a short put across a report. Enforced per CONTRACT (earnings on or
+    # before that expiry), not per name — so a name reporting after the near expiry stays
+    # sellable on it instead of being dropped wholesale.
+    earnings_policy: EarningsPolicy = EarningsPolicy.EXCLUDE
+    # Published dates drift (FMP marks unconfirmed rows with epsActual=null), and they drift
+    # earlier as often as later — so treat anything within N days after expiry as spanning.
+    earnings_buffer_days: int = 2
+    # How far ahead to load the calendar. Only the DTE window matters for the verdict; the wider
+    # horizon is what makes "no date found" mean "data gap" rather than "reports later" — a
+    # quarterly reporter with nothing in ~4 months is a coverage hole, not a clean name.
+    earnings_horizon_days: int = 120
+    # Fail closed: exclude a candidate whose earnings date we could not establish at all.
+    # (Unknowns are re-checked per symbol against the authoritative endpoint first, so this
+    # fires only on names that are genuinely missing everywhere.)
+    exclude_unknown_earnings: bool = True
 
 
 class FundamentalMetrics(BaseModel):
@@ -201,6 +236,9 @@ class CandidateResult(BaseModel):
     premium: float | None = None  # conservative credit (the bid)
     collateral: float | None = None
     next_earnings: date | None = None
+    # the verdict for THIS contract's expiry (not the name) — carried to the UI/CSV so a
+    # blackout miss is visible instead of silent
+    earnings_status: EarningsStatus = EarningsStatus.UNKNOWN
     has_weeklys: bool | None = None
     score: float | None = None
     notes: list[str] = Field(default_factory=list)

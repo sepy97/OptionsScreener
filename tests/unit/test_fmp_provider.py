@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import httpx
 import pytest
@@ -11,7 +11,7 @@ from wheel_screener.adapters.cache import DiskCache
 from wheel_screener.adapters.fmp.client import FmpClient
 from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
 from wheel_screener.config import FmpSettings
-from wheel_screener.core.errors import AuthExpiredError
+from wheel_screener.core.errors import AuthExpiredError, ProviderDataError
 from wheel_screener.core.models import ScreenCriteria
 
 BASE = "https://financialmodelingprep.com/stable"
@@ -137,28 +137,116 @@ def test_disk_cache_serves_across_clients(tmp_path) -> None:
     assert route.call_count == 1  # second client served from the on-disk cache
 
 
+def _dense_rows(frm: date, to: date, extra: list[dict] | None = None) -> list[dict]:
+    """A row on every day in [frm, to] — a realistic, fully-covering response."""
+    rows: list[dict] = []
+    day = frm
+    while day <= to:
+        rows.append({"symbol": f"D{day.isoformat()}", "date": day.isoformat()})
+        day += timedelta(days=1)
+    return rows + (extra or [])
+
+
 @respx.mock
 def test_earnings_calendar_parses() -> None:
-    respx.get(f"{BASE}/earnings-calendar").mock(return_value=httpx.Response(200, json=[
-        {"symbol": "AAA", "date": "2026-08-01"},
-        {"symbol": "AAA", "date": "2026-07-01"},
-        {"symbol": "BBB", "date": "bad"},
-    ]))
+    def handler(request):
+        frm = date.fromisoformat(request.url.params["from"])
+        to = date.fromisoformat(request.url.params["to"])
+        extra = [
+            {"symbol": "AAA", "date": "2026-08-01"},
+            {"symbol": "AAA", "date": "2026-07-01"},
+            {"symbol": "BBB", "date": "bad"},
+        ]
+        keep = [r for r in extra if frm.isoformat() <= r["date"] <= to.isoformat()]
+        return httpx.Response(200, json=_dense_rows(frm, to, keep))
+
+    respx.get(f"{BASE}/earnings-calendar").mock(side_effect=handler)
     earnings = _provider().earnings_calendar(date(2026, 6, 21), date(2026, 8, 5))
-    assert earnings == {"AAA": date(2026, 7, 1)}
+    assert earnings["AAA"] == date(2026, 7, 1)  # earliest upcoming wins
+    assert "BBB" not in earnings  # unparseable date dropped
 
 
 @respx.mock
 def test_earnings_calendar_splits_window_when_capped() -> None:
-    capped = [{"symbol": f"S{i}", "date": "2026-12-31"} for i in range(4000)]  # cap hit
-    near = [{"symbol": "AAA", "date": "2026-07-01"}]  # real near-term row
+    """A slice dense enough to hit the row cap is halved until it comes back complete."""
+    def handler(request):
+        frm = date.fromisoformat(request.url.params["from"])
+        to = date.fromisoformat(request.url.params["to"])
+        if (to - frm).days > 3:  # pretend anything wider than 4 days overflows the cap
+            return httpx.Response(200, json=[
+                {"symbol": f"S{i}", "date": to.isoformat()} for i in range(4000)
+            ])
+        return httpx.Response(200, json=_dense_rows(frm, to, [
+            {"symbol": "AAA", "date": "2026-07-01"}
+        ] if frm <= date(2026, 7, 1) <= to else []))
+
+    respx.get(f"{BASE}/earnings-calendar").mock(side_effect=handler)
+    cal = _provider().earnings_calendar(date(2026, 6, 22), date(2026, 8, 6))
+    assert cal.get("AAA") == date(2026, 7, 1)  # found only by splitting below the cap
+    assert "S0" not in cal  # capped rows are discarded, never treated as the answer
+
+
+@respx.mock
+def test_earnings_calendar_rejects_a_front_clipped_response() -> None:
+    """Issue #113: the endpoint answers a wide request with a right-anchored slice, dropping the
+    NEAR-TERM rows the blackout needs — and says nothing. A silently short calendar must raise,
+    because downstream every missing symbol reads as 'no earnings scheduled'."""
+    start = date(2026, 7, 25)
 
     def handler(request):
         frm = date.fromisoformat(request.url.params["from"])
         to = date.fromisoformat(request.url.params["to"])
-        return httpx.Response(200, json=capped if (to - frm).days > 15 else near)
+        clipped_from = max(frm, start + timedelta(days=30))  # first 30 days silently missing
+        return httpx.Response(200, json=_dense_rows(clipped_from, to) if clipped_from <= to else [])
 
     respx.get(f"{BASE}/earnings-calendar").mock(side_effect=handler)
-    cal = _provider().earnings_calendar(date(2026, 6, 22), date(2026, 8, 6))  # 45d -> must split
-    assert cal.get("AAA") == date(2026, 7, 1)  # found only by splitting below the cap
-    assert "S0" not in cal  # capped wide-window rows are discarded, not used
+    with pytest.raises(ProviderDataError, match="truncated"):
+        _provider().earnings_calendar(start, start + timedelta(days=45))
+
+
+@respx.mock
+def test_earnings_calendar_never_requests_a_window_past_the_upstream_limit() -> None:
+    """Ranges beyond the documented 3-month max get clamped upstream (silently), so we must
+    never issue one — the 120-day refresh is exactly how the near term went missing."""
+    seen: list[int] = []
+
+    def handler(request):
+        frm = date.fromisoformat(request.url.params["from"])
+        to = date.fromisoformat(request.url.params["to"])
+        seen.append((to - frm).days)
+        return httpx.Response(200, json=_dense_rows(frm, to))
+
+    respx.get(f"{BASE}/earnings-calendar").mock(side_effect=handler)
+    start = date(2026, 7, 25)
+    _provider().earnings_calendar(start, start + timedelta(days=120))
+    assert max(seen) <= 7  # every call is a small slice, nowhere near the 90-day clamp
+
+
+@respx.mock
+def test_next_earnings_uses_the_per_symbol_endpoint() -> None:
+    respx.get(f"{BASE}/earnings").mock(return_value=httpx.Response(200, json=[
+        {"symbol": "RDDT", "date": "2026-07-30", "epsActual": None},
+        {"symbol": "RDDT", "date": "2026-04-30", "epsActual": 1.01},  # already reported
+        {"symbol": "RDDT", "date": "2026-10-29", "epsActual": None},
+    ]))
+    assert _provider().next_earnings("RDDT", date(2026, 7, 25)) == date(2026, 7, 30)
+    assert _provider().next_earnings("RDDT", date(2026, 8, 1)) == date(2026, 10, 29)
+
+
+@respx.mock
+def test_earnings_calendar_is_never_served_from_cache() -> None:
+    """It must be current on every request: a cached calendar ages into a silent blackout hole."""
+    calls: list[str] = []
+
+    def handler(request):
+        calls.append(request.url.params["from"])
+        frm = date.fromisoformat(request.url.params["from"])
+        to = date.fromisoformat(request.url.params["to"])
+        return httpx.Response(200, json=_dense_rows(frm, to))
+
+    respx.get(f"{BASE}/earnings-calendar").mock(side_effect=handler)
+    provider = _provider()  # one provider = one client = one in-memory cache
+    provider.earnings_calendar(date(2026, 7, 25), date(2026, 8, 5))
+    first = len(calls)
+    provider.earnings_calendar(date(2026, 7, 25), date(2026, 8, 5))
+    assert len(calls) == first * 2, "second fetch was served from cache"

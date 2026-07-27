@@ -25,12 +25,14 @@ def _build_chains(settings: Settings) -> ChainProvider:
 
 def _build_fundamentals(settings: Settings) -> FundamentalsProvider:
     if settings.fundamentals_source == "local":
-        # earnings isn't in the bulk store: prefer the local calendar (refresh-earnings job);
-        # fall back to a live FMP call if a key is set; else the blackout is disabled.
-        if Path(settings.earnings_path).expanduser().exists():
-            earnings = LocalEarningsCalendar(settings.earnings_path)
-        elif settings.fmp.api_key.get_secret_value():
+        # Earnings isn't in the bulk store. Prefer LIVE FMP: the calendar is refreshed on every
+        # request, and dates get confirmed/moved daily — a nightly CSV snapshot silently goes
+        # stale, and every symbol it misses reads downstream as "no earnings" (issue #113).
+        # The local CSV remains the offline fallback (no key); it self-checks its own coverage.
+        if settings.fmp.api_key.get_secret_value():
             earnings = FmpFundamentalsProvider(settings.fmp)
+        elif Path(settings.earnings_path).expanduser().exists():
+            earnings = LocalEarningsCalendar(settings.earnings_path)
         else:
             earnings = None
         return LocalFundamentalsProvider(settings.data_dir, earnings_provider=earnings)

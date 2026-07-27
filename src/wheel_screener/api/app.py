@@ -201,6 +201,8 @@ _EXPORT_COLUMNS: list[tuple[str, object]] = [
     ("peer_percentile", lambda c: c.get("peer_percentile")),
     ("score", lambda c: c.get("score")),
     ("next_earnings", lambda c: c.get("next_earnings")),
+    # clean / spans / unknown for THIS expiry — so an export can be audited at a glance
+    ("earnings_status", lambda c: c.get("earnings_status")),
 ]
 
 

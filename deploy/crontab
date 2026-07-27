@@ -6,7 +6,10 @@
 SHELL=/bin/sh
 PATH=/usr/local/bin:/usr/bin:/bin
 
-# earnings calendar — daily, pre-market (drives the earnings blackout)
+# earnings calendar — daily, pre-market. This is the OFFLINE FALLBACK only: with FMP__API_KEY set,
+# screens and searches refresh the calendar live on every request (a snapshot goes stale silently,
+# and every symbol it loses reads downstream as "no earnings scheduled" — issue #113).
+# The job now fails loudly and keeps the previous file rather than writing a truncated calendar.
 0 6 * * *  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-earnings >> $HOME/steadybull-cron.log 2>&1
 
 # fundamentals for recent reporters — daily, right after the earnings refresh
