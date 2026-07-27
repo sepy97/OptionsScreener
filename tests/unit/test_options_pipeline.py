@@ -200,7 +200,9 @@ def test_run_screen_end_to_end():
     assert r.annualized_yield and r.annualized_yield > 0
     assert r.collateral == 9000.0
     assert r.fundamental_score is not None
-    assert r.next_earnings == date(2030, 1, 1)  # stamped onto the row, not silently dropped
+    # AAA reports in 2030, far outside the swept window, so no row comes back for it — and
+    # absence from a verified sweep IS the clean verdict (there is no date to display).
+    assert r.next_earnings is None
     assert r.earnings_status is EarningsStatus.CLEAN
 
 
@@ -231,28 +233,39 @@ def test_run_screen_picks_the_expiry_that_lands_before_the_report():
     assert results[0].earnings_status is EarningsStatus.CLEAN
 
 
-def test_run_screen_excludes_a_name_with_no_known_earnings_date():
-    """Fail closed: a symbol absent from the calendar is a data gap, not a name that never
-    reports — treating the two alike is what let this ship silently."""
+def test_run_screen_keeps_a_name_absent_from_a_verified_sweep():
+    """Absence from a sweep that covers the whole window is a positive fact, not a gap: nobody
+    reports in that range without appearing in it. That is what lets the sweep stay narrow."""
     chain = _chain([_put(90, -0.20, 27, 1.9)])
     service = ScreenerService(fundamentals=_FakeFundamentals({}), chains=_FakeChains(chain))
-    crit = ScreenCriteria(top_n=10, min_dte=7, max_dte=45)
-    assert service.run_screen(crit, _BASE) == []
-    # ...and it is kept, flagged, when the operator opts out of the strict policy
-    lenient = crit.model_copy(update={"exclude_unknown_earnings": False})
-    results = service.run_screen(lenient, _BASE)
-    assert len(results) == 1 and results[0].earnings_status is EarningsStatus.UNKNOWN
+    results = service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE)
+    assert len(results) == 1 and results[0].earnings_status is EarningsStatus.CLEAN
 
 
-def test_run_screen_resolves_calendar_gaps_per_symbol_before_selecting():
-    """A hole in the bulk calendar is settled against the authoritative per-symbol endpoint —
-    so a coverage gap neither hides a report nor discards a good name."""
+def test_run_screen_makes_no_per_symbol_earnings_calls():
+    """The screen answers from the sweep alone. Per-symbol lookups belong to ticker search —
+    doing them here would mean one call per surviving name to learn what the sweep already
+    established."""
     chain = _chain([_put(90, -0.20, 27, 1.9)])
-    fundamentals = _FakeFundamentals({"AAA": _BASE + timedelta(days=18)})
-    fundamentals.earnings_calendar = lambda start, end: {}  # bulk calendar missing AAA entirely
+    fundamentals = _FakeFundamentals({"AAA": _BASE + timedelta(days=200)})  # outside the window
     service = ScreenerService(fundamentals=fundamentals, chains=_FakeChains(chain))
-    assert service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE) == []
-    assert fundamentals.symbol_lookups == ["AAA"]  # asked once, authoritatively
+    service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE)
+    assert fundamentals.symbol_lookups == []
+
+
+def test_run_screen_sweeps_only_the_window_the_contracts_live_in():
+    """No point loading calendar past the furthest expiry we would sell — nothing there can
+    change a verdict."""
+    seen: list[tuple] = []
+    fundamentals = _FakeFundamentals({})
+    inner = fundamentals.earnings_calendar
+    fundamentals.earnings_calendar = lambda s, e: (seen.append((s, e)), inner(s, e))[1]
+    service = ScreenerService(
+        fundamentals=fundamentals, chains=_FakeChains(_chain([_put(90, -0.20, 27, 1.9)]))
+    )
+    crit = ScreenCriteria(top_n=10, min_dte=7, max_dte=45, earnings_buffer_days=2)
+    service.run_screen(crit, _BASE)
+    assert seen == [(_BASE, _BASE + timedelta(days=47))]  # max_dte + buffer, fetched once
 
 
 def test_earnings_buffer_covers_a_date_that_drifts_earlier():

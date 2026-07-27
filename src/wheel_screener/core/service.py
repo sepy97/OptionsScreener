@@ -85,59 +85,43 @@ class ScreenerService:
             logger.info("peer percentiles computed for %d names (cached)", len(self._scores))
         return self._scores
 
-    def _earnings_horizon(self, criteria: ScreenCriteria) -> int:
-        """Days of calendar to load. Wide enough that "no date found" means a data gap rather
-        than "reports later" — every US equity reports roughly quarterly."""
-        window = criteria.max_dte + criteria.dte_tolerance + criteria.earnings_buffer_days
-        return max(criteria.earnings_horizon_days, window + 1)
+    def _earnings_window_end(self, criteria: ScreenCriteria, today: date) -> date:
+        """The last date that can possibly matter: the furthest expiry we'd sell, plus the drift
+        buffer. Nothing past it can affect a verdict, so nothing past it is worth fetching."""
+        furthest_expiry = today + timedelta(days=criteria.max_dte + criteria.dte_tolerance)
+        return furthest_expiry + timedelta(days=criteria.earnings_buffer_days)
 
     def _build_guard(
         self, criteria: ScreenCriteria, today: date, *, policy: EarningsPolicy | None = None
     ) -> EarningsGuard:
-        """Load a FRESH calendar for this request and wrap it in the guard.
+        """Load a FRESH calendar covering exactly the contracts' window, and wrap it in the guard.
 
-        Deliberately re-fetched per request rather than read from a nightly snapshot: dates get
-        confirmed and moved daily, and a stale calendar fails silently — every symbol it lost
-        reads downstream as "no earnings scheduled". The adapter bypasses its HTTP cache for
-        this endpoint, so this really is current data.
+        Two properties make this narrow sweep sufficient, and both are load-bearing:
+
+        * it is **verified complete** over the range (the adapter asserts business-day coverage
+          and raises otherwise), so a symbol's absence positively means "does not report before
+          your expiry" — no per-symbol follow-up needed, and no guessing;
+        * it is **re-fetched per request**, not read from a nightly snapshot: dates get confirmed
+          and moved daily, and a stale calendar fails silently, since every symbol it lost reads
+          downstream as "no earnings scheduled". The adapter bypasses its HTTP cache here.
         """
         policy = policy or criteria.earnings_policy
-        dates: dict[str, date] = {}
-        if policy is not EarningsPolicy.OFF:
-            horizon = self._earnings_horizon(criteria)
-            dates = self.fundamentals.earnings_calendar(today, today + timedelta(days=horizon))
-            logger.info(
-                "earnings calendar refreshed: %d symbols over %dd from %s",
-                len(dates), horizon, today,
-            )
+        if policy is EarningsPolicy.OFF:
+            return EarningsGuard({}, today, policy=policy, exclude_unknown=False)
+        end = self._earnings_window_end(criteria, today)
+        dates = self.fundamentals.earnings_calendar(today, end)
+        logger.info(
+            "earnings calendar refreshed: %d reporters between %s and %s (verified complete)",
+            len(dates), today, end,
+        )
         return EarningsGuard(
             dates,
             today,
             buffer_days=criteria.earnings_buffer_days,
             policy=policy,
             exclude_unknown=criteria.exclude_unknown_earnings,
-            resolver=getattr(self.fundamentals, "next_earnings", None),
+            covers_through=end,
         )
-
-    def _resolve_unknowns(self, guard: EarningsGuard, symbols: list[str]) -> None:
-        """Settle every symbol the bulk calendar had no row for, one authoritative call each.
-
-        Runs on the chain-pull shortlist only, so it is bounded — and it must run BEFORE strike
-        selection, since a resolved date can change which expiry is clean (or rule the name out).
-        """
-        if guard.policy is EarningsPolicy.OFF:
-            return
-        missing = [s for s in symbols if guard.date_for(s) is None]
-        if not missing:
-            return
-        logger.info("earnings: resolving %d symbols missing from the calendar", len(missing))
-        found = sum(1 for s in missing if guard.resolve(s) is not None)
-        if found < len(missing):
-            logger.warning(
-                "earnings: %d/%d symbols still have no known date — treated as %s",
-                len(missing) - found, len(missing),
-                "excluded" if guard.exclude_unknown else "unknown but kept",
-            )
 
     def _put_filter(self, criteria: ScreenCriteria) -> ChainFilter:
         # pull a padded window so monthly-only names still surface their nearest monthly
@@ -180,11 +164,6 @@ class ScreenerService:
         """
         guard = self._build_guard(criteria, today)
         survivors = self.screen_fundamentals(criteria, today, guard)
-        # settle calendar gaps on the shortlist before any expiry is chosen — a resolved date
-        # changes which expiries are clean, so this cannot wait until after selection
-        self._resolve_unknowns(guard, [u.symbol for u in survivors])
-        for u in survivors:
-            u.next_earnings = guard.date_for(u.symbol)
         filt = self._put_filter(criteria)
         deadline = (
             time.monotonic() + criteria.max_runtime_seconds
@@ -254,8 +233,9 @@ class ScreenerService:
         """
         symbol = symbol.strip().upper()
         # One authoritative per-symbol call, refreshed on every search — far cheaper and more
-        # accurate than pulling the whole market's calendar to look up a single ticker (which is
-        # also what exposed this path to the calendar's near-term clipping).
+        # accurate than sweeping the whole market's calendar to look up a single ticker (which is
+        # also what exposed this path to the calendar's near-term clipping). No coverage range is
+        # claimed: this endpoint answers for one symbol, so silence means unknown, not clean.
         earnings = self._symbol_earnings(symbol, criteria, today)
         guard = EarningsGuard(
             {symbol: earnings} if earnings else {},
@@ -320,9 +300,8 @@ class ScreenerService:
             except ProviderError:
                 logger.warning("earnings: per-symbol lookup failed for %s", symbol, exc_info=True)
         try:
-            horizon = self._earnings_horizon(criteria)
             return self.fundamentals.earnings_calendar(
-                today, today + timedelta(days=horizon)
+                today, self._earnings_window_end(criteria, today)
             ).get(symbol)
         except ProviderError:
             logger.warning("earnings: calendar unavailable for %s", symbol, exc_info=True)

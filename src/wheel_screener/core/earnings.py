@@ -1,19 +1,26 @@
 """The earnings guard — one place that answers "does a report land inside this contract's life?"
 
 Why this exists as its own object: the rule is per *contract* (a date vs an expiration), but the
-calendar is fetched per *screen*. Keeping the loaded dates and the verdict together lets the
-chain stage ask the question at the only point where both dates are known, and lets the screen
-and single-ticker paths share identical semantics.
+calendar is loaded per *request*. Keeping the loaded dates and the verdict together lets the chain
+stage ask the question at the only point where both dates are known, and lets the screen and
+single-ticker paths share identical semantics.
 
-Three-state on purpose (see ``EarningsStatus``): a missing date is ``UNKNOWN``, never ``CLEAN``.
-``resolve`` upgrades an unknown by asking the provider for that one symbol — authoritative and
-cheap, because it only ever runs on the handful of names that survive to the results table.
+The three states (see ``EarningsStatus``) turn on ``covers_through`` — how far the loaded calendar
+is *vouched* to be complete:
+
+* covered, symbol absent  -> CLEAN. Absence from a verified sweep is a positive fact: nobody
+  reports in that range without appearing in it. This is what makes a narrow sweep sufficient —
+  we only ever need the window a contract actually lives in.
+* not covered that far    -> UNKNOWN. Absence proves nothing, so it must not read as safe. This
+  is the conflation that let an earnings-spanning contract reach the results table (issue #113).
+
+The coverage guarantee is load-bearing, so it has to come from a checked fetch (see
+``verify_calendar_coverage``), never from an assumption about the provider.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Callable
 from datetime import date, timedelta
 
 from wheel_screener.core.models import EarningsPolicy, EarningsStatus
@@ -22,10 +29,11 @@ logger = logging.getLogger(__name__)
 
 
 class EarningsGuard:
-    """Verdicts over a loaded calendar, with a per-symbol fallback for gaps.
+    """Verdicts over a loaded calendar.
 
-    ``dates`` maps symbol -> next earnings date on/after ``today`` (within the loaded horizon).
-    ``resolver`` is an optional ``(symbol, on_or_after) -> date | None`` used to settle unknowns.
+    ``dates`` maps symbol -> next earnings date on/after ``today``. ``covers_through`` is the last
+    date the calendar is known to be complete for; leave it None when the load can't vouch for a
+    range (a single-symbol lookup), and absence then reads as UNKNOWN rather than CLEAN.
     """
 
     def __init__(
@@ -36,15 +44,14 @@ class EarningsGuard:
         buffer_days: int = 0,
         policy: EarningsPolicy = EarningsPolicy.EXCLUDE,
         exclude_unknown: bool = True,
-        resolver: Callable[[str, date], date | None] | None = None,
+        covers_through: date | None = None,
     ) -> None:
         self._dates = dict(dates)
         self._today = today
         self._buffer = timedelta(days=max(buffer_days, 0))
         self.policy = policy
         self.exclude_unknown = exclude_unknown
-        self._resolver = resolver
-        self._resolved: set[str] = set()  # symbols already sent to the resolver (ask once)
+        self.covers_through = covers_through
 
     @property
     def loaded(self) -> int:
@@ -54,34 +61,16 @@ class EarningsGuard:
     def date_for(self, symbol: str) -> date | None:
         return self._dates.get(symbol)
 
-    def resolve(self, symbol: str) -> date | None:
-        """Settle a symbol against the authoritative per-symbol endpoint (once per symbol).
-
-        Used before acting on an UNKNOWN, so a hole in the bulk calendar doesn't get mistaken
-        for "this name has no upcoming report".
-        """
-        known = self._dates.get(symbol)
-        if known is not None or self._resolver is None or symbol in self._resolved:
-            return known
-        self._resolved.add(symbol)
-        try:
-            found = self._resolver(symbol, self._today)
-        except Exception:  # noqa: BLE001 - a lookup failure must not sink the whole screen
-            logger.warning("earnings: per-symbol lookup failed for %s", symbol, exc_info=True)
-            return None
-        if found is not None:
-            self._dates[symbol] = found
-            logger.info("earnings: resolved %s -> %s (missing from the calendar)", symbol, found)
-        return found
-
     def status(self, symbol: str, expiration: date) -> EarningsStatus:
-        """The verdict for one contract. Does NOT hit the resolver — call ``resolve`` first
-        when you're about to act on the answer (the chain stage runs this thousands of times)."""
+        """The verdict for one contract."""
+        deadline = expiration + self._buffer  # an unconfirmed date can drift earlier
         when = self._dates.get(symbol)
-        if when is None:
-            return EarningsStatus.UNKNOWN
-        # buffer extends the danger zone past expiry: an unconfirmed date can move earlier
-        return EarningsStatus.SPANS if when <= expiration + self._buffer else EarningsStatus.CLEAN
+        if when is not None:
+            return EarningsStatus.SPANS if when <= deadline else EarningsStatus.CLEAN
+        # No row. Only the sweep's coverage can turn that into an answer.
+        if self.covers_through is not None and deadline <= self.covers_through:
+            return EarningsStatus.CLEAN
+        return EarningsStatus.UNKNOWN
 
     def blocks(self, symbol: str, expiration: date) -> bool:
         """Should this contract be filtered out? Honors ``policy`` and the unknown setting."""

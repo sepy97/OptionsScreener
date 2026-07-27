@@ -105,13 +105,10 @@ class ScreenCriteria(BaseModel):
     # Published dates drift (FMP marks unconfirmed rows with epsActual=null), and they drift
     # earlier as often as later — so treat anything within N days after expiry as spanning.
     earnings_buffer_days: int = 2
-    # How far ahead to load the calendar. Only the DTE window matters for the verdict; the wider
-    # horizon is what makes "no date found" mean "data gap" rather than "reports later" — a
-    # quarterly reporter with nothing in ~4 months is a coverage hole, not a clean name.
-    earnings_horizon_days: int = 120
-    # Fail closed: exclude a candidate whose earnings date we could not establish at all.
-    # (Unknowns are re-checked per symbol against the authoritative endpoint first, so this
-    # fires only on names that are genuinely missing everywhere.)
+    # Fail closed: exclude a candidate whose earnings date we could not establish. This should
+    # never fire on a screen — the sweep covers the whole window a contract can live in and is
+    # verified complete, so absence from it *proves* the name doesn't report before expiry. It is
+    # the backstop for a calendar that can't vouch for the range.
     exclude_unknown_earnings: bool = True
 
 
