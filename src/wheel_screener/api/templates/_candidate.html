@@ -8,12 +8,14 @@
 {# put moneyness in %: negative = OTM (strike below spot, the safe zone), positive = ITM (assignment
    risk). Guard und truthiness so a 0/None underlying can't divide-by-zero. #}
 {% set mny = ((k.strike - und) / und * 100) if (und is not none and und) else none %}
-{# earnings on/before expiry is the one real risk flag. The engine's verdict (clean/spans/unknown)
-   is authoritative — it accounts for the drift buffer — but old stored snapshots predate the field,
-   so fall back to comparing the dates directly (ISO strings compare correctly here). #}
+{# earnings on/before expiry is the one real risk flag. Two sources, deliberately OR'd: the engine's
+   verdict (which also catches a date just past expiry, inside the drift buffer) and a direct date
+   comparison (which still works for stored snapshots that predate the verdict field, and for any
+   row carrying a date without one). ISO date strings compare correctly here.
+   "Unknown" is only claimed when there is genuinely no date to show. #}
 {% set earn_status = c.earnings_status|default(none) %}
-{% set earn_warn = earn_status == 'spans' or (earn_status is none and c.next_earnings and c.next_earnings <= k.expiration) %}
-{% set earn_unknown = earn_status == 'unknown' %}
+{% set earn_warn = earn_status == 'spans' or (c.next_earnings and c.next_earnings <= k.expiration) %}
+{% set earn_unknown = earn_status == 'unknown' and not c.next_earnings %}
 <tr class="detail">
   <td colspan="13">
     <div class="detail">

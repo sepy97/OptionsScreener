@@ -51,7 +51,7 @@
         {% set k = c.contract %}
         <tr>
           <td>${{ k.strike|num2 }}</td>
-          <td>{{ k.expiration }}{% if c.earnings_status == 'spans' %}
+          <td>{{ k.expiration }}{% if c.earnings_status == 'spans' or (r.next_earnings and r.next_earnings <= k.expiration) %}
             <span title="earnings {{ r.next_earnings }} lands before this expiry — assignment would be event-driven">{{ icon.warning() }}</span>{% endif %}</td>
           <td>{{ k.dte }}</td>
           <td>{{ "%.2f"|format(k.delta) if k.delta is not none else "—" }}</td>

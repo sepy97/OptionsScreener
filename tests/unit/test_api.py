@@ -690,6 +690,34 @@ def test_candidate_card_earnings_flag(tmp_path) -> None:
     assert "after expiry" in ra and "detail-note" in ra     # quiet note, not the amber risk badge
 
 
+def test_candidate_card_earnings_flag_from_engine_verdict(tmp_path) -> None:
+    """The engine's verdict drives the badge even when the date alone looks safe — it accounts
+    for the drift buffer, so a report a day or two PAST expiry still counts as spanning."""
+    from datetime import date
+
+    runner = _runner(_FakeService(), tmp_path)
+    # expires 2026-08-15; the date is after that, but the engine judged it as spanning
+    spans = _candidate("AAA").model_copy(
+        update={"next_earnings": date(2026, 8, 17), "earnings_status": "spans"}
+    )
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done", result=[spans.model_dump(mode="json")])
+    body = _client(runner).get("/runs/j/candidates/AAA").text
+    assert "before expiry" in body and "badge" in body
+
+
+def test_candidate_card_flags_an_unestablished_earnings_date(tmp_path) -> None:
+    """No date at all is its own warning — 'unknown' must never read as 'no earnings'."""
+    runner = _runner(_FakeService(), tmp_path)
+    unknown = _candidate("AAA").model_copy(
+        update={"next_earnings": None, "earnings_status": "unknown"}
+    )
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done", result=[unknown.model_dump(mode="json")])
+    body = _client(runner).get("/runs/j/candidates/AAA").text
+    assert "Earnings date unknown" in body and "badge" in body
+
+
 def test_candidate_card_moneyness(tmp_path) -> None:
     # _candidate's strike is 80; classify vs the underlying and guard divide-by-zero.
     def _spot(sym, price):
