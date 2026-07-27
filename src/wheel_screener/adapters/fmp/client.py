@@ -37,9 +37,15 @@ class FmpClient:
         else:
             self._disk = None
 
-    def get(self, path: str, params: dict | None = None) -> object:
+    def get(self, path: str, params: dict | None = None, *, cache: bool = True) -> object:
+        """GET with the two-tier cache. ``cache=False`` bypasses BOTH tiers and stores nothing —
+        for data that must be current on every request (the earnings calendar). The in-memory
+        tier matters most there: the service is built once per process, so a cached calendar
+        would otherwise outlive the day it was fetched on."""
         norm = tuple(sorted((params or {}).items()))
         mem_key = (path, norm)
+        if not cache:
+            return self._fetch(path, params)
         if mem_key in self._cache:
             return self._cache[mem_key]
         disk_key = f"{path}?{norm}"

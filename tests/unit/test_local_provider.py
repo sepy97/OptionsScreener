@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from wheel_screener.adapters.local.provider import LocalFundamentalsProvider
+from wheel_screener.core.errors import ProviderDataError
 from wheel_screener.core.models import ScreenCriteria
 
 _FILES = {
@@ -120,9 +121,13 @@ def test_known_symbols(store: Path) -> None:
     assert "GOOD" in LocalFundamentalsProvider(str(store)).known_symbols()
 
 
-def test_earnings_calendar_empty_without_provider(store: Path) -> None:
+def test_earnings_calendar_raises_without_a_source(store: Path) -> None:
+    """No source must not look like an empty calendar — downstream that reads as 'nobody
+    reports', which silently disables the blackout (issue #113)."""
     p = LocalFundamentalsProvider(str(store))
-    assert p.earnings_calendar(date(2026, 6, 22), date(2026, 8, 6)) == {}
+    with pytest.raises(ProviderDataError, match="no earnings source"):
+        p.earnings_calendar(date(2026, 6, 22), date(2026, 8, 6))
+    assert p.next_earnings("AAA", date(2026, 6, 22)) is None
 
 
 def test_missing_store_raises(tmp_path: Path) -> None:

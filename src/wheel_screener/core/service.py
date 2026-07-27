@@ -8,6 +8,8 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+from wheel_screener.core.earnings import EarningsGuard
+from wheel_screener.core.errors import ProviderError
 from wheel_screener.core.fundamentals import (
     gate_reasons,
     rank_by_fundamentals,
@@ -16,6 +18,8 @@ from wheel_screener.core.fundamentals import (
 from wheel_screener.core.models import (
     CandidateResult,
     ChainFilter,
+    EarningsPolicy,
+    EarningsStatus,
     FundamentalMetrics,
     OptionType,
     ScreenCriteria,
@@ -45,6 +49,7 @@ class TickerSearch:
     passes_fundamentals: bool | None = None  # None if the ticker isn't in the local store
     gate_reasons: list[str] = field(default_factory=list)
     next_earnings: date | None = None
+    earnings_known: bool = False  # False = we could not establish a date, NOT "no earnings"
     metrics: FundamentalMetrics | None = None  # the ticker's raw fundamentals (P/E, ROE, ...)
     fundamental_score: float | None = None  # absolute financial strength 0-1 (primary rating)
     peer_percentile: float | None = None  # percentile vs the screened field (None if outside it)
@@ -80,6 +85,44 @@ class ScreenerService:
             logger.info("peer percentiles computed for %d names (cached)", len(self._scores))
         return self._scores
 
+    def _earnings_window_end(self, criteria: ScreenCriteria, today: date) -> date:
+        """The last date that can possibly matter: the furthest expiry we'd sell, plus the drift
+        buffer. Nothing past it can affect a verdict, so nothing past it is worth fetching."""
+        furthest_expiry = today + timedelta(days=criteria.max_dte + criteria.dte_tolerance)
+        return furthest_expiry + timedelta(days=criteria.earnings_buffer_days)
+
+    def _build_guard(
+        self, criteria: ScreenCriteria, today: date, *, policy: EarningsPolicy | None = None
+    ) -> EarningsGuard:
+        """Load a FRESH calendar covering exactly the contracts' window, and wrap it in the guard.
+
+        Two properties make this narrow sweep sufficient, and both are load-bearing:
+
+        * it is **verified complete** over the range (the adapter asserts business-day coverage
+          and raises otherwise), so a symbol's absence positively means "does not report before
+          your expiry" — no per-symbol follow-up needed, and no guessing;
+        * it is **re-fetched per request**, not read from a nightly snapshot: dates get confirmed
+          and moved daily, and a stale calendar fails silently, since every symbol it lost reads
+          downstream as "no earnings scheduled". The adapter bypasses its HTTP cache here.
+        """
+        policy = policy or criteria.earnings_policy
+        if policy is EarningsPolicy.OFF:
+            return EarningsGuard({}, today, policy=policy, exclude_unknown=False)
+        end = self._earnings_window_end(criteria, today)
+        dates = self.fundamentals.earnings_calendar(today, end)
+        logger.info(
+            "earnings calendar refreshed: %d reporters between %s and %s (verified complete)",
+            len(dates), today, end,
+        )
+        return EarningsGuard(
+            dates,
+            today,
+            buffer_days=criteria.earnings_buffer_days,
+            policy=policy,
+            exclude_unknown=criteria.exclude_unknown_earnings,
+            covers_through=end,
+        )
+
     def _put_filter(self, criteria: ScreenCriteria) -> ChainFilter:
         # pull a padded window so monthly-only names still surface their nearest monthly
         return ChainFilter(
@@ -99,10 +142,13 @@ class ScreenerService:
             **ctx,
         )
 
-    def screen_fundamentals(self, criteria: ScreenCriteria, today: date) -> list[Underlying]:
+    def screen_fundamentals(
+        self, criteria: ScreenCriteria, today: date, guard: EarningsGuard | None = None
+    ) -> list[Underlying]:
         """Universe -> fundamental gate + cross-sectional rank -> ranked names."""
         universe = build_universe(self.fundamentals, criteria)
-        return rate_and_rank(self.fundamentals, universe, criteria, today)
+        guard = guard or self._build_guard(criteria, today)
+        return rate_and_rank(self.fundamentals, universe, criteria, today, guard)
 
     def run_screen(
         self,
@@ -116,7 +162,8 @@ class ScreenerService:
         Bounded by ``criteria.max_runtime_seconds`` and an optional ``cancel`` event (for a
         web layer to abort on client disconnect); both yield partial, ranked results.
         """
-        survivors = self.screen_fundamentals(criteria, today)
+        guard = self._build_guard(criteria, today)
+        survivors = self.screen_fundamentals(criteria, today, guard)
         filt = self._put_filter(criteria)
         deadline = (
             time.monotonic() + criteria.max_runtime_seconds
@@ -137,7 +184,7 @@ class ScreenerService:
             snapshot = chains.get(u.symbol)
             if snapshot is None:
                 continue
-            put = select_put(snapshot, criteria)
+            put = select_put(snapshot, criteria, guard)
             if put is None:
                 continue
             candidates.append(
@@ -145,15 +192,33 @@ class ScreenerService:
                     u.symbol, put, fundamental_score=u.fundamental_score,
                     peer_percentile=u.peer_percentile,
                     next_earnings=u.next_earnings, has_weeklys=u.has_weeklys,
+                    earnings_status=guard.status(u.symbol, put.expiration),
                 )
             )
 
         if criteria.min_annualized_yield is not None:
             floor = criteria.min_annualized_yield
             candidates = [c for c in candidates if (c.annualized_yield or 0.0) >= floor]
+        # last line of defense: nothing whose life spans a report may reach the results table,
+        # whatever happened upstream. Under EXCLUDE this should already be empty — if it ever
+        # isn't, that is a bug worth shouting about rather than shipping to the user.
+        if criteria.earnings_policy is EarningsPolicy.EXCLUDE:
+            leaked = [c for c in candidates if c.earnings_status is EarningsStatus.SPANS]
+            if leaked:
+                logger.error(
+                    "earnings filter leaked %d candidate(s) — dropping: %s",
+                    len(leaked), ", ".join(f"{c.symbol}@{c.contract.expiration}" for c in leaked),
+                )
+                candidates = [
+                    c for c in candidates if c.earnings_status is not EarningsStatus.SPANS
+                ]
         logger.info(
-            "candidates: %d with a tradeable put · ranked by fundamental_weight=%.2f",
-            len(candidates), criteria.fundamental_weight,
+            "candidates: %d with a tradeable put (%d earnings-clean, %d unknown) · "
+            "ranked by fundamental_weight=%.2f",
+            len(candidates),
+            sum(1 for c in candidates if c.earnings_status is EarningsStatus.CLEAN),
+            sum(1 for c in candidates if c.earnings_status is EarningsStatus.UNKNOWN),
+            criteria.fundamental_weight,
         )
         return rank(candidates, criteria.fundamental_weight)
 
@@ -167,9 +232,29 @@ class ScreenerService:
         context so a put seller can judge assignment/event risk.
         """
         symbol = symbol.strip().upper()
+        # One authoritative per-symbol call, refreshed on every search — far cheaper and more
+        # accurate than sweeping the whole market's calendar to look up a single ticker (which is
+        # also what exposed this path to the calendar's near-term clipping). No coverage range is
+        # claimed: this endpoint answers for one symbol, so silence means unknown, not clean.
+        earnings = self._symbol_earnings(symbol, criteria, today)
+        guard = EarningsGuard(
+            {symbol: earnings} if earnings else {},
+            today,
+            buffer_days=criteria.earnings_buffer_days,
+            # FLAG, not EXCLUDE: someone who typed a ticker should see its full term structure
+            # with the risky expiries marked — silently returning fewer rows would read as
+            # "no contracts available" and hide the very thing they need to see.
+            policy=(
+                EarningsPolicy.OFF
+                if criteria.earnings_policy is EarningsPolicy.OFF
+                else EarningsPolicy.FLAG
+            ),
+            exclude_unknown=False,
+        )
         snapshot = self.chains.get_chain(symbol, self._put_filter(criteria))
         puts = [
-            self._candidate(symbol, p) for p in select_top_puts(snapshot, criteria, n)
+            self._candidate(symbol, p, earnings_status=guard.status(symbol, p.expiration))
+            for p in select_top_puts(snapshot, criteria, n, guard)
         ]
         # fundamentals context (the ticker may sit outside the screener's $20-200 universe)
         metrics = self.fundamentals.fetch_metrics([symbol]).get(symbol)
@@ -178,9 +263,6 @@ class ScreenerService:
         else:
             reasons = gate_reasons(metrics, criteria)
             passes = not reasons
-        earnings = self.fundamentals.earnings_calendar(
-            today, today + timedelta(days=criteria.max_dte)
-        ).get(symbol)
         # absolute strength from the ticker's own metrics (works even for out-of-universe names);
         # the peer percentile needs the ranked universe, so it's None outside the screened field.
         strength, _ = score_strength(metrics, criteria.factor_weights, criteria.stock_profile)
@@ -190,13 +272,37 @@ class ScreenerService:
             c.fundamental_score = strength
             c.peer_percentile = percentile
         logger.info(
-            "search %s: %d puts near Δ=%.2f (DTE %d-%d) · strength=%s · pct=%s",
+            "search %s: %d puts near Δ=%.2f (DTE %d-%d) · strength=%s · pct=%s · earnings=%s "
+            "(%d of %d expiries span it)",
             symbol, len(puts), criteria.target_delta, criteria.min_dte, criteria.max_dte,
             "n/a" if strength is None else f"{strength:.2f}",
             "n/a" if percentile is None else f"{percentile:.2f}",
+            earnings or "unknown",
+            sum(1 for c in puts if c.earnings_status is EarningsStatus.SPANS), len(puts),
         )
         return TickerSearch(
             symbol=symbol, puts=puts, passes_fundamentals=passes, gate_reasons=reasons,
-            next_earnings=earnings, metrics=metrics,
+            next_earnings=earnings, earnings_known=earnings is not None, metrics=metrics,
             fundamental_score=strength, peer_percentile=percentile,
         )
+
+    def _symbol_earnings(
+        self, symbol: str, criteria: ScreenCriteria, today: date
+    ) -> date | None:
+        """Next report for one ticker. Prefers the per-symbol endpoint; falls back to a calendar
+        window so a provider without one (or an offline local store) still answers."""
+        if criteria.earnings_policy is EarningsPolicy.OFF:
+            return None
+        lookup = getattr(self.fundamentals, "next_earnings", None)
+        if lookup is not None:
+            try:
+                return lookup(symbol, today)
+            except ProviderError:
+                logger.warning("earnings: per-symbol lookup failed for %s", symbol, exc_info=True)
+        try:
+            return self.fundamentals.earnings_calendar(
+                today, self._earnings_window_end(criteria, today)
+            ).get(symbol)
+        except ProviderError:
+            logger.warning("earnings: calendar unavailable for %s", symbol, exc_info=True)
+            return None

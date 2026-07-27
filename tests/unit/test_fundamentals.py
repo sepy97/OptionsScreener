@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 
+from wheel_screener.core.earnings import EarningsGuard
 from wheel_screener.core.fundamentals import (
     gate_reasons,
     rank_by_fundamentals,
@@ -164,20 +165,48 @@ def test_strength_no_sign_trap() -> None:
 
 # --- select_top: end-to-end stage logic -------------------------------------
 
+def _guard(dates: dict[str, date], today: date, **kw) -> EarningsGuard:
+    return EarningsGuard(dates, today, **kw)
+
+
 def test_select_top_excludes_sign_trap() -> None:
     # A loss-maker with negative PE scored 1.0 "good" under the old bug; now gated out.
     today = date(2026, 6, 21)
-    out = select_top([_u("LOSS", eps=-3.0, pe=-5), _u("OK")], ScreenCriteria(), {}, today)
+    out = select_top(
+        [_u("LOSS", eps=-3.0, pe=-5), _u("OK")], ScreenCriteria(), _guard({}, today), today
+    )
     assert [u.symbol for u in out] == ["OK"]
 
 
-def test_select_top_truncates_and_blacks_out_earnings() -> None:
+def test_select_top_keeps_names_reporting_after_the_earliest_expiry() -> None:
+    """The stage-2 filter is a chain-pull shortcut, not the blackout: a name reporting after the
+    nearest expiry we'd consider still has clean expiries, so it must survive to the chain pull."""
     today = date(2026, 6, 21)
     names = [_u(f"S{i}") for i in range(10)]
-    criteria = ScreenCriteria(top_n=3)
-    out = select_top(names, criteria, {"S0": date(2026, 7, 1)}, today)
+    criteria = ScreenCriteria(top_n=3, min_dte=21)  # earliest expiry considered = 2026-07-12
+    out = select_top(names, criteria, _guard({"S0": date(2026, 7, 20)}, today), today)
+    assert len(out) == 3
+    assert "S0" in {u.symbol for u in out}
+
+
+def test_select_top_drops_names_with_no_clean_expiry() -> None:
+    today = date(2026, 6, 21)
+    names = [_u(f"S{i}") for i in range(10)]
+    criteria = ScreenCriteria(top_n=3, min_dte=21)
+    # reports before even the earliest expiry -> every expiry in the window spans it
+    out = select_top(names, criteria, _guard({"S0": date(2026, 7, 1)}, today), today)
     assert len(out) == 3
     assert "S0" not in {u.symbol for u in out}
+
+
+def test_select_top_stamps_next_earnings() -> None:
+    """Every surviving name carries its date onward — the results table can't warn about what
+    the pipeline never recorded (this field was silently always None; see issue #113)."""
+    today = date(2026, 6, 21)
+    out = select_top(
+        [_u("AAA")], ScreenCriteria(min_dte=21), _guard({"AAA": date(2026, 9, 1)}, today), today
+    )
+    assert [u.next_earnings for u in out] == [date(2026, 9, 1)]
 
 
 def test_select_top_sector_cap() -> None:
@@ -185,14 +214,19 @@ def test_select_top_sector_cap() -> None:
     names = [_u(f"T{i}", sector="Tech") for i in range(5)] + [
         _u(f"E{i}", sector="Energy") for i in range(5)
     ]
-    out = select_top(names, ScreenCriteria(top_n=10, max_per_sector=2), {}, today)
+    out = select_top(names, ScreenCriteria(top_n=10, max_per_sector=2), _guard({}, today), today)
     sectors = [u.sector for u in out]
     assert sectors.count("Tech") <= 2 and sectors.count("Energy") <= 2
 
 
-def test_earnings_blackout_window() -> None:
+def test_earnings_prefilter_only_drops_when_no_expiry_is_clean() -> None:
     today = date(2026, 6, 21)
     names = [Underlying(symbol="AAA"), Underlying(symbol="BBB"), Underlying(symbol="CCC")]
-    earnings = {"AAA": date(2026, 7, 1), "BBB": date(2026, 9, 1)}  # AAA in-window; BBB out
-    kept = {u.symbol for u in apply_earnings_blackout(names, earnings, today, max_dte=45)}
+    # AAA reports before the earliest expiry (no clean expiry); BBB reports mid-window, so its
+    # near expiries are still sellable and it must NOT be vetoed at the name level.
+    earnings = {"AAA": date(2026, 6, 30), "BBB": date(2026, 7, 20)}
+    kept = {
+        u.symbol
+        for u in apply_earnings_blackout(names, _guard(earnings, today), today, min_dte=21)
+    }
     assert kept == {"BBB", "CCC"}

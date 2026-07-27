@@ -27,7 +27,11 @@ class FundamentalsProvider(Protocol):
     ``screen_universe`` returns the cheap price/market-cap/exchange universe;
     ``bulk_metrics`` returns cheap partial TTM metrics for many symbols (the pre-rank);
     ``fetch_metrics`` returns the deep per-name metrics incl. sign inputs + DCF;
-    ``earnings_calendar`` maps symbol -> next earnings date within [start, end].
+    ``earnings_calendar`` maps symbol -> next earnings date within [start, end];
+    ``next_earnings`` answers the same question for ONE symbol, authoritatively.
+
+    Implementations of ``earnings_calendar`` MUST return a complete window or raise — a
+    silently truncated calendar reads as "nobody reports soon" and disables the blackout.
     """
 
     def screen_universe(self, criteria: ScreenCriteria) -> list[Underlying]: ...
@@ -37,6 +41,8 @@ class FundamentalsProvider(Protocol):
     def fetch_metrics(self, symbols: list[str]) -> dict[str, FundamentalMetrics]: ...
 
     def earnings_calendar(self, start: date, end: date) -> dict[str, date]: ...
+
+    def next_earnings(self, symbol: str, on_or_after: date) -> date | None: ...
 
 
 @runtime_checkable

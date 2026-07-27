@@ -10,7 +10,9 @@ gated/JS-rendered.*
 - Short puts at **≤ 0.20 delta** (up to 0.25, never > 0.30), **30–45 DTE**
 - **Strong fundamentals** — financially sustainable, "happy to be assigned" names (the gate)
 - Pick the **richest contract by annualized yield**; per-contract IV is shown as a column
-- **No earnings inside the DTE window** (also our stand-in for "abnormal IV = event")
+- **No earnings inside the contract's life** — checked per expiry (report on/before expiration,
+  plus a small drift buffer), so a name reporting after the near expiry stays sellable on it.
+  Also our stand-in for "abnormal IV = event"
 - Liquid options (tight bid/ask, real OI); avoid names within 5% of the high
 - Diversified (< 10% per name, ≤ 3 per sector) — *portfolio-level, applied at decision time*
 
@@ -41,6 +43,14 @@ self-maintained ~1-year IV history (SQLite cron) or a paid feed (ORATS/FlashAlph
   information. **→ Yield is the contract selector; IV is an informative column.**
 - The one thing raw IV can't tell you (is premium *abnormally* high for this name → event/blow-up)
   is dominated by **earnings**, which the **earnings-blackout** already removes.
+
+> This makes the blackout **load-bearing for the ranking, not just for risk**: pre-earnings IV
+> inflates the premium, so at a fixed delta the earnings-spanning contracts are systematically the
+> highest-yielding ones. Measured on the 2026-07-25 screen, rows whose life spanned a report
+> averaged 49% annualized yield vs 21% for clean ones — the top four by yield were all straddles.
+> A yield selector with the blackout broken doesn't merely miss the filter; it actively promotes
+> the trades it exists to avoid. Hence: fail **closed** (unknown ≠ clean), verify the calendar's
+> coverage, and never let a truncated fetch pass for an empty one.
 
 IV rank is therefore deferred to **v2** as an optional timing overlay. If revived: roll-your-own
 30-day-ATM-IV SQLite store (Schwab IV is free per chain pull), or ORATS `/datav2/ivrank`
@@ -143,7 +153,7 @@ implied_volatility, ...` + `greeks_source` enum + `raw: dict`. Adapters map nati
 | # | Stage | Module | Provider | Does |
 |---|---|---|---|---|
 | 1 | Universe | `universe.py` | FMP `/company-screener` | price $20–200, mkt-cap, exchange |
-| 2 | Fundamental ranking | `rate_fundamentals.py` | FMP bulk + earnings | sanitize → gate → cross-sectional percentile composite → blackout → top N |
+| 2 | Fundamental ranking | `rate_fundamentals.py` | FMP bulk + earnings | sanitize → gate → cross-sectional percentile composite → drop names with no clean expiry → top N |
 | 3 | Chain pull | `pull_chains.py` | Schwab (survivors only, throttled) | 30–45 DTE put chains |
 | 4 | Strike select | `select_strike.py` | — (`nearest_to_delta`) | ~−0.20Δ put per expiry; annualized yield |
 | 5 | Rank + output | `rank.py` + export | — | order by yield (IV column) → CSV |
@@ -167,7 +177,10 @@ Pure & tested today: `core/fundamentals` (`sanitize_metrics`, `gate_reasons`, `r
 - `/company-screener` — `priceMoreThan/priceLowerThan, marketCapMoreThan, exchange, isFund, isActivelyTrading`.
 - `/ratios-ttm`, `/key-metrics-ttm` (+ `*-ttm-bulk` for the pre-rank) — PE/PS/PB/PEG, ROE/ROA/ROS/ROIC,
   Debt/Equity, `netDebtToEBITDATTM`, current/quick/cash ratios. Plus the DCF endpoint.
-- `/earnings-calendar?from=&to=` (3-mo max) — blackout.
+- `/earnings-calendar?from=&to=` — blackout. **Silently clips**: ~90-day range clamp AND a
+  4000-row cap, both dropping the EARLIEST rows, with no error and no usable signal in the row
+  count (issue #113). Always walk the range in small slices and verify coverage.
+- `/earnings?symbol=` — one symbol's history + next date; authoritative, used to settle gaps.
 - `/quote` `yearHigh` (52-wk) + `/historical-price-eod/dividend-adjusted` for true ATH.
 - **Tiers:** Free 250/day (too low for a universe); Starter ~$22/mo 300/min; Premium ~$59/mo 750/min
   30-yr (true ATH). Prefer `*-ttm-bulk`. Client: `fmp-data` (async, rate-limit + cache).

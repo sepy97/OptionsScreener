@@ -17,6 +17,7 @@ from typing import Protocol
 import polars as pl
 
 from wheel_screener.adapters.local.overlay import OVERLAY_FILENAME, read_overlay
+from wheel_screener.core.errors import ProviderDataError
 from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
 
 logger = logging.getLogger(__name__)
@@ -59,6 +60,8 @@ _NONCOMMON_NAME = (
 
 class _EarningsSource(Protocol):
     def earnings_calendar(self, start: date, end: date) -> dict[str, date]: ...
+
+    def next_earnings(self, symbol: str, on_or_after: date) -> date | None: ...
 
 
 class LocalFundamentalsProvider:
@@ -244,4 +247,14 @@ class LocalFundamentalsProvider:
         return self._metrics_for(symbols)  # local: full metrics either way (no API cost)
 
     def earnings_calendar(self, start: date, end: date) -> dict[str, date]:
-        return self._earnings.earnings_calendar(start, end) if self._earnings else {}
+        if self._earnings is None:
+            # No source wired = no blackout. Say so loudly; the caller decides whether to run
+            # blind, because an empty dict silently means "nobody reports" downstream.
+            raise ProviderDataError(
+                "no earnings source configured (no local calendar, no FMP key) — the earnings "
+                "blackout cannot run. Set FMP__API_KEY or run `refresh-earnings`."
+            )
+        return self._earnings.earnings_calendar(start, end)
+
+    def next_earnings(self, symbol: str, on_or_after: date) -> date | None:
+        return self._earnings.next_earnings(symbol, on_or_after) if self._earnings else None
