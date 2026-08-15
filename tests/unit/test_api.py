@@ -78,13 +78,16 @@ class _FakeService:
             raise self._error
         return self._result
 
-    def search_ticker(self, symbol, criteria, today, *, n=5):
+    def search_ticker(self, symbol, criteria, today, *, n=5, side=None):
+        from wheel_screener.core.models import OptionType
         from wheel_screener.core.service import TickerSearch
 
         if self._error is not None:
             raise self._error
+        self.seen_side = side  # assert the put/call knob reaches the service
         return TickerSearch(
-            symbol=symbol.upper(), puts=list(self._result or []),
+            symbol=symbol.upper(), contracts=list(self._result or []),
+            side=side or OptionType.PUT, underlying_price=100.0,
             passes_fundamentals=True, gate_reasons=[], next_earnings=None,
             fundamental_score=0.7, peer_percentile=0.62,
         )
@@ -645,8 +648,9 @@ def test_export_csv(tmp_path) -> None:
     assert r.status_code == 200 and r.headers["content-type"].startswith("text/csv")
     assert "attachment" in r.headers.get("content-disposition", "").lower()
     lines = r.text.splitlines()
-    assert lines[0].startswith("symbol,option_symbol,strike")  # header row
+    assert lines[0].startswith("symbol,option_symbol,option_type,strike")  # header row
     assert any(line.startswith("AAA,") for line in lines[1:])  # data row
+    assert ",put," in lines[1]  # the side is explicit, so a call export can't be mistaken for it
     assert _client(runner).get("/runs/nope/export.csv").status_code == 404  # unknown run
 
 
@@ -790,3 +794,63 @@ def test_dashboard_flags_stale_snapshot(tmp_path) -> None:
     runner.store.finish("old", "done", result=[_candidate().model_dump(mode="json")])
     r = _client(runner).get("/")
     assert "5h ago" in r.text and "may be stale" in r.text
+
+
+def _call_candidate(symbol: str = "AAA", yld: float = 0.12) -> CandidateResult:
+    contract = OptionContract(
+        underlying_symbol=symbol, option_symbol=f"{symbol}110C", option_type=OptionType.CALL,
+        expiration=date(2026, 8, 15), strike=110.0, dte=40, bid=1.5, ask=1.6,
+        underlying_price=100.0,
+    )
+    return CandidateResult(
+        symbol=symbol, contract=contract, annualized_yield=yld, premium=1.5, collateral=10000.0,
+    )
+
+
+def test_search_form_exposes_the_put_call_knob() -> None:
+    r = TestClient(app).get("/search")
+    assert r.status_code == 200
+    assert 'name="side"' in r.text and 'value="put"' in r.text and 'value="call"' in r.text
+
+
+def test_search_side_reaches_the_service_and_switches_the_table() -> None:
+    svc = _FakeService(result=[_call_candidate("AAA")])
+    app.dependency_overrides[get_service] = lambda: svc
+    try:
+        r = TestClient(app).post("/search", data={"ticker": "aaa", "top_n": 5, "side": "call"})
+        assert r.status_code == 200
+        assert svc.seen_side is OptionType.CALL
+        # the call table reads differently: no cash collateral, and the mirrored breakeven
+        assert "If called" in r.text and "Shares value" in r.text
+        assert "Breakeven" not in r.text and "Collateral" not in r.text
+        assert "covered calls" in r.text
+        # "if called" = strike + premium (110 + 1.50), NOT the put's strike - premium
+        assert "$111.50" in r.text
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_search_defaults_to_puts_and_keeps_the_csp_columns() -> None:
+    svc = _FakeService(result=[_candidate("AAA")])
+    app.dependency_overrides[get_service] = lambda: svc
+    try:
+        r = TestClient(app).post("/search", data={"ticker": "aaa", "top_n": 5})
+        assert svc.seen_side is OptionType.PUT
+        assert "Breakeven" in r.text and "Collateral" in r.text
+        assert "If called" not in r.text
+        assert "$79.00" in r.text  # strike 80 - premium 1.00
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_search_threads_side_into_sort_links_and_export() -> None:
+    app.dependency_overrides[get_service] = lambda: _FakeService(result=[_call_candidate("AAA")])
+    try:
+        r = TestClient(app).post("/search", data={"ticker": "aaa", "top_n": 5, "side": "call"})
+        # re-sorting or exporting must not silently flip the user back to puts
+        assert '"side": "call"' in r.text and "side=call" in r.text
+        csv = TestClient(app).get("/search/export.csv?ticker=aaa&top_n=5&side=call")
+        assert csv.status_code == 200
+        assert "AAA-calls.csv" in csv.headers["content-disposition"]
+    finally:
+        app.dependency_overrides.clear()

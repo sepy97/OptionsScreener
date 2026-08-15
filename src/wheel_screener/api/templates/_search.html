@@ -1,22 +1,30 @@
 {% import "_icons.html" as icon %}
 {% set r = result %}
-{% set n = r.puts|length %}
+{% set rows = r.contracts %}
+{% set n = rows|length %}
+{% set is_call = (r.side == 'call') %}
+{% set noun = 'call' if is_call else 'put' %}
 {% set sk = sort_key|default('') %}
 {% set so = sort_order|default('desc') %}
 {% set tn = top_n|default(n) %}
-{# carry the search's DTE/delta so re-sorting and export don't revert them to defaults #}
+{# carry the search's DTE/delta/side so re-sorting and export don't revert them to defaults #}
 {% set s_min_dte = min_dte|default(7) %}
 {% set s_max_dte = max_dte|default(45) %}
 {% set s_target_delta = target_delta|default(0.20) %}
-{% macro sortlink(label, key) %}
+{% set s_side = side|default('put') %}
+{% macro sortlink(label, key, hint) %}
   {% set nxt = 'asc' if (sk == key and so == 'desc') else 'desc' %}
-  <th><a href="#" hx-post="/search" hx-target="#search-results" hx-swap="innerHTML"
-         hx-vals='{"ticker": "{{ r.symbol }}", "top_n": {{ tn }}, "min_dte": {{ s_min_dte }}, "max_dte": {{ s_max_dte }}, "target_delta": {{ s_target_delta }}, "sort": "{{ key }}", "order": "{{ nxt }}"}'
+  <th{% if hint %} title="{{ hint }}"{% endif %}><a href="#" hx-post="/search" hx-target="#search-results" hx-swap="innerHTML"
+         hx-vals='{"ticker": "{{ r.symbol }}", "top_n": {{ tn }}, "min_dte": {{ s_min_dte }}, "max_dte": {{ s_max_dte }}, "target_delta": {{ s_target_delta }}, "side": "{{ s_side }}", "sort": "{{ key }}", "order": "{{ nxt }}"}'
       >{{ label }}{% if sk == key %} {{ icon.chevron(so) }}{% endif %}</a></th>
 {% endmacro %}
 <article>
   <header class="results-head">
     <strong>{{ r.symbol }}</strong>
+    <span class="fund-note">{{ 'covered calls' if is_call else 'cash-secured puts' }}</span>
+    {% if r.underlying_price %}
+    <span class="fund-note" title="{{ 'the share price the yield is measured against' if is_call else 'current share price' }}">${{ r.underlying_price|num2 }}</span>
+    {% endif %}
     {% if r.passes_fundamentals is false %}
     <span class="fund-note fund-bad">fails gate: {{ r.gate_reasons|join(', ') }}</span>
     {% elif r.fundamental_score is not none %}
@@ -31,10 +39,10 @@
     {% endif %}
     {% if r.next_earnings %}<span class="badge">{{ icon.warning() }} earnings {{ r.next_earnings }}</span>
     {% elif not r.earnings_known %}<span class="badge" title="no earnings date could be established for this ticker — treat every expiry as event risk">{{ icon.warning() }} earnings date unknown</span>{% endif %}
-    {% if r.puts %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}&min_dte={{ s_min_dte }}&max_dte={{ s_max_dte }}&target_delta={{ s_target_delta }}"
+    {% if rows %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}&min_dte={{ s_min_dte }}&max_dte={{ s_max_dte }}&target_delta={{ s_target_delta }}&side={{ s_side }}"
        role="button" class="secondary outline export-btn" download>{{ icon.download() }} Export CSV</a>{% endif %}
   </header>
-  {% if r.puts %}
+  {% if rows %}
   <figure>
     <table>
       <thead>
@@ -42,17 +50,24 @@
           {{ sortlink("Strike", "strike") }}{{ sortlink("Exp", "exp") }}{{ sortlink("DTE", "dte") }}
           {{ sortlink("Delta", "delta") }}{{ sortlink("IV", "iv") }}{{ sortlink("Bid", "bid") }}
           {{ sortlink("Mid", "mid") }}{{ sortlink("Spread", "spread") }}{{ sortlink("OI", "oi") }}
-          {{ sortlink("Yield", "yield") }}{{ sortlink("Breakeven", "breakeven") }}
-          {{ sortlink("Collateral", "collateral") }}
+          {% if is_call %}
+            {{ sortlink("Yield", "yield", "annualized premium ÷ share price — what you keep if the stock goes nowhere") }}
+            {{ sortlink("If called", "breakeven", "price per share you'd receive if assigned: strike + premium") }}
+            {{ sortlink("Shares value", "collateral", "market value of the 100 shares this call pledges") }}
+          {% else %}
+            {{ sortlink("Yield", "yield", "annualized premium ÷ strike (the cash you set aside)") }}
+            {{ sortlink("Breakeven", "breakeven", "price per share you'd effectively pay if assigned: strike − premium") }}
+            {{ sortlink("Collateral", "collateral", "cash secured against this put: strike × 100") }}
+          {% endif %}
         </tr>
       </thead>
       <tbody>
-        {% for c in r.puts %}
+        {% for c in rows %}
         {% set k = c.contract %}
         <tr>
           <td>${{ k.strike|num2 }}</td>
           <td>{{ k.expiration }}{% if c.earnings_status == 'spans' or (r.next_earnings and r.next_earnings <= k.expiration) %}
-            <span title="earnings {{ r.next_earnings }} lands before this expiry — assignment would be event-driven">{{ icon.warning() }}</span>{% endif %}</td>
+            <span title="{% if is_call %}earnings {{ r.next_earnings }} lands before this expiry — you hold the shares through it either way, but a pop gets called away{% else %}earnings {{ r.next_earnings }} lands before this expiry — assignment would be event-driven{% endif %}">{{ icon.warning() }}</span>{% endif %}</td>
           <td>{{ k.dte }}</td>
           <td>{{ "%.2f"|format(k.delta) if k.delta is not none else "—" }}</td>
           <td>{{ "%.0f%%"|format(k.implied_volatility * 100) if k.implied_volatility is not none else "—" }}</td>
@@ -60,16 +75,16 @@
           <td>${{ k.mid|num2 }}</td>
           <td>{{ "%.1f%%"|format(k.spread_pct * 100) if k.spread_pct is not none else "—" }}</td>
           <td>{{ k.open_interest if k.open_interest is not none else "—" }}</td>
-          <td class="{% if c.annualized_yield is not none %}{{ 'y-hi' if c.annualized_yield >= 0.25 else ('y-mid' if c.annualized_yield >= 0.15 else 'y-lo') }}{% endif %}">{{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</td>
-          <td>${{ (k.strike - (c.premium or 0.0))|num2 }}</td>
-          <td>${{ c.collateral|usd }}</td>
+          <td class="{% if c.annualized_yield is not none %}{{ 'y-hi' if c.annualized_yield >= 0.25 else ('y-mid' if c.annualized_yield >= 0.15 else 'y-lo') }}{% endif %}"{% if c.annualized_yield is none and is_call %} title="no share price available, so premium can't be expressed as a yield"{% endif %}>{{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</td>
+          <td>${{ (k.strike + (c.premium or 0.0))|num2 if is_call else (k.strike - (c.premium or 0.0))|num2 }}</td>
+          <td>{% if c.collateral is not none %}${{ c.collateral|usd }}{% else %}—{% endif %}</td>
         </tr>
         {% endfor %}
       </tbody>
     </table>
   </figure>
   {% else %}
-  <p class="empty-state">No sellable puts for {{ r.symbol }} in the DTE / delta / liquidity window —
-     try a wider DTE range or a different ticker.</p>
+  <p class="empty-state">No sellable {{ noun }}s for {{ r.symbol }} in the DTE / delta / liquidity
+     window — try a wider DTE range or a different ticker.</p>
   {% endif %}
 </article>

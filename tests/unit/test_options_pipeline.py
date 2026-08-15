@@ -14,7 +14,7 @@ from wheel_screener.core.models import (
     Underlying,
 )
 from wheel_screener.core.pipeline.rank import rank
-from wheel_screener.core.pipeline.select_strike import select_put, select_top_puts
+from wheel_screener.core.pipeline.select_strike import select_put, select_top_contracts
 from wheel_screener.core.service import ScreenerService
 
 _BASE = date(2026, 6, 22)
@@ -36,8 +36,26 @@ def _put(strike, delta, dte, bid, oi=500, spread=0.02, iv=None):
     )
 
 
-def _chain(contracts):
-    return ChainSnapshot(underlying_symbol="AAA", contracts=contracts)
+def _call(strike, delta, dte, bid, oi=500, spread=0.02, iv=None):
+    return OptionContract(
+        underlying_symbol="AAA",
+        option_symbol=f"AAA-C-{dte}-{int(strike)}",
+        option_type=OptionType.CALL,
+        expiration=_BASE + timedelta(days=dte),
+        strike=strike,
+        dte=dte,
+        delta=delta,  # calls carry POSITIVE delta
+        bid=bid,
+        ask=round(bid * (1 + spread), 4),
+        open_interest=oi,
+        implied_volatility=iv,
+    )
+
+
+def _chain(contracts, underlying_price=None):
+    return ChainSnapshot(
+        underlying_symbol="AAA", underlying_price=underlying_price, contracts=contracts
+    )
 
 
 def test_select_put_picks_best_yield_near_target_delta():
@@ -151,27 +169,44 @@ class _FakeFundamentals:
 
 
 class _FakeChains:
-    def __init__(self, chain):
+    """Honours ``filt.option_type`` the way a real provider does — a fake that returned every
+    contract regardless of side would hide a caller asking for the wrong one."""
+
+    def __init__(self, chain, spot: float | None = None):
         self._chain = chain
+        self._spot = spot
+        self.requested_types: list[OptionType] = []
 
     def get_chain(self, symbol, filt):
-        return self._chain
+        self.requested_types.append(filt.option_type)
+        return ChainSnapshot(
+            underlying_symbol=self._chain.underlying_symbol,
+            underlying_price=self._chain.underlying_price,
+            contracts=[c for c in self._chain.contracts if c.option_type is filt.option_type],
+        )
 
     def capabilities(self):
         return ProviderCaps(name="fake")
 
 
-def test_select_top_puts_nearest_target_one_per_expiry():
+class _QuotingChains(_FakeChains):
+    """A provider whose chains are option-only (like Alpaca) but which can quote the underlying."""
+
+    def spot(self, symbol):
+        return self._spot
+
+
+def test_select_top_contracts_nearest_target_one_per_expiry():
     crit = ScreenCriteria(min_dte=7, max_dte=45)  # target delta -0.20
     chain = _chain([
         _put(90, -0.20, 14, 1.0), _put(88, -0.30, 14, 1.5),  # 14 DTE: -0.20 is nearest target
         _put(85, -0.19, 28, 1.2), _put(80, -0.28, 28, 2.0),  # 28 DTE: -0.19 nearest
         _put(75, -0.05, 40, 0.3),                             # 40 DTE: -0.05 (far from target)
     ])
-    top = select_top_puts(chain, crit, 2)
+    top = select_top_contracts(chain, crit, 2)
     assert [c.dte for c in top] == [14, 28]  # the 2 nearest-target expiries, earliest first
     assert [c.delta for c in top] == [-0.20, -0.19]  # one per expiry, nearest -0.20
-    assert len(select_top_puts(chain, crit, 5)) == 3  # only 3 expiries available
+    assert len(select_top_contracts(chain, crit, 5)) == 3  # only 3 expiries available
 
 
 def test_search_ticker_returns_top_puts_with_context():
@@ -179,12 +214,13 @@ def test_search_ticker_returns_top_puts_with_context():
     service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
     r = service.search_ticker("aaa", ScreenCriteria(min_dte=7, max_dte=45), date(2026, 6, 22), n=2)
     assert r.symbol == "AAA"  # normalized to upper
-    assert [c.contract.dte for c in r.puts] == [14, 28] and all(c.symbol == "AAA" for c in r.puts)
+    assert [c.contract.dte for c in r.contracts] == [14, 28]
+    assert all(c.symbol == "AAA" for c in r.contracts)
     assert r.passes_fundamentals is True and r.gate_reasons == []  # _good() passes the gate
     assert r.fundamental_score is not None  # absolute strength from the ticker's own metrics
     assert r.peer_percentile is not None  # AAA is in the ranked universe -> has a percentile
-    assert all(c.fundamental_score == r.fundamental_score for c in r.puts)
-    assert all(c.peer_percentile == r.peer_percentile for c in r.puts)
+    assert all(c.fundamental_score == r.fundamental_score for c in r.contracts)
+    assert all(c.peer_percentile == r.peer_percentile for c in r.contracts)
     assert r.next_earnings == date(2030, 1, 1) and r.earnings_known
 
 
@@ -287,7 +323,93 @@ def test_search_flags_earnings_expiries_without_hiding_them():
     fundamentals = _FakeFundamentals({"AAA": _BASE + timedelta(days=28)})
     service = ScreenerService(fundamentals=fundamentals, chains=_FakeChains(chain))
     r = service.search_ticker("AAA", ScreenCriteria(min_dte=7, max_dte=45), _BASE, n=5)
-    assert [c.contract.dte for c in r.puts] == [14, 35]  # nothing hidden
-    assert [c.earnings_status for c in r.puts] == [EarningsStatus.CLEAN, EarningsStatus.SPANS]
+    assert [c.contract.dte for c in r.contracts] == [14, 35]  # nothing hidden
+    assert [c.earnings_status for c in r.contracts] == [EarningsStatus.CLEAN, EarningsStatus.SPANS]
     assert r.next_earnings == _BASE + timedelta(days=28)
     assert fundamentals.symbol_lookups == ["AAA"]  # one per-symbol call, not a market-wide pull
+
+
+# --- covered calls: the search-side knob -------------------------------------
+
+def test_search_calls_targets_positive_delta_and_pulls_the_call_chain():
+    """The criteria carry a magnitude; the call side must re-sign it. Aiming at -0.20 on a chain
+    of positive deltas would pick the FURTHEST contract from the target, not the nearest."""
+    chain = _chain(
+        [_call(110, 0.20, 14, 1.0), _call(105, 0.30, 14, 1.8), _call(120, 0.05, 14, 0.2)],
+        underlying_price=100.0,
+    )
+    chains = _FakeChains(chain)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    r = service.search_ticker(
+        "AAA", ScreenCriteria(min_dte=7, max_dte=45), _BASE, n=1, side=OptionType.CALL
+    )
+    assert chains.requested_types == [OptionType.CALL]  # asked the provider for calls
+    assert r.side is OptionType.CALL
+    assert [c.contract.strike for c in r.contracts] == [110]  # 0.20Δ, nearest the target
+
+
+def test_call_yield_is_premium_over_share_price_not_strike():
+    """The whole point of the side split: a covered call posts no cash, so the base is what the
+    100 pledged shares are worth — using the strike would silently misprice every call."""
+    chain = _chain([_call(110, 0.20, 73, 2.0)], underlying_price=100.0)  # 73 DTE = a fifth of a yr
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
+    r = service.search_ticker(
+        "AAA", ScreenCriteria(min_dte=7, max_dte=90), _BASE, n=1, side=OptionType.CALL
+    )
+    c = r.contracts[0]
+    assert abs(c.annualized_yield - (2.0 / 100.0) * (365 / 73)) < 1e-9  # 10%/yr off SPOT
+    assert abs(c.annualized_yield - (2.0 / 110.0) * (365 / 73)) > 1e-3  # NOT off the strike
+    assert c.collateral == 100.0 * 100  # 100 shares at the market price
+    assert r.underlying_price == 100.0
+
+
+def test_put_yield_still_uses_the_strike():
+    """Regression guard on the CSP path — the base for a cash-secured put is the collateral."""
+    chain = _chain([_put(90, -0.20, 73, 1.8)], underlying_price=100.0)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
+    r = service.search_ticker("AAA", ScreenCriteria(min_dte=7, max_dte=90), _BASE, n=1)
+    c = r.contracts[0]
+    assert abs(c.annualized_yield - (1.8 / 90.0) * (365 / 73)) < 1e-9
+    assert c.collateral == 90 * 100
+
+
+def test_call_spot_falls_back_to_the_provider_quote():
+    """Alpaca's option chains are option-only, so spot comes from a separate quote call."""
+    chain = _chain([_call(110, 0.20, 73, 2.0)])  # no underlying_price in-band
+    chains = _QuotingChains(chain, spot=100.0)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    r = service.search_ticker(
+        "AAA", ScreenCriteria(min_dte=7, max_dte=90), _BASE, n=1, side=OptionType.CALL
+    )
+    assert r.underlying_price == 100.0
+    assert abs(r.contracts[0].annualized_yield - (2.0 / 100.0) * (365 / 73)) < 1e-9
+
+
+def test_call_without_a_spot_lists_the_contract_with_no_yield():
+    """A missing price feed must degrade the yield cell, not delete the row or invent a number."""
+    chain = _chain([_call(110, 0.20, 73, 2.0)])  # no spot in-band, no quote endpoint, no profile
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
+    r = service.search_ticker(
+        "AAA", ScreenCriteria(min_dte=7, max_dte=90), _BASE, n=1, side=OptionType.CALL
+    )
+    assert len(r.contracts) == 1  # still listed — it is perfectly sellable
+    assert r.contracts[0].annualized_yield is None and r.contracts[0].collateral is None
+
+
+def test_search_defaults_to_puts():
+    chain = _chain([_put(90, -0.20, 14, 1.0), _call(110, 0.20, 14, 1.0)], underlying_price=100.0)
+    chains = _FakeChains(chain)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    r = service.search_ticker("AAA", ScreenCriteria(min_dte=7, max_dte=45), _BASE, n=5)
+    assert chains.requested_types == [OptionType.PUT]
+    assert all(c.contract.option_type is OptionType.PUT for c in r.contracts)
+
+
+def test_screen_stays_put_only():
+    """Calls are a search-only feature: the screen picks what to *acquire*, which is a put."""
+    chain = _chain([_put(90, -0.20, 27, 1.9), _call(110, 0.20, 27, 1.9)], underlying_price=100.0)
+    chains = _FakeChains(chain)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    out = service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE)
+    assert chains.requested_types == [OptionType.PUT]
+    assert all(c.contract.option_type is OptionType.PUT for c in out)

@@ -14,7 +14,7 @@ import typer
 from wheel_screener.composition import build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import AuthExpiredError, ProviderError, RateLimitedError
-from wheel_screener.core.models import EarningsStatus, ScreenCriteria, Underlying
+from wheel_screener.core.models import EarningsStatus, OptionType, ScreenCriteria, Underlying
 from wheel_screener.logging_config import configure_logging
 
 _F = TypeVar("_F", bound=Callable[..., object])
@@ -219,19 +219,30 @@ def refresh_fundamentals(
 @handle_provider_errors
 def search(
     ticker: str = typer.Argument(..., help="Ticker symbol, e.g. AAPL."),
-    top_n: int = typer.Option(5, help="How many puts to show (nearest the target delta)."),
+    top_n: int = typer.Option(5, help="How many contracts to show (nearest the target delta)."),
     min_dte: int = typer.Option(7, help="Minimum days to expiration."),
     max_dte: int = typer.Option(45, help="Maximum days to expiration."),
-    target_delta: float = typer.Option(-0.20, help="Target put delta."),
+    target_delta: float = typer.Option(-0.20, help="Target delta (magnitude; re-signed per side)."),
+    calls: bool = typer.Option(
+        False, "--calls/--puts", help="Sell covered calls instead of cash-secured puts."
+    ),
 ) -> None:
-    """Top-N cash-secured puts to sell on ONE ticker (any optionable symbol; skips the funnel)."""
+    """Top-N contracts to sell on ONE ticker (any optionable symbol; skips the funnel).
+
+    Puts by default (cash-secured, to get assigned). --calls prices covered calls against shares
+    you already hold: the yield is premium over the current share price, not the strike."""
     settings = Settings()
     token = Path(settings.schwab.token_path).expanduser()
     if settings.chain_source == "schwab" and not token.exists():
         typer.echo("error: no Schwab token; run `wheel-screener auth-login` first.")
         raise typer.Exit(code=1)
     criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=target_delta)
-    _print_search(build_service(settings).search_ticker(ticker, criteria, date.today(), n=top_n))
+    side = OptionType.CALL if calls else OptionType.PUT
+    _print_search(
+        build_service(settings).search_ticker(
+            ticker, criteria, date.today(), n=top_n, side=side
+        )
+    )
 
 
 def _print_search(r: object) -> None:
@@ -248,23 +259,32 @@ def _print_search(r: object) -> None:
         if r.next_earnings
         else ("" if r.earnings_known else " · earnings date UNKNOWN")
     )
-    typer.echo(f"{r.symbol}: {len(r.puts)} sellable put(s) · gate {fund}{strength}{peers}{earn}")
-    if not r.puts:
+    is_call = r.side is OptionType.CALL
+    noun = "covered call" if is_call else "put"
+    spot = f" · spot {r.underlying_price:.2f}" if r.underlying_price else ""
+    typer.echo(
+        f"{r.symbol}: {len(r.contracts)} sellable {noun}(s) · gate {fund}"
+        f"{strength}{peers}{spot}{earn}"
+    )
+    if not r.contracts:
         typer.echo("  nothing in the DTE / delta / liquidity window.")
         return
+    # puts break even at strike-premium (what you'd pay); calls net strike+premium (what you'd get)
+    last_col = "if called" if is_call else "b/e"
     typer.echo(
         f"  {'strike':>7} {'exp':>10} {'dte':>4} {'delta':>6} {'iv':>5} "
-        f"{'bid':>5} {'yield':>6} {'oi':>7} {'b/e':>8}"
+        f"{'bid':>5} {'yield':>6} {'oi':>7} {last_col:>9}"
     )
-    for c in r.puts:
+    for c in r.contracts:
         k = c.contract
         iv = f"{k.implied_volatility * 100:.0f}%" if k.implied_volatility is not None else "-"
-        be = k.strike - (c.premium or 0.0)
+        prem = c.premium or 0.0
+        be = k.strike + prem if is_call else k.strike - prem
         flag = " <- earnings before exp" if c.earnings_status is EarningsStatus.SPANS else ""
-        yld = (c.annualized_yield or 0.0) * 100
+        yld = f"{c.annualized_yield * 100:>5.1f}%" if c.annualized_yield is not None else "    -"
         typer.echo(
             f"  {k.strike:>7.2f} {k.expiration!s:>10} {k.dte:>4} {k.delta:>6.2f} {iv:>5} "
-            f"{k.bid:>5.2f} {yld:>5.1f}% {k.open_interest or 0:>7} {be:>8.2f}{flag}"
+            f"{k.bid:>5.2f} {yld:>6} {k.open_interest or 0:>7} {be:>9.2f}{flag}"
         )
 
 

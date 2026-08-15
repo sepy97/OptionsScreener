@@ -8,10 +8,27 @@
         <label>Ticker
           <input type="text" name="ticker" placeholder="e.g. AAPL" required autocomplete="off"
                  oninput="this.value=this.value.toUpperCase()">
-          <small>any optionable symbol — the top puts nearest −0.20Δ across expiries</small>
+          <small>any optionable symbol — the top contracts nearest 0.20Δ across expiries</small>
         </label>
-        <label>How many puts
+        <label>How many contracts
           <input type="number" name="top_n" value="5" min="1" max="25">
+        </label>
+      </div>
+      <div class="grid">
+        <div>
+          <label for="s_side">Sell</label>
+          <fieldset role="group" id="s_side">
+            <input type="radio" id="s_side_put" name="side" value="put" checked>
+            <label for="s_side_put">Puts</label>
+            <input type="radio" id="s_side_call" name="side" value="call">
+            <label for="s_side_call">Calls</label>
+          </fieldset>
+          <small>puts = cash-secured, to get assigned shares · calls = covered, against shares you
+            already own</small>
+        </div>
+        <label>Target delta
+          <input type="number" name="target_delta" value="0.20" min="0.01" max="1" step="0.01">
+          <small>delta magnitude — 0.20 ≈ 20% assignment odds, either side</small>
         </label>
       </div>
       <div class="grid">
@@ -25,12 +42,8 @@
           </fieldset>
           <small>expiry window to scan — wider spans more expiries</small>
         </div>
-        <label>Target delta
-          <input type="number" name="target_delta" value="0.20" min="0.01" max="1" step="0.01">
-          <small>put delta magnitude — 0.20 ≈ 20% assignment odds</small>
-        </label>
       </div>
-      <button type="submit" class="run-btn">Find CSPs</button>
+      <button type="submit" class="run-btn">Find contracts</button>
     </form>
     <div id="search-results"></div>
   </article>

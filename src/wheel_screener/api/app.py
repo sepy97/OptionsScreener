@@ -41,7 +41,7 @@ from wheel_screener.core.errors import (
     ProviderUnavailableError,
     RateLimitedError,
 )
-from wheel_screener.core.models import ScreenCriteria
+from wheel_screener.core.models import OptionType, ScreenCriteria
 from wheel_screener.core.service import ScreenerService
 
 logger = logging.getLogger(__name__)
@@ -184,7 +184,11 @@ app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static"
 _EXPORT_COLUMNS: list[tuple[str, object]] = [
     ("symbol", lambda c: c.get("symbol")),
     ("option_symbol", lambda c: (c.get("contract") or {}).get("option_symbol")),
+    # put/call: two exports of the same ticker are otherwise near-indistinguishable, and the
+    # yield column means different things on each side (strike-based vs share-price-based)
+    ("option_type", lambda c: (c.get("contract") or {}).get("option_type")),
     ("strike", lambda c: (c.get("contract") or {}).get("strike")),
+    ("underlying_price", lambda c: (c.get("contract") or {}).get("underlying_price")),
     ("expiration", lambda c: (c.get("contract") or {}).get("expiration")),
     ("dte", lambda c: (c.get("contract") or {}).get("dte")),
     ("delta", lambda c: (c.get("contract") or {}).get("delta")),
@@ -351,7 +355,13 @@ _SEARCH_SORT_KEYS = {
     "spread": lambda c: _num(c.contract.spread_pct),
     "oi": lambda c: _num(c.contract.open_interest),
     "yield": lambda c: _num(c.annualized_yield),
-    "breakeven": lambda c: c.contract.strike - (c.premium or 0.0),
+    # puts: the effective price you'd pay if assigned. calls: the effective price you'd receive
+    # if called away — same strike ± the credit, mirrored by side.
+    "breakeven": lambda c: (
+        c.contract.strike - (c.premium or 0.0)
+        if c.contract.option_type is OptionType.PUT
+        else c.contract.strike + (c.premium or 0.0)
+    ),
     "collateral": lambda c: _num(c.collateral),
 }
 
@@ -458,10 +468,18 @@ def search_page(request: Request):
     return templates.TemplateResponse(request, "search.html", {"active_tab": "search"})
 
 
+def _side(raw: str) -> OptionType:
+    """Parse the put/call knob; anything unrecognized falls back to puts (the default trade)."""
+    return OptionType.CALL if (raw or "").strip().lower() in {"call", "calls"} else OptionType.PUT
+
+
 def _search(service: ScreenerService, ticker: str, top_n: int, min_dte: int, max_dte: int,
-            target_delta: float):
-    criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=-abs(target_delta))
-    return service.search_ticker((ticker or "").strip().upper(), criteria, date.today(), n=top_n)
+            target_delta: float, side: str = "put"):
+    # the form sends a magnitude; select_strike re-signs it for the requested side
+    criteria = ScreenCriteria(min_dte=min_dte, max_dte=max_dte, target_delta=abs(target_delta))
+    return service.search_ticker(
+        (ticker or "").strip().upper(), criteria, date.today(), n=top_n, side=_side(side)
+    )
 
 
 @app.post("/search")
@@ -472,27 +490,31 @@ def search_route(
     min_dte: int = Form(7),
     max_dte: int = Form(45),
     target_delta: float = Form(0.20),
+    side: str = Form("put"),
     sort: str = Form(""),
     order: str = Form("desc"),
     service: ScreenerService = Depends(get_service),
 ):
-    """Single-ticker CSP search — synchronous (one chain pull) top-N puts near the target delta."""
+    """Single-ticker search — synchronous (one chain pull) top-N contracts near the target delta.
+
+    ``side`` selects cash-secured puts (default) or covered calls."""
     if not (ticker or "").strip():
         return templates.TemplateResponse(
             request, "_error.html", {"message": "enter a ticker symbol"}, status_code=422
         )
     try:
-        result = _search(service, ticker, top_n, min_dte, max_dte, target_delta)
+        result = _search(service, ticker, top_n, min_dte, max_dte, target_delta, side)
     except ProviderError as e:
         return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
     keyfn = _SEARCH_SORT_KEYS.get(sort)
     if keyfn is not None:
         order = "asc" if order.lower() == "asc" else "desc"
-        result.puts.sort(key=keyfn, reverse=(order != "asc"))
+        result.contracts.sort(key=keyfn, reverse=(order != "asc"))
     return templates.TemplateResponse(
         request, "_search.html",
         {"result": result, "top_n": top_n, "sort_key": sort, "sort_order": order,
-         "min_dte": min_dte, "max_dte": max_dte, "target_delta": target_delta},
+         "min_dte": min_dte, "max_dte": max_dte, "target_delta": target_delta,
+         "side": result.side.value},
     )
 
 
@@ -503,17 +525,19 @@ def search_export(
     min_dte: int = 7,
     max_dte: int = 45,
     target_delta: float = 0.20,
+    side: str = "put",
     service: ScreenerService = Depends(get_service),
 ) -> Response:
-    """Download a ticker's top-N puts as CSV."""
+    """Download a ticker's top-N contracts as CSV."""
     if not (ticker or "").strip():
         raise HTTPException(status_code=422, detail="no ticker")
-    result = _search(service, ticker, top_n, min_dte, max_dte, target_delta)
-    rows = [c.model_dump(mode="json") for c in result.puts]
+    result = _search(service, ticker, top_n, min_dte, max_dte, target_delta, side)
+    rows = [c.model_dump(mode="json") for c in result.contracts]
+    filename = f"{result.symbol}-{result.side.value}s.csv"
     return Response(
         content=_candidates_csv(rows),
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{result.symbol}-puts.csv"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

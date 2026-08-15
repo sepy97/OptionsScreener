@@ -129,3 +129,84 @@ def test_capabilities_reflects_feed() -> None:
     assert AlpacaChainProvider(_settings(feed="opra")).capabilities().realtime is True
     caps = AlpacaChainProvider(_settings(feed="indicative")).capabilities()
     assert caps.name == "alpaca" and caps.realtime is False and caps.max_concurrency == 8
+
+
+def _call_occ() -> str:
+    exp = date.today() + timedelta(days=40)
+    return f"AAA{exp:%y%m%d}C00110000"
+
+
+def _call_snap_body(occ: str) -> dict:
+    return {
+        "snapshots": {
+            occ: {
+                "latestQuote": {"bp": 1.40, "ap": 1.50},
+                "greeks": {"delta": 0.20},  # calls carry positive delta
+                "impliedVolatility": 0.345,
+            }
+        },
+        "next_page_token": None,
+    }
+
+
+@respx.mock
+def test_get_chain_requests_calls_when_asked() -> None:
+    occ = _call_occ()
+    snap = respx.get(SNAP).mock(return_value=httpx.Response(200, json=_call_snap_body(occ)))
+    oi = respx.get(CONTRACTS).mock(return_value=httpx.Response(200, json=_oi_body(occ)))
+    chain = AlpacaChainProvider(_settings()).get_chain(
+        "AAA", ChainFilter(min_dte=30, max_dte=45, option_type=OptionType.CALL)
+    )
+    # BOTH endpoints must switch sides — a put OI lookup would silently drop every call's OI
+    assert "type=call" in str(snap.calls.last.request.url)
+    assert "type=call" in str(oi.calls.last.request.url)
+    assert chain.contracts[0].option_type is OptionType.CALL
+    assert chain.contracts[0].strike == 110.0
+
+
+@respx.mock
+def test_chain_cache_is_keyed_by_option_type(tmp_path) -> None:
+    """A shared key would serve the put chain for a call request (and vice versa) for the whole
+    TTL — the failure is silent and the numbers look plausible."""
+    put_occ, call_occ = _occ(), _call_occ()
+
+    def _route(request):
+        side = "call" if "type=call" in str(request.url) else "put"
+        occ = call_occ if side == "call" else put_occ
+        if "options/contracts" in str(request.url):
+            return httpx.Response(200, json=_oi_body(occ))
+        body = _call_snap_body(occ) if side == "call" else _snap_body(occ)
+        return httpx.Response(200, json=body)
+
+    respx.get(SNAP).mock(side_effect=_route)
+    respx.get(CONTRACTS).mock(side_effect=_route)
+    prov = AlpacaChainProvider(
+        _settings(
+            chain_cache_enabled=True, chain_cache_dir=str(tmp_path), chain_cache_ttl_seconds=300
+        )
+    )
+    puts = prov.get_chain("AAA", ChainFilter(min_dte=30, max_dte=45))
+    calls = prov.get_chain(
+        "AAA", ChainFilter(min_dte=30, max_dte=45, option_type=OptionType.CALL)
+    )
+    assert puts.contracts[0].option_type is OptionType.PUT
+    assert calls.contracts[0].option_type is OptionType.CALL  # not the cached put chain
+
+
+@respx.mock
+def test_spot_reads_the_latest_trade() -> None:
+    respx.get("https://data.alpaca.markets/v2/stocks/AAA/snapshot").mock(
+        return_value=httpx.Response(200, json={"latestTrade": {"p": 305.94}})
+    )
+    assert AlpacaChainProvider(_settings()).spot("AAA") == 305.94
+
+
+@respx.mock
+def test_spot_falls_back_to_the_daily_bar_then_gives_up_quietly() -> None:
+    """Spot is a yield denominator, not a hard dependency: losing it must blank the yield cell,
+    never fail the search."""
+    url = "https://data.alpaca.markets/v2/stocks/AAA/snapshot"
+    respx.get(url).mock(return_value=httpx.Response(200, json={"dailyBar": {"c": 100.5}}))
+    assert AlpacaChainProvider(_settings()).spot("AAA") == 100.5
+    respx.get(url).mock(return_value=httpx.Response(500))
+    assert AlpacaChainProvider(_settings(max_retries=0)).spot("AAA") is None
