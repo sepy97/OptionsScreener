@@ -15,17 +15,15 @@
         </label>
       </div>
       <div class="grid">
-        <div>
-          <label for="s_side">Sell</label>
-          <fieldset role="group" id="s_side">
-            <input type="radio" id="s_side_put" name="side" value="put" checked>
-            <label for="s_side_put">Puts</label>
-            <input type="radio" id="s_side_call" name="side" value="call">
-            <label for="s_side_call">Calls</label>
-          </fieldset>
-          <small>puts = cash-secured, to get assigned shares · calls = covered, against shares you
-            already own</small>
-        </div>
+        <fieldset class="seg-field">
+          <legend>Sell</legend>
+          <div class="segmented">
+            <input type="radio" name="side" value="put" id="side-put" checked>
+            <label for="side-put">Puts<small>cash-secured</small></label>
+            <input type="radio" name="side" value="call" id="side-call">
+            <label for="side-call">Calls<small>covered</small></label>
+          </div>
+        </fieldset>
         <label>Target delta
           <input type="number" name="target_delta" value="0.20" min="0.01" max="1" step="0.01">
           <small>delta magnitude — 0.20 ≈ 20% assignment odds, either side</small>

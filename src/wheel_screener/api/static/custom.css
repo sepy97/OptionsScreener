@@ -82,9 +82,11 @@ form label small { font-weight: 400; color: var(--pico-muted-color); }
 }
 .run-btn:hover { background: var(--wheel-accent-strong); border-color: var(--wheel-accent-strong); }
 
-/* "Rank by" — radio group as a segmented button bar (no JS, no border shimmer) */
-.rank-by { margin: 0; padding: 0; border: 0; }
-.rank-by legend { padding: 0; margin-bottom: calc(var(--pico-spacing) * 0.25); }
+/* Radio group as a segmented button bar (no JS, no border shimmer) — "Rank by", puts/calls.
+   The radios themselves are hidden and the labels ARE the buttons; leaving them visible inside a
+   Pico role="group" stretches each input into a full-width pill. */
+.rank-by, .seg-field { margin: 0; padding: 0; border: 0; }
+.rank-by legend, .seg-field legend { padding: 0; margin-bottom: calc(var(--pico-spacing) * 0.25); }
 .segmented { display: flex; }
 .segmented input[type="radio"] { position: absolute; opacity: 0; pointer-events: none; }
 .segmented label {
