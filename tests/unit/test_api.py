@@ -811,6 +811,11 @@ def test_search_form_exposes_the_put_call_knob() -> None:
     r = TestClient(app).get("/search")
     assert r.status_code == 200
     assert 'name="side"' in r.text and 'value="put"' in r.text and 'value="call"' in r.text
+    # rendered as the shared segmented button bar (same component as the screener's "Rank by").
+    # Bare radios inside a Pico role="group" get stretched into full-width pills instead.
+    seg = re.search(r'<div class="segmented">(.*?)</div>', r.text, re.S)
+    assert seg is not None and 'role="group"' not in seg.group(1)
+    assert seg.group(1).count('type="radio"') == 2  # exactly two options, no third state
 
 
 def test_search_side_reaches_the_service_and_switches_the_table() -> None:
