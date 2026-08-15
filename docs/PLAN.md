@@ -162,6 +162,40 @@ Pure & tested today: `core/fundamentals` (`sanitize_metrics`, `gate_reasons`, `r
 `rate_fundamentals` (`select_top`, `apply_earnings_blackout`), `ranking.annualized_csp_yield`,
 `select_strike.nearest_to_delta`.
 
+### Covered calls (search only)
+
+The **screen is cash-secured-puts only** and stays that way: stages 1–2 exist to answer *"what am
+I willing to acquire?"*, and a covered call presupposes shares you already hold — the underlying is
+given, not screened. So the put/call knob lives on the **single-ticker search**, whose shape
+(you type the symbol) already matches the trade. There is no positions store; nothing is tracked
+across a wheel cycle.
+
+Both sides share every sellability gate and the whole chain/earnings path. They differ in exactly
+two places:
+
+| | Put (cash-secured) | Call (covered) |
+|---|---|---|
+| Target delta | −0.20 | +0.20 (`signed_target_delta` re-signs the magnitude) |
+| Yield base | the **strike** — the cash set aside | the **share price** — what the 100 pledged shares are worth |
+| Breakeven column | strike − premium (what you'd pay) | strike + premium (what you'd receive) |
+
+Anchoring calls to the market price rather than the holder's cost basis is deliberate: basis is
+per-holder and unknown here, and using it would make the same contract score differently for two
+people reading the same row. The quoted yield is therefore the **static** return (premium kept if
+the stock goes nowhere); it excludes the capital gain also realized if the shares are called away.
+
+Spot comes from the chain snapshot when the provider returns it in-band (Schwab), else the
+provider's quote endpoint (`AlpacaChainProvider.spot` — Alpaca's option snapshots are option-only),
+else the EOD profile price. When all three fail the contract still lists with an empty yield cell:
+a missing denominator must not become a fabricated number, nor delete a perfectly sellable row.
+
+The earnings guard is reused as-is, but note the flag means something different on each side. For a
+put, a report before expiry is a genuine defect (issue #113) — assignment at a stale price, and the
+inflated pre-earnings premium makes those contracts win a yield ranking. For a call the shares are
+held through the report either way: selling into it cushions a drop and caps a pop. That is a
+trade-off to surface, not one to make for the user, so search FLAGs on both sides rather than
+excluding — safe here because search orders by delta-proximity, not yield.
+
 ## 7. Provider reference (verified June 2026)
 
 ### Schwab Trader / Market Data API

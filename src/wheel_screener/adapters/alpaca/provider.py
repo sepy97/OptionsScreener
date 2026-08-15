@@ -18,7 +18,7 @@ from wheel_screener.adapters.errors import map_http_error
 from wheel_screener.adapters.http import RateLimiter, run_with_retry
 from wheel_screener.config import AlpacaSettings
 from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
-from wheel_screener.core.models import ChainFilter, ChainSnapshot, ProviderCaps
+from wheel_screener.core.models import ChainFilter, ChainSnapshot, OptionType, ProviderCaps
 
 
 class AlpacaChainProvider:
@@ -66,11 +66,13 @@ class AlpacaChainProvider:
             if not token:
                 return
 
-    def _snapshots(self, symbol: str, from_date: date, to_date: date) -> dict:
+    def _snapshots(
+        self, symbol: str, from_date: date, to_date: date, option_type: OptionType
+    ) -> dict:
         url = f"{self._settings.data_base_url.rstrip('/')}/v1beta1/options/snapshots/{symbol}"
         params = {
             "feed": self._settings.feed,
-            "type": "put",
+            "type": option_type.value,
             "expiration_date_gte": from_date.isoformat(),
             "expiration_date_lte": to_date.isoformat(),
             "limit": 1000,
@@ -82,11 +84,13 @@ class AlpacaChainProvider:
         )
         return out
 
-    def _open_interest(self, symbol: str, from_date: date, to_date: date) -> dict:
+    def _open_interest(
+        self, symbol: str, from_date: date, to_date: date, option_type: OptionType
+    ) -> dict:
         url = f"{self._settings.trading_base_url.rstrip('/')}/v2/options/contracts"
         params = {
             "underlying_symbols": symbol,
-            "type": "put",
+            "type": option_type.value,
             "status": "active",
             "expiration_date_gte": from_date.isoformat(),
             "expiration_date_lte": to_date.isoformat(),
@@ -113,7 +117,12 @@ class AlpacaChainProvider:
         today = date.today()
         from_date = today + timedelta(days=filt.min_dte if filt.min_dte is not None else 0)
         to_date = today + timedelta(days=filt.max_dte if filt.max_dte is not None else 60)
-        cache_key = f"alpaca:{symbol}:{from_date}:{to_date}:{self._settings.feed}:PUT"
+        # the option type is part of the key: puts and calls are separate fetches over the same
+        # symbol/window, so a shared key would serve one side's chain for the other's request
+        side = filt.option_type
+        cache_key = (
+            f"alpaca:{symbol}:{from_date}:{to_date}:{self._settings.feed}:{side.value.upper()}"
+        )
 
         if self._cache is not None:
             cached = self._cache.get(cache_key)
@@ -121,8 +130,8 @@ class AlpacaChainProvider:
                 return build_chain(symbol, cached.get("snapshots"), cached.get("oi"), today)
 
         try:
-            snapshots = self._snapshots(symbol, from_date, to_date)
-            oi = self._open_interest(symbol, from_date, to_date)
+            snapshots = self._snapshots(symbol, from_date, to_date, side)
+            oi = self._open_interest(symbol, from_date, to_date, side)
         except ProviderError:
             raise  # never mask a typed provider error
         except (httpx.HTTPStatusError, httpx.TransportError) as e:
@@ -133,6 +142,33 @@ class AlpacaChainProvider:
         if self._cache is not None:
             self._cache.set(cache_key, {"snapshots": snapshots, "oi": oi})
         return build_chain(symbol, snapshots, oi, today)
+
+    def spot(self, symbol: str) -> float | None:
+        """Latest trade price for the underlying, or None if it can't be established.
+
+        Alpaca's option snapshot is option-only (no spot), so a covered-call yield — premium over
+        the share price — needs this one extra call. Used only by the single-ticker search, where
+        one more request is immaterial; the screener is CSP-only and prices off the strike.
+
+        Never raises: spot is a display/denominator input, and losing it must degrade the yield
+        cell to "—", not fail the whole search.
+        """
+        url = f"{self._settings.data_base_url.rstrip('/')}/v2/stocks/{symbol}/snapshot"
+        try:
+            payload = run_with_retry(
+                lambda: self._get(url, {"feed": self._settings.stock_feed}, self._data_limiter),
+                max_attempts=self._settings.max_retries + 1,
+                multiplier=self._settings.retry_backoff_multiplier,
+            )
+        except Exception:  # noqa: BLE001 - see docstring: a missing spot is not a failed search
+            return None
+        # latest trade first (an actual print); the daily bar's close covers a halted/quiet tape
+        for path in (("latestTrade", "p"), ("dailyBar", "c"), ("prevDailyBar", "c")):
+            node = (payload or {}).get(path[0]) or {}
+            raw = node.get(path[1])
+            if isinstance(raw, int | float) and raw > 0:
+                return float(raw)
+        return None
 
     def capabilities(self) -> ProviderCaps:
         return ProviderCaps(

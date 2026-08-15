@@ -44,6 +44,9 @@ class AlpacaSettings(BaseModel):
     api_key: SecretStr = SecretStr("")
     api_secret: SecretStr = SecretStr("")
     feed: str = "indicative"  # indicative (free) | opra (paid, real-time OPRA)
+    # stock quotes are a SEPARATE entitlement from options: iex (free) | sip (paid, full tape).
+    # Only used for the covered-call yield base (premium ÷ share price) on a ticker search.
+    stock_feed: str = "iex"
     data_base_url: str = "https://data.alpaca.markets"  # snapshots (quotes/greeks/IV)
     # /v2/options/contracts (OI) is account-bound — this MUST match the api_key/api_secret
     # environment. Paper-account users: set to https://paper-api.alpaca.markets.

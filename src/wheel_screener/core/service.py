@@ -29,10 +29,11 @@ from wheel_screener.core.pipeline.pull_chains import pull_chains
 from wheel_screener.core.pipeline.rank import rank
 from wheel_screener.core.pipeline.rate_fundamentals import rate_and_rank
 from wheel_screener.core.pipeline.select_strike import (
+    contract_yield,
     credited_premium,
-    put_yield,
     select_put,
-    select_top_puts,
+    select_top_contracts,
+    signed_target_delta,
 )
 from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
@@ -42,10 +43,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class TickerSearch:
-    """Single-ticker CSP search: the top-N puts + fundamentals/earnings context."""
+    """Single-ticker search: the top-N contracts on one side + fundamentals/earnings context.
+
+    ``side`` says which trade the rows describe — puts to open a cash-secured position, calls to
+    sell against shares already held. The two are read differently (the put's base is the strike,
+    the call's is the share price), so consumers must not assume puts.
+    """
 
     symbol: str
-    puts: list[CandidateResult] = field(default_factory=list)
+    contracts: list[CandidateResult] = field(default_factory=list)
+    side: OptionType = OptionType.PUT
+    underlying_price: float | None = None  # spot used as the covered-call yield base
     passes_fundamentals: bool | None = None  # None if the ticker isn't in the local store
     gate_reasons: list[str] = field(default_factory=list)
     next_earnings: date | None = None
@@ -123,24 +131,60 @@ class ScreenerService:
             covers_through=end,
         )
 
-    def _put_filter(self, criteria: ScreenCriteria) -> ChainFilter:
+    def _chain_filter(
+        self, criteria: ScreenCriteria, option_type: OptionType = OptionType.PUT
+    ) -> ChainFilter:
         # pull a padded window so monthly-only names still surface their nearest monthly
         return ChainFilter(
-            option_type=OptionType.PUT,
+            option_type=option_type,
             min_dte=max(criteria.min_dte - criteria.dte_tolerance, 1),
             max_dte=criteria.max_dte + criteria.dte_tolerance,
             min_open_interest=criteria.min_open_interest,
-            target_delta=criteria.target_delta,
+            target_delta=signed_target_delta(criteria.target_delta, option_type),
         )
 
-    def _candidate(self, symbol, put, **ctx) -> CandidateResult:
+    def _candidate(self, symbol, contract, **ctx) -> CandidateResult:
+        # Capital tied up, by side: a put sets aside the strike in cash; a call pledges 100 shares
+        # you already own, so it's their market value (None when spot is unknown — see _spot).
+        if contract.option_type is OptionType.PUT:
+            collateral = contract.strike * 100
+        else:
+            spot = contract.underlying_price
+            collateral = spot * 100 if spot and spot > 0 else None
         return CandidateResult(
-            symbol=symbol, contract=put,
-            annualized_yield=put_yield(put),
-            premium=credited_premium(put),  # conservative: the bid
-            collateral=put.strike * 100,
+            symbol=symbol, contract=contract,
+            annualized_yield=contract_yield(contract),
+            premium=credited_premium(contract),  # conservative: the bid
+            collateral=collateral,
             **ctx,
         )
+
+    def _spot(self, symbol: str, snapshot, metrics: FundamentalMetrics | None) -> float | None:
+        """Current share price — the covered-call yield base, in descending order of freshness.
+
+        1. the chain snapshot, when the provider returns spot in-band (Schwab does);
+        2. the provider's own quote endpoint, if it exposes one (Alpaca's chains are option-only,
+           so this is one extra call — worth it on a single-ticker search, which is the only place
+           calls are offered; the screener is CSP-only and needs no spot);
+        3. the fundamentals store's profile price — end-of-day, so a fallback rather than a peer.
+
+        None when all three fail: ``contract_yield`` then reports no yield instead of a wrong one.
+        """
+        if snapshot.underlying_price and snapshot.underlying_price > 0:
+            return snapshot.underlying_price
+        quote = getattr(self.chains, "spot", None)
+        if quote is not None:
+            try:
+                live = quote(symbol)
+                if live and live > 0:
+                    return live
+            except ProviderError:
+                logger.warning("spot: quote lookup failed for %s", symbol, exc_info=True)
+        eod = metrics.price if metrics is not None else None
+        if eod and eod > 0:
+            logger.info("spot: falling back to the EOD profile price for %s (%.2f)", symbol, eod)
+            return eod
+        return None
 
     def screen_fundamentals(
         self, criteria: ScreenCriteria, today: date, guard: EarningsGuard | None = None
@@ -164,7 +208,7 @@ class ScreenerService:
         """
         guard = self._build_guard(criteria, today)
         survivors = self.screen_fundamentals(criteria, today, guard)
-        filt = self._put_filter(criteria)
+        filt = self._chain_filter(criteria, OptionType.PUT)  # the screen is CSP-only
         deadline = (
             time.monotonic() + criteria.max_runtime_seconds
             if criteria.max_runtime_seconds is not None
@@ -223,13 +267,23 @@ class ScreenerService:
         return rank(candidates, criteria.fundamental_weight)
 
     def search_ticker(
-        self, symbol: str, criteria: ScreenCriteria, today: date, *, n: int = 5
+        self,
+        symbol: str,
+        criteria: ScreenCriteria,
+        today: date,
+        *,
+        n: int = 5,
+        side: OptionType = OptionType.PUT,
     ) -> TickerSearch:
-        """Top-N ~target-delta cash-secured puts on ONE ticker — bypasses the universe/funnel.
+        """Top-N ~target-delta contracts on ONE ticker — bypasses the universe/funnel.
 
-        One chain pull (works for any optionable symbol, even outside the screen's universe),
-        the N puts nearest ``target_delta`` (one per expiry), plus fundamentals + next-earnings
-        context so a put seller can judge assignment/event risk.
+        One chain pull (works for any optionable symbol, even outside the screen's universe), the
+        N contracts nearest ``target_delta`` (one per expiry), plus fundamentals + next-earnings
+        context so a seller can judge assignment/event risk.
+
+        ``side`` picks the trade: PUT sells a cash-secured put to *enter* a position; CALL sells a
+        covered call against shares already held. Search is the right (and only) home for calls —
+        a covered call presupposes a specific holding, so the underlying is given, not screened.
         """
         symbol = symbol.strip().upper()
         # One authoritative per-symbol call, refreshed on every search — far cheaper and more
@@ -244,6 +298,10 @@ class ScreenerService:
             # FLAG, not EXCLUDE: someone who typed a ticker should see its full term structure
             # with the risky expiries marked — silently returning fewer rows would read as
             # "no contracts available" and hide the very thing they need to see.
+            # For calls the flag reads differently and is genuinely a preference, not a veto: the
+            # shares are already held, so the report's gap is taken either way. Selling through it
+            # cushions a drop with premium and caps the upside on a pop — a trade-off to see, not
+            # one to make for the user.
             policy=(
                 EarningsPolicy.OFF
                 if criteria.earnings_policy is EarningsPolicy.OFF
@@ -251,37 +309,50 @@ class ScreenerService:
             ),
             exclude_unknown=False,
         )
-        snapshot = self.chains.get_chain(symbol, self._put_filter(criteria))
-        puts = [
-            self._candidate(symbol, p, earnings_status=guard.status(symbol, p.expiration))
-            for p in select_top_puts(snapshot, criteria, n, guard)
-        ]
-        # fundamentals context (the ticker may sit outside the screener's $20-200 universe)
+        snapshot = self.chains.get_chain(symbol, self._chain_filter(criteria, side))
+        # fundamentals context (the ticker may sit outside the screener's $20-200 universe).
+        # Fetched BEFORE the contracts are built: its profile price is the last-resort spot, and a
+        # covered call's yield needs a share price at construction time.
         metrics = self.fundamentals.fetch_metrics([symbol]).get(symbol)
         if metrics is None:
             passes, reasons = None, []
         else:
             reasons = gate_reasons(metrics, criteria)
             passes = not reasons
+        spot = self._spot(symbol, snapshot, metrics)
+        selected = select_top_contracts(snapshot, criteria, n, side, guard)
+        for k in selected:
+            # stamp the resolved spot so the yield/collateral math (and the CSV) has a base even
+            # when the chain provider returns option-only data
+            if k.underlying_price is None:
+                k.underlying_price = spot
+        contracts = [
+            self._candidate(symbol, k, earnings_status=guard.status(symbol, k.expiration))
+            for k in selected
+        ]
         # absolute strength from the ticker's own metrics (works even for out-of-universe names);
         # the peer percentile needs the ranked universe, so it's None outside the screened field.
         strength, _ = score_strength(metrics, criteria.factor_weights, criteria.stock_profile)
         percentile = self._universe_scores(criteria, today).get(symbol)
-        for c in puts:
+        for c in contracts:
             c.next_earnings = earnings
             c.fundamental_score = strength
             c.peer_percentile = percentile
         logger.info(
-            "search %s: %d puts near Δ=%.2f (DTE %d-%d) · strength=%s · pct=%s · earnings=%s "
-            "(%d of %d expiries span it)",
-            symbol, len(puts), criteria.target_delta, criteria.min_dte, criteria.max_dte,
+            "search %s: %d %ss near Δ=%.2f (DTE %d-%d) · spot=%s · strength=%s · pct=%s · "
+            "earnings=%s (%d of %d expiries span it)",
+            symbol, len(contracts), side.value,
+            signed_target_delta(criteria.target_delta, side),
+            criteria.min_dte, criteria.max_dte,
+            "unknown" if spot is None else f"{spot:.2f}",
             "n/a" if strength is None else f"{strength:.2f}",
             "n/a" if percentile is None else f"{percentile:.2f}",
             earnings or "unknown",
-            sum(1 for c in puts if c.earnings_status is EarningsStatus.SPANS), len(puts),
+            sum(1 for c in contracts if c.earnings_status is EarningsStatus.SPANS), len(contracts),
         )
         return TickerSearch(
-            symbol=symbol, puts=puts, passes_fundamentals=passes, gate_reasons=reasons,
+            symbol=symbol, contracts=contracts, side=side, underlying_price=spot,
+            passes_fundamentals=passes, gate_reasons=reasons,
             next_earnings=earnings, earnings_known=earnings is not None, metrics=metrics,
             fundamental_score=strength, peer_percentile=percentile,
         )
