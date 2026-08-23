@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block content %}
+  <article>
+    <h2>Fundamentals</h2>
+    <p class="tab-lede">A company's financial history, graded metric by metric — green is great,
+      amber is ok, red is poor. This is the long-form read on one name, independent of any option
+      chain: it answers "is this a business I want to own", not "which contract to sell".</p>
+    {# a ?ticker= deep link runs the lookup immediately; naming `submit` keeps the button working #}
+    <form hx-post="/fundamentals" hx-target="#report" hx-swap="innerHTML"
+          hx-disabled-elt="find button"
+          {% if ticker %}hx-trigger="load, submit"{% endif %}>
+      <div class="grid">
+        <label>Ticker
+          <input type="text" name="ticker" placeholder="e.g. AAPL" required autocomplete="off"
+                 value="{{ ticker }}" oninput="this.value=this.value.toUpperCase()">
+          <small>any symbol the data provider covers</small>
+        </label>
+        <fieldset class="seg-field">
+          <legend>Period</legend>
+          <div class="segmented">
+            <input type="radio" name="period" value="annual" id="p-annual" checked>
+            <label for="p-annual">Annual<small>fiscal years</small></label>
+            <input type="radio" name="period" value="quarter" id="p-quarter">
+            <label for="p-quarter">Quarterly<small>recent trend</small></label>
+          </div>
+        </fieldset>
+        <label>How many periods
+          <input type="number" name="years" value="{{ years }}" min="2" max="{{ max_years }}">
+          <small>capped at {{ max_years }} — each period costs an upstream call</small>
+        </label>
+      </div>
+      <button type="submit" class="run-btn">Analyze</button>
+    </form>
+    <div id="report"></div>
+  </article>
+{% endblock %}

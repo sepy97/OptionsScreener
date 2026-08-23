@@ -1,0 +1,58 @@
+{% import "_icons.html" as icon %}
+{% set unit = 'fiscal years' if report.period == 'annual' else 'quarters' %}
+<header class="results-head">
+  <strong>{{ report.symbol }}</strong>
+  <span class="result-stats">
+    <span>Periods <b>{{ report.periods | length }}</b></span>
+    <span>Basis <b>{{ unit }}</b></span>
+  </span>
+  {% if report.partial %}
+    <span class="badge">{{ icon.warning() }}Limited history</span>
+  {% endif %}
+</header>
+
+<p class="grade-legend">
+  <span><i class="grade-key g-hi"></i> great</span>
+  <span><i class="grade-key g-mid"></i> ok</span>
+  <span><i class="grade-key g-lo"></i> poor</span>
+  <span><i class="grade-key"></i> no data</span>
+</p>
+
+<figure>
+  <table class="report-table">
+    <thead>
+      <tr>
+        <th>Metric</th>
+        {% for d in report.periods %}
+          {# trim to year (or year-month) so ten columns stay scannable; full date on hover #}
+          <th title="{{ d }}">{{ d[:4] if report.period == 'annual' else d[:7] }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for group in report.groups %}
+        <tr class="group-head">
+          <th colspan="{{ report.periods | length + 1 }}" scope="colgroup">{{ group.label }}</th>
+        </tr>
+        {% for row in group.rows %}
+          <tr>
+            <th scope="row" title="{{ row.description }}">{{ row.label }}</th>
+            {% for cell in row.cells %}
+              <td class="{{ cell.grade | grade_class }}">{{ cell.value | num2 }}</td>
+            {% endfor %}
+          </tr>
+        {% endfor %}
+      {% endfor %}
+    </tbody>
+  </table>
+</figure>
+
+<details class="metric-glossary">
+  <summary>What these metrics mean</summary>
+  <dl class="card-grid">
+    {% for group in report.groups %}{% for row in group.rows %}
+      <dt>{{ row.label }}</dt>
+      <dd>{{ row.description }}</dd>
+    {% endfor %}{% endfor %}
+  </dl>
+</details>

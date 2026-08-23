@@ -235,6 +235,21 @@ def _usd(v: object) -> str:
 templates.env.filters["usd"] = _usd
 
 
+def _grade_class(grade: object) -> str:
+    """Tier a report cell's grade onto the same green/amber/red language the tables use.
+    An ungraded cell gets no class at all -- blank means "no data", not "poor"."""
+    if not isinstance(grade, (int, float)) or isinstance(grade, bool):
+        return ""
+    if grade >= 1.0:
+        return "g-hi"
+    if grade >= 0.5:
+        return "g-mid"
+    return "g-lo"
+
+
+templates.env.filters["grade_class"] = _grade_class
+
+
 # The pipeline logs one stage line each (captured into job['progress']); we recover the funnel
 # counts from those strings so a finished screen can show Universe -> ... -> Candidates, with no
 # pipeline instrumentation. %d formatting means no thousands commas, so \d+ matches cleanly.
@@ -538,6 +553,58 @@ def search_export(
         content=_candidates_csv(rows),
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+# --- Fundamentals tab -----------------------------------------------------------------------
+# Long-form, multi-period analysis of ONE company, from the separate `fundcore` engine. That
+# engine is a private package this repo does not depend on, so every failure path here has to
+# stay explanatory: "not deployed" must read differently from "that ticker is unknown".
+
+_REPORT_PERIODS = ("annual", "quarter")
+
+
+def _report_period(raw: str) -> str:
+    return raw if raw in _REPORT_PERIODS else "annual"
+
+
+@app.get("/fundamentals")
+def fundamentals_page(request: Request, ticker: str = "",
+                      settings: Settings = Depends(get_settings)):
+    """The Fundamentals tab. A ``?ticker=`` prefill auto-runs the lookup, so a candidate
+    elsewhere in the app can deep-link straight to that company's numbers."""
+    return templates.TemplateResponse(
+        request, "fundamentals.html",
+        {
+            "active_tab": "fundamentals",
+            "ticker": (ticker or "").strip().upper(),
+            "years": settings.fundcore.years,
+            "max_years": settings.fundcore.max_years,
+        },
+    )
+
+
+@app.post("/fundamentals")
+def fundamentals_route(
+    request: Request,
+    ticker: str = Form(...),
+    period: str = Form("annual"),
+    years: int = Form(10),
+    service: ScreenerService = Depends(get_service),
+):
+    """Build one company's graded report (synchronous -- it is a handful of upstream calls)."""
+    if not (ticker or "").strip():
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "enter a ticker symbol"}, status_code=422
+        )
+    try:
+        report = service.fundamental_report(
+            ticker, period=_report_period(period), years=years
+        )
+    except ProviderError as e:
+        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
+    return templates.TemplateResponse(
+        request, "_fundamentals.html", {"report": report, "period": report.period},
     )
 
 

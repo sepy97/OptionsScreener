@@ -53,8 +53,8 @@ class SlidingWindowLimiter:
 # "expensive" = triggers external API calls + heavy compute, vs a cheap read of stored state.
 # Matched on the exact start endpoints (not the cancel/poll/detail reads under the same prefixes).
 def is_expensive(method: str, path: str) -> bool:
-    if method == "POST" and path in ("/runs", "/screen", "/search"):
-        return True  # start a screen (HTML + JSON) / run a ticker search
+    if method == "POST" and path in ("/runs", "/screen", "/search", "/fundamentals"):
+        return True  # start a screen (HTML + JSON) / ticker search / fundamental report
     return method == "GET" and path == "/search/export.csv"  # a fresh search behind a download
 
 
