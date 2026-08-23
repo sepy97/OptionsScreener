@@ -154,6 +154,48 @@ class FundamentalRating(BaseModel):
     strength_scores: dict[str, float] = Field(default_factory=dict)  # absolute factor scores 0..1
 
 
+class ReportCell(BaseModel):
+    """One metric in one period. ``grade`` is 1.0 great / 0.5 ok / 0.0 poor, or None when the
+    provider had no value — blank, which is a different statement from a failing score."""
+
+    value: float | None = None
+    grade: float | None = None
+
+
+class ReportRow(BaseModel):
+    """One metric across every period, aligned to ``FundamentalReport.periods``."""
+
+    key: str
+    label: str
+    description: str = ""
+    cells: list[ReportCell] = Field(default_factory=list)
+
+
+class ReportGroup(BaseModel):
+    """A themed block of metrics (valuation, efficiency, growth, liquidity, risk)."""
+
+    key: str
+    label: str
+    rows: list[ReportRow] = Field(default_factory=list)
+
+
+class FundamentalReport(BaseModel):
+    """A multi-period graded fundamental analysis of ONE company.
+
+    This is the screener's own view of a report, deliberately independent of whichever engine
+    produced it: the core never imports the analysis library, the adapter maps into this.
+
+    Distinct from :class:`FundamentalRating`, which is the screener's own single-number
+    snapshot used to RANK a universe. This is the long-form, per-metric history of one name.
+    """
+
+    symbol: str
+    period: str  # "annual" | "quarter"
+    periods: list[str] = Field(default_factory=list)  # statement dates, newest first
+    groups: list[ReportGroup] = Field(default_factory=list)
+    partial: bool = False  # the source had less history than was requested
+
+
 class Underlying(BaseModel):
     """A stock in the universe / surviving the fundamental rating."""
 
