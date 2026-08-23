@@ -190,7 +190,10 @@ lockfile, so this repository stays installable and testable by anyone with no cr
 adapter imports it lazily, and when it isn't installed the tab explains itself and nothing else in
 the app is affected. Everything else — the screen, the ticker search — works exactly the same.
 
-If you have access to the engine, install it into the venv to enable the tab:
+In production the engine is fetched from a private release into `vendor/` at deploy time (see
+[docs/DEPLOY.md](docs/DEPLOY.md)); the version deployed is pinned in `deploy/fundcore.version`.
+
+If you have access to the engine, install it into the venv to enable the tab locally:
 
 ```bash
 uv pip install /path/to/stockanalysis-<version>-py3-none-any.whl

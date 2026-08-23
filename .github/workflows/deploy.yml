@@ -72,7 +72,9 @@ jobs:
           echo "current deployed ref: $prev"
           # REF is validated as a strict vX.Y.Z tag above, so it's safe to interpolate here.
           # caddy reload picks up any Caddyfile change (bind-mounted, so a rebuild alone won't).
-          $SSH "set -e; cd /srv/steadybull; git fetch --tags --force; git checkout '$REF'; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
+          # fetch_fundcore.sh pulls the private analysis engine into vendor/ using GH_TOKEN from
+          # the droplet's .env. It is a no-op without that token, so the build never depends on it.
+          $SSH "set -e; cd /srv/steadybull; git fetch --tags --force; git checkout '$REF'; bash deploy/fetch_fundcore.sh; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
 
       - name: Verify public health
         run: |
