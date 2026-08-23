@@ -9,11 +9,16 @@ from pathlib import Path
 
 from wheel_screener.adapters.alpaca.provider import AlpacaChainProvider
 from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
+from wheel_screener.adapters.fundcore.provider import FundcoreReportProvider
 from wheel_screener.adapters.local.earnings import LocalEarningsCalendar
 from wheel_screener.adapters.local.provider import LocalFundamentalsProvider
 from wheel_screener.adapters.schwab.provider import SchwabChainProvider
 from wheel_screener.config import Settings
-from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
+from wheel_screener.core.ports import (
+    ChainProvider,
+    FundamentalReportProvider,
+    FundamentalsProvider,
+)
 from wheel_screener.core.service import ScreenerService
 
 
@@ -39,9 +44,23 @@ def _build_fundamentals(settings: Settings) -> FundamentalsProvider:
     return FmpFundamentalsProvider(settings.fmp)
 
 
+def _build_reports(settings: Settings) -> FundamentalReportProvider | None:
+    """The long-form report provider, or None when this deployment can't serve reports.
+
+    The engine reuses the FMP key, so no key means no reports. Whether the engine PACKAGE is
+    installed is decided later, inside the provider: that way "not deployed here" surfaces as
+    a typed provider error the UI can explain, rather than silently missing functionality.
+    """
+    key = settings.fmp.api_key.get_secret_value()
+    if not key:
+        return None
+    return FundcoreReportProvider(key, settings.fundcore)
+
+
 def build_service(settings: Settings | None = None) -> ScreenerService:
     settings = settings or Settings()
     return ScreenerService(
         fundamentals=_build_fundamentals(settings),
         chains=_build_chains(settings),
+        reports=_build_reports(settings),
     )

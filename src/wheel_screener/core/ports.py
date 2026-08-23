@@ -14,6 +14,7 @@ from wheel_screener.core.models import (
     ChainFilter,
     ChainSnapshot,
     FundamentalMetrics,
+    FundamentalReport,
     ProviderCaps,
     ScreenCriteria,
     Underlying,
@@ -52,3 +53,20 @@ class ChainProvider(Protocol):
     def get_chain(self, symbol: str, filt: ChainFilter) -> ChainSnapshot: ...
 
     def capabilities(self) -> ProviderCaps: ...
+
+
+@runtime_checkable
+class FundamentalReportProvider(Protocol):
+    """Long-form, multi-period fundamental analysis of ONE company.
+
+    Separate from :class:`FundamentalsProvider`, which serves the bulk metrics the screen
+    ranks a whole universe on. This answers "show me this company's numbers over the last
+    N periods, graded", and is backed by an external analysis engine.
+
+    Implementations MUST raise the typed ``ProviderError`` hierarchy so the delivery layer
+    can tell a missing key from an outage from an unknown ticker.
+    """
+
+    def fundamental_report(
+        self, symbol: str, period: str = "annual", years: int = 10
+    ) -> FundamentalReport: ...

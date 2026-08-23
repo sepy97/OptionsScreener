@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from wheel_screener.core.earnings import EarningsGuard
-from wheel_screener.core.errors import ProviderError
+from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
 from wheel_screener.core.fundamentals import (
     gate_reasons,
     rank_by_fundamentals,
@@ -21,6 +21,7 @@ from wheel_screener.core.models import (
     EarningsPolicy,
     EarningsStatus,
     FundamentalMetrics,
+    FundamentalReport,
     OptionType,
     ScreenCriteria,
     Underlying,
@@ -36,7 +37,11 @@ from wheel_screener.core.pipeline.select_strike import (
     signed_target_delta,
 )
 from wheel_screener.core.pipeline.universe import build_universe
-from wheel_screener.core.ports import ChainProvider, FundamentalsProvider
+from wheel_screener.core.ports import (
+    ChainProvider,
+    FundamentalReportProvider,
+    FundamentalsProvider,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +78,8 @@ class ScreenerService:
 
     fundamentals: FundamentalsProvider
     chains: ChainProvider
+    # optional: the long-form report engine ships separately and may not be installed
+    reports: FundamentalReportProvider | None = None
     _scores: dict[str, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def _universe_scores(self, criteria: ScreenCriteria, today: date) -> dict[str, float]:
@@ -377,3 +384,17 @@ class ScreenerService:
         except ProviderError:
             logger.warning("earnings: calendar unavailable for %s", symbol, exc_info=True)
             return None
+
+    def fundamental_report(
+        self, symbol: str, period: str = "annual", years: int = 10
+    ) -> FundamentalReport:
+        """A multi-period graded fundamental analysis of one company.
+
+        Independent of the screen: it needs no chain data, no universe and no earnings
+        calendar, and works for any symbol the data provider knows.
+        """
+        if self.reports is None:
+            raise ProviderUnavailableError(
+                "fundamental reports are not configured for this deployment"
+            )
+        return self.reports.fundamental_report(symbol, period=period, years=years)

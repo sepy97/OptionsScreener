@@ -178,6 +178,29 @@ Results and the table print to **stdout**; everything diagnostic goes to **stder
   actionable message and exit non-zero — **never a silently empty result**. For a full traceback on
   an *unexpected* failure, re-run with `--debug`.
 
+## The Fundamentals tab (optional)
+
+The web UI's third tab shows one company's financial history graded metric by metric — valuation,
+efficiency, growth, liquidity and risk, across up to fifteen periods, green/amber/red. It answers
+"is this a business I want to own", separately from the screen's "which contract should I sell".
+
+It is powered by **`fundcore`**, an analysis engine that ships as its own package and is
+**deliberately not a dependency of this project** — it is absent from `pyproject.toml` and the
+lockfile, so this repository stays installable and testable by anyone with no credentials. The
+adapter imports it lazily, and when it isn't installed the tab explains itself and nothing else in
+the app is affected. Everything else — the screen, the ticker search — works exactly the same.
+
+If you have access to the engine, install it into the venv to enable the tab:
+
+```bash
+uv pip install /path/to/stockanalysis-<version>-py3-none-any.whl
+```
+
+Note that `uv sync` prunes anything not in the lockfile, so re-run that install after a sync.
+The engine reuses this project's `FMP__API_KEY` — there is one key and one quota — and reports are
+disk-cached for a day (`FUNDCORE__CACHE_TTL_SECONDS`), because a report only changes when the
+company files.
+
 ## How it's built
 
 Hexagonal **ports & adapters**: a framework-free `core/` (models, pipeline, ranking,
@@ -189,7 +212,7 @@ wired in `composition.py`; swapping a provider is a one-line change.
 src/wheel_screener/
   core/      models · ports · fundamentals · ranking · errors · service
              pipeline/ (universe · rate_fundamentals · pull_chains · select_strike · rank)
-  adapters/  fmp/ · schwab/ · local/ · http.py · cache.py · errors.py
+  adapters/  fmp/ · schwab/ · alpaca/ · local/ · fundcore/ · http.py · cache.py · errors.py
   cli/  api/   config.py   composition.py   logging_config.py
 tools/   fmp_bulk_import.py     # one-time whole-market bulk loader
 docs/    PLAN.md · TODO.md

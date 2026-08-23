@@ -23,6 +23,7 @@ def test_sweep_bounds_memory_under_one_off_ips() -> None:
 def test_is_expensive_only_matches_start_endpoints() -> None:
     assert is_expensive("POST", "/screen") and is_expensive("POST", "/search")
     assert is_expensive("POST", "/runs") and is_expensive("GET", "/search/export.csv")
+    assert is_expensive("POST", "/fundamentals")  # ~8 upstream calls per report
     # cheap reads / control endpoints are NOT throttled
     assert not is_expensive("GET", "/runs/j/progress")  # the 2s poll
     assert not is_expensive("GET", "/health")

@@ -21,6 +21,8 @@
        {% if active_tab == 'screener' %}aria-current="page"{% endif %}>Screener</a>
     <a href="/search" class="nav-tab{{ ' active' if active_tab == 'search' else '' }}"
        {% if active_tab == 'search' %}aria-current="page"{% endif %}>Search a ticker</a>
+    <a href="/fundamentals" class="nav-tab{{ ' active' if active_tab == 'fundamentals' else '' }}"
+       {% if active_tab == 'fundamentals' %}aria-current="page"{% endif %}>Fundamentals</a>
   </div>
 </nav>
 <main class="container">

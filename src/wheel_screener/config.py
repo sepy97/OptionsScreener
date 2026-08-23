@@ -62,6 +62,21 @@ class AlpacaSettings(BaseModel):
     chain_cache_ttl_seconds: int = 300
 
 
+class FundcoreSettings(BaseModel):
+    """Long-form fundamental reports, served by the private `fundcore` analysis engine.
+
+    The engine reuses THIS deployment's FMP key (``FMP__API_KEY``) rather than carrying its
+    own, so there is one key and one quota. Reports are disk-cached with a long TTL: a report
+    only changes when the company files, and a public page must not spend ~8 upstream calls
+    per view."""
+
+    years: int = 10  # periods shown by default
+    max_years: int = 15  # hard cap, whatever a caller asks for -- each period costs upstream
+    cache_enabled: bool = True
+    cache_dir: str = ".cache/fundcore"
+    cache_ttl_seconds: int = 86_400  # 1 day
+
+
 class IvRankSettings(BaseModel):
     source: str = "store"  # store | orats | flashalpha
     db_path: str = "data/iv_history.sqlite"
@@ -115,6 +130,7 @@ class Settings(BaseSettings):
     alpaca: AlpacaSettings = Field(default_factory=AlpacaSettings)
     fmp: FmpSettings = Field(default_factory=FmpSettings)
     iv_rank: IvRankSettings = Field(default_factory=IvRankSettings)
+    fundcore: FundcoreSettings = Field(default_factory=FundcoreSettings)
     log: LogSettings = Field(default_factory=LogSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)

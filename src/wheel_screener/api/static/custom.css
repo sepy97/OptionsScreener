@@ -214,3 +214,29 @@ tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); 
   .segmented label { padding: 0.4rem 0.3rem; font-size: 0.8125rem; }
   .segmented label small { font-size: 0.6875rem; }
 }
+
+/* --- fundamentals report grid --- */
+/* Graded cells reuse the table's green→amber→red language. An UNGRADED cell gets no class at
+   all, so it stays plain: blank means "no data", which is not the same claim as "poor". */
+.g-hi  { background: var(--wheel-accent-soft); color: var(--wheel-accent-strong); font-weight: 600; }
+.g-mid { background: var(--warn-soft); color: var(--warn); }
+.g-lo  { background: var(--neg-soft); color: var(--neg); }
+/* the results table mutes reference columns by position (nth-child 7/8/9/12); those indices are
+   meaningless here, so re-assert the normal ink at higher specificity rather than by luck of order */
+.report-table tbody td:not(:first-child) { color: inherit; }
+.report-table tbody th { text-align: left; font-weight: 500; }
+.report-table tbody tr.group-head th {
+  background: var(--sunken); color: var(--pico-muted-color);
+  font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 600;
+  padding-top: 0.7rem;
+}
+/* neutral row hover: the accent tint would read as a grade on ungraded cells */
+.report-table tbody tr:not(.group-head):hover { background: rgba(125, 125, 125, 0.09); }
+.grade-legend { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; font-size: 0.75rem;
+                color: var(--pico-muted-color); margin: 0.75rem 0 0.5rem; }
+.grade-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.grade-key { width: 0.8rem; height: 0.8rem; border-radius: 3px; display: inline-block;
+             border: 1px solid var(--border); }
+.metric-glossary { margin-top: 1rem; font-size: 0.85rem; }
+.metric-glossary summary { cursor: pointer; color: var(--pico-muted-color); }
+.tab-lede { color: var(--pico-muted-color); font-size: 0.9rem; }
