@@ -23,6 +23,19 @@ COPY src ./src
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --extra api --no-dev
 
+# 3) OPTIONAL: the private fundamental-analysis engine powering the Fundamentals tab.
+# It is not a dependency of this project, so it is not in uv.lock; deploy/fetch_fundcore.sh
+# puts a wheel here before the build. vendor/ is otherwise empty (just .gitkeep), and the
+# image builds fine without it -- the tab then explains that it isn't deployed.
+COPY vendor/ ./vendor/
+RUN --mount=type=cache,target=/root/.cache/uv \
+    if ls vendor/*.whl >/dev/null 2>&1; then \
+      uv pip install --python "$UV_PROJECT_ENVIRONMENT/bin/python" vendor/*.whl && \
+      echo "analysis engine installed: $(ls vendor/*.whl)"; \
+    else \
+      echo "no engine wheel in vendor/ -- the Fundamentals tab will be disabled"; \
+    fi
+
 # run unprivileged as a fixed uid (10001). /data is the mount point — for a named volume it
 # inherits this ownership; for a host bind mount, chown the host dir to 10001 (see docs/DEPLOY.md).
 RUN useradd --create-home --uid 10001 app && mkdir -p /data && chown -R app:app /app /data

@@ -29,3 +29,6 @@ logs/
 
 # OS
 .DS_Store
+
+# the private analysis engine wheel, fetched at deploy time (never committed)
+vendor/*.whl

@@ -49,7 +49,28 @@ ALPACA__API_SECRET=...
 ALPACA__FEED=indicative                 # or opra (paid, real-time)
 ALPACA__TRADING_BASE_URL=https://api.alpaca.markets   # paper keys -> paper-api.alpaca.markets
 FMP__API_KEY=...                        # for the refresh-earnings / refresh-fundamentals cron
+GH_TOKEN=...                            # OPTIONAL — enables the Fundamentals tab, see below
 ```
+
+### `GH_TOKEN` — the Fundamentals tab (optional)
+
+The tab is powered by a fundamental-analysis engine that lives in a **private** repository, so it
+is deliberately not a dependency of this project: it is absent from `pyproject.toml` and
+`uv.lock`, which is what keeps this repository installable and testable by anyone with no
+credentials, and keeps CI secret-free.
+
+Instead `deploy/fetch_fundcore.sh` downloads a built wheel into `vendor/` **before** the image is
+built, so the build itself needs no registry credentials, no BuildKit secret and no git binary.
+The deploy workflow runs it automatically.
+
+Create a **fine-grained personal access token** scoped to the `sepy97/StockAnalysis` repository
+with **Contents: read-only**, and set it as `GH_TOKEN` in `/srv/steadybull/.env`.
+
+Without it the fetch is a deliberate no-op: the image builds normally, and the Fundamentals tab
+explains that it is not deployed. Every other part of the app is unaffected.
+
+The engine version deployed is pinned in [`deploy/fundcore.version`](../deploy/fundcore.version).
+To upgrade, bump that one line, merge, and tag a release as usual.
 
 ## Bring it up
 
