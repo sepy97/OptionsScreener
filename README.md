@@ -168,7 +168,8 @@ universe        every common stock in the price + dollar-volume band
   Rated         deep-fetched and rated — bounded by top_n (the cap gates FIRST, so slots
                 aren't spent on names that are about to fail)
   Fundamentals  passed the hard gate, minus names reporting before the earliest expiry
-  Chains        returned an option chain
+  Chains        returned an option chain. Names with nothing in the window are identified
+                up front in a few batched calls and never requested individually
   Candidates    had a contract clearing every sellability gate
 ```
 

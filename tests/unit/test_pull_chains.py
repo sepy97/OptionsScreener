@@ -100,3 +100,66 @@ def test_pull_chains_timeout_flags_incomplete() -> None:
         deadline=0.05, monotonic=lambda: 0.0,
     )
     assert complete is False and len(out) < 2  # the silent-timeout bug: now surfaced via `complete`
+
+
+# --- prefetch integration -------------------------------------------------------------------
+
+def test_pull_chains_skips_names_the_prefetch_says_are_empty() -> None:
+    """Names with no contracts in the window shouldn't cost a chain request at all."""
+    from wheel_screener.core.models import ProviderCaps
+
+    pulled = []
+
+    class _Batchable:
+        def capabilities(self):
+            return ProviderCaps(name="x", max_concurrency=2, supports_batch_underlyings=True)
+
+        def prefetch(self, symbols, filt):
+            return {"B", "C"}  # only A has anything
+
+        def get_chain(self, symbol, filt):
+            pulled.append(symbol)
+            return ChainSnapshot(underlying_symbol=symbol, contracts=[])
+
+    survivors = [_u(s) for s in ("A", "B", "C")]
+    chains, complete = pull_chains(_Batchable(), survivors, ChainFilter())
+    assert pulled == ["A"], "B and C must never be requested"
+    assert set(chains) == {"A"} and complete is True
+
+
+def test_a_failed_prefetch_falls_back_instead_of_losing_the_screen() -> None:
+    from wheel_screener.core.models import ProviderCaps
+
+    pulled = []
+
+    class _Broken:
+        def capabilities(self):
+            return ProviderCaps(name="x", max_concurrency=2, supports_batch_underlyings=True)
+
+        def prefetch(self, symbols, filt):
+            raise RuntimeError("bulk endpoint hiccup")
+
+        def get_chain(self, symbol, filt):
+            pulled.append(symbol)
+            return ChainSnapshot(underlying_symbol=symbol, contracts=[])
+
+    chains, complete = pull_chains(_Broken(), [_u(s) for s in ("A", "B")], ChainFilter())
+    assert sorted(pulled) == ["A", "B"], "a lost speed-up must not cost us the run"
+    assert set(chains) == {"A", "B"} and complete is True
+
+
+def test_a_provider_without_batching_is_untouched() -> None:
+    from wheel_screener.core.models import ProviderCaps
+
+    pulled = []
+
+    class _Solo:
+        def capabilities(self):
+            return ProviderCaps(name="x", max_concurrency=2, supports_batch_underlyings=False)
+
+        def get_chain(self, symbol, filt):
+            pulled.append(symbol)
+            return ChainSnapshot(underlying_symbol=symbol, contracts=[])
+
+    pull_chains(_Solo(), [_u(s) for s in ("A", "B")], ChainFilter())
+    assert sorted(pulled) == ["A", "B"]
