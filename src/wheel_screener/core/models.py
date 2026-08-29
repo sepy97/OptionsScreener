@@ -59,7 +59,7 @@ class ScreenCriteria(BaseModel):
 
     # universe / price
     min_price: float = 20.0
-    max_price: float = 200.0
+    max_price: float = 500.0
     min_market_cap: float = 0.0  # off by default — option open interest is the real liquidity gate
     # skip stocks too thin to have tradeable options (price × avg daily volume); the cheap
     # lever against the chain-pull rate limit — fewer wasted calls on names that can't qualify
@@ -104,18 +104,13 @@ class ScreenCriteria(BaseModel):
     # ranking / liquidity gates
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
     min_open_interest: int = 100
-    # A JUNK-QUOTE GUARD, not a tightness filter. Percentage spread scales inversely with
-    # premium, and this strategy deliberately sells cheap far-OTM puts — so a 10% cap asked for
-    # a two-tick market on the cheapest contracts in the chain and rejected roughly half the
-    # field on a delayed quote the user never sees. Liquidity is gated by open interest and by
-    # min_premium; this only rejects quotes that aren't markets at all (a $0.01 bid vs a $0.54
-    # ask). Yields credit the BID, so a wide spread never overstated a return — it is an exit
-    # cost, which belongs on screen rather than in a silent threshold.
-    max_bid_ask_spread_pct: float = 1.0
-    # Smallest per-share credit worth selling. Does the work the spread cap was doing badly:
-    # a few cents of premium isn't worth tens of thousands in collateral, and a real bid is a
-    # better sign of a real market than a percentage computed off a stale one.
-    min_premium: float = 0.30
+    # There is deliberately NO spread cap and NO premium floor here. Both were junk-quote
+    # guards, and both were measured to be nearly inert: switching them off changed a live
+    # screen by 1 and 3 names respectively. What they were guarding against is already covered
+    # — a contract needs a real bid (> 0) to be priceable at all, and `min_annualized_yield`
+    # rejects a token premium far more directly than a dollar floor can, because it weighs the
+    # credit against the collateral actually tied up. The spread stays a RESULTS COLUMN: it is
+    # an exit cost the user should see, not a threshold applied behind their back.
     # optional IV floor on the selected put (None = off). Elevated IV = richer premium; when set,
     # a contract must have a known implied vol at or above this fraction (0.40 == 40%) to qualify.
     min_iv: float | None = None

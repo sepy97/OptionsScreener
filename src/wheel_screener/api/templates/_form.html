@@ -1,14 +1,43 @@
 <form hx-post="/runs" hx-target="#run" hx-swap="innerHTML" hx-disabled-elt="find button">
-  <div class="grid">
-    <div>
+  <div class="grid grid-top">
+    <div class="dte-field" data-dte data-max="{{ dte_horizon }}">
       <label for="min_dte">Days to expiration (DTE)</label>
-      <fieldset role="group">
-        <input type="number" id="min_dte" name="min_dte" value="{{ defaults.min_dte }}"
-               min="1" max="400" aria-label="Minimum DTE">
-        <input type="number" name="max_dte" value="{{ defaults.max_dte }}"
-               min="1" max="400" aria-label="Maximum DTE">
-      </fieldset>
-      <small>e.g. 21–35 days — the expiry window to sell into</small>
+      {# The window is only meaningful against the days options actually expire on, so the
+         ladder is drawn underneath it. Tall bars are monthlies — listed by every optionable
+         name; short ones are weeklies, listed only by the liquid subset. A window sitting
+         between two monthlies is a real and easy mistake, and this is where it shows. #}
+      {% if next_monthly %}
+        <small class="dte-note">{{ next_monthly.date.strftime("%B") }} monthly expires in
+          <strong>{{ next_monthly.dte }} days</strong></small>
+      {% endif %}
+      <div class="dte-ladder" aria-hidden="true">
+        {% for e in expiries %}
+          <span class="dte-tick{{ ' is-monthly' if e.monthly else '' }}"
+                data-dte="{{ e.dte }}"
+                style="left: {{ (100 * e.dte / dte_horizon)|round(2) }}%;
+                       height: {{ (100 * e.weight)|round(0)|int }}%"
+                title="{{ e.date }} — {{ e.dte }} days"></span>
+        {% endfor %}
+      </div>
+      <div class="dte-slider">
+        <span class="dte-track"></span><span class="dte-fill" data-fill></span>
+        {# unnamed: these drive the number boxes below, which are what the form submits — so
+           the control degrades to two working inputs when JS is unavailable #}
+        <input type="range" class="dte-thumb" data-thumb="min" min="1" max="{{ dte_horizon }}"
+               value="{{ defaults.min_dte }}" aria-label="Minimum DTE" tabindex="-1">
+        <input type="range" class="dte-thumb" data-thumb="max" min="1" max="{{ dte_horizon }}"
+               value="{{ defaults.max_dte }}" aria-label="Maximum DTE" tabindex="-1">
+      </div>
+      <div class="dte-boxes">
+        <label>Min days
+          <input type="number" id="min_dte" name="min_dte" value="{{ defaults.min_dte }}"
+                 min="1" max="{{ dte_horizon }}" step="1" data-box="min">
+        </label>
+        <label>Max days
+          <input type="number" name="max_dte" value="{{ defaults.max_dte }}"
+                 min="1" max="{{ dte_horizon }}" step="1" data-box="max">
+        </label>
+      </div>
     </div>
     <fieldset class="rank-by">
       <legend>Rank by</legend>
@@ -54,7 +83,6 @@
                onchange="this.value=(+this.value.replace(/,/g,'')||0).toLocaleString('en-US')">
         <small>US$ traded per day — skips stocks too thin to have tradeable options</small>
       </label>
-      <label>Timeout (s) <input type="number" name="timeout_seconds" placeholder="(none)"></label>
     </div>
     <hr>
     <div class="grid">
@@ -84,22 +112,6 @@
       <label>Min open interest
         <input type="number" name="min_open_interest" value="{{ defaults.min_open_interest }}" min="0">
         <small>contract liquidity floor</small>
-      </label>
-      <label>Min premium
-        <input type="number" name="min_premium" value="{{ defaults.min_premium }}"
-               min="0" step="0.05">
-        <small>smallest per-share credit worth selling &mdash; $0.30 on 100 shares is $30
-          against the collateral</small>
-      </label>
-      <label>Max bid-ask spread
-        {# step must divide (value - min) or the browser silently refuses to submit the whole
-           form — and this control lives inside a collapsed <details>, so it can't even be
-           focused to say why. 1.00 is not on a 0.05 grid starting at 0.01. #}
-        <input type="number" name="max_spread_pct" value="{{ defaults.max_spread_pct }}"
-               min="0.01" max="1" step="0.01">
-        <small>a junk-quote guard, not a tightness filter &mdash; 1.00 keeps everything with a
-          real two-sided market. Cheap far-OTM puts have wide <em>percentage</em> spreads by
-          arithmetic, so a tight cap here silently removes most of the field</small>
       </label>
       <label>Min IV
         <input type="number" name="min_iv" value="{{ defaults.min_iv or '' }}"

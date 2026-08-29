@@ -60,7 +60,9 @@ class _FakeService:
     def company_profile(self, symbol):
         return None  # optional context; the templates render nothing without it
 
-    def __init__(self, result=None, error=None, gate=None, wait_cancel=False) -> None:
+    def __init__(self, result=None, error=None, gate=None, wait_cancel=False,
+                 hold_after_cancel=None) -> None:
+        self._hold = hold_after_cancel  # keeps the job "running" after cancel lands
         self.fundamentals = _FakeFundamentals()
         self._result = result if result is not None else []
         self._error = error
@@ -77,6 +79,8 @@ class _FakeService:
                 if cancel.is_set():
                     break
                 time.sleep(0.01)
+            if self._hold is not None:
+                self._hold.wait(2.0)
         if self._error is not None:
             raise self._error
         return self._result
@@ -252,7 +256,10 @@ def test_old_finished_jobs_are_pruned_on_restart(tmp_path) -> None:
 def test_screen_request_and_criteria_default_to_a_timeout() -> None:
     from wheel_screener.api.schemas import ScreenRequest
 
-    assert ScreenRequest().timeout_seconds == 600.0
+    # The web form used to carry a Timeout box that submitted blank, and blank parsed to None
+    # -- so the UI silently replaced the 10-minute budget with "run forever" and a wedged screen
+    # could hold the single in-flight slot indefinitely. There is no longer a knob to do that.
+    assert not hasattr(ScreenRequest(), "timeout_seconds")
     assert ScreenRequest().to_criteria().max_runtime_seconds == 600.0
     assert ScreenCriteria().max_runtime_seconds == 600.0  # CLI paths (refresh-screen) bounded too
 
@@ -262,14 +269,13 @@ def test_to_criteria_maps_options_knobs_and_negates_delta() -> None:
 
     c = ScreenRequest(
         min_price=30, max_price=150, target_delta=0.25, max_abs_delta=0.35,
-        min_open_interest=250, max_spread_pct=0.08, min_iv=0.4,
+        min_open_interest=250, min_iv=0.4,
     ).to_criteria()
     assert (c.min_price, c.max_price) == (30.0, 150.0)
     assert c.target_delta == -0.25  # entered as a magnitude; stored as the put's signed delta
-    assert c.max_abs_delta == 0.35 and c.min_open_interest == 250
-    assert c.max_bid_ask_spread_pct == 0.08 and c.min_iv == 0.4
-    d = ScreenRequest().to_criteria()  # defaults preserve prior behavior
-    assert (d.min_price, d.max_price, d.target_delta, d.min_iv) == (20.0, 200.0, -0.20, None)
+    assert c.max_abs_delta == 0.35 and c.min_open_interest == 250 and c.min_iv == 0.4
+    d = ScreenRequest().to_criteria()
+    assert (d.min_price, d.max_price, d.target_delta, d.min_iv) == (20.0, 500.0, -0.20, None)
 
 
 def test_screen_request_rejects_inverted_ranges() -> None:
@@ -431,8 +437,12 @@ def test_dashboard_renders_form(tmp_path) -> None:
     assert 'name="min_dte"' in r.text and "Advanced filters" in r.text
     # options-quality knobs (#90) are adjustable in Advanced
     for name in ("min_price", "max_price", "target_delta", "max_abs_delta",
-                 "min_open_interest", "max_spread_pct", "min_iv"):
+                 "min_open_interest", "min_iv"):
         assert f'name="{name}"' in r.text
+    # Retired: two junk-quote guards measured to be nearly inert (1 and 3 names on a live
+    # screen), and a timeout box whose blank default disabled the run budget entirely.
+    for gone in ("max_spread_pct", "min_premium", "timeout_seconds"):
+        assert f'name="{gone}"' not in r.text
 
 
 def test_nav_has_both_tabs_and_marks_active(tmp_path) -> None:
@@ -469,14 +479,14 @@ def test_run_form_wires_options_knobs_into_criteria(tmp_path) -> None:
     started = _client(runner).post("/runs", data={
         "top_n": 10, "min_dte": 21, "max_dte": 35, "min_price": 30, "max_price": 150,
         "target_delta": 0.25, "max_abs_delta": 0.35, "min_open_interest": 250,
-        "max_spread_pct": 0.08, "min_iv": "0.4",
+        "min_iv": "0.4",
     })
     assert started.status_code == 200  # accepted (the poller fragment), not a 422 validation error
     runner.wait(_job_id_from(started.text))
     c = svc.seen_criteria  # the form field names reached ScreenCriteria intact
     assert c is not None and (c.min_price, c.max_price) == (30.0, 150.0)
     assert c.target_delta == -0.25 and c.max_abs_delta == 0.35
-    assert c.min_open_interest == 250 and c.max_bid_ask_spread_pct == 0.08 and c.min_iv == 0.4
+    assert c.min_open_interest == 250 and c.min_iv == 0.4
 
 
 def test_run_failure_renders_typed_error(tmp_path) -> None:
@@ -997,7 +1007,8 @@ def test_every_number_input_default_is_actually_submittable(tmp_path) -> None:
 def test_cancel_shows_that_it_is_stopping_not_the_same_spinner(tmp_path) -> None:
     """Cancellation is cooperative, so the run keeps going for a moment. Re-rendering the same
     "Screening…" fragment in that gap is what made the button look like it did nothing."""
-    runner = _runner(_FakeService(wait_cancel=True), tmp_path)
+    hold = threading.Event()
+    runner = _runner(_FakeService(wait_cancel=True, hold_after_cancel=hold), tmp_path)
     client = _client(runner)
     job_id = _job_id_from(client.post("/runs", data={}).text)
 
@@ -1010,6 +1021,7 @@ def test_cancel_shows_that_it_is_stopping_not_the_same_spinner(tmp_path) -> None
 
     # the poll keeps agreeing while the run winds down
     assert "Stopping" in client.get(f"/runs/{job_id}/progress").text
+    hold.set()
     runner.wait(job_id)
 
 
@@ -1030,3 +1042,40 @@ def test_cancelling_an_already_finished_run_shows_results_not_a_spinner(tmp_path
     body = _client(runner).post("/runs/j/cancel").text
     assert "Screening" not in body and "Stopping" not in body
     assert "AAA" in body
+
+
+def test_dte_ladder_marks_monthlies_at_their_real_distance() -> None:
+    """The ladder is the whole point of the new control: a DTE window is only meaningful
+    against the days options actually expire on. On 2026-08-29 the default 21-35 window sat
+    between the September monthly (20 days) and the October one (48), so it admitted no monthly
+    at all — and a measured screen lost 54% of its qualifying contracts to that one-day miss."""
+    from wheel_screener.api.expiries import expiry_ladder, is_monthly, next_monthly
+
+    ladder = expiry_ladder(date(2026, 8, 29), 60)
+    assert [e["dte"] for e in ladder] == [6, 13, 20, 27, 34, 41, 48, 55]
+    assert [e["dte"] for e in ladder if e["monthly"]] == [20, 48]  # third Fridays
+    assert next_monthly(date(2026, 8, 29), 120)["dte"] == 20
+    assert is_monthly(date(2026, 9, 18)) and not is_monthly(date(2026, 9, 25))
+    assert not is_monthly(date(2026, 9, 17)), "a third Thursday is not a monthly expiry"
+    # every entry is a Friday, strictly ahead of today, inside the horizon
+    assert all(e["date"].weekday() == 4 and 0 < e["dte"] <= 60 for e in ladder)
+
+
+def test_dte_ladder_handles_a_friday_and_a_month_starting_on_friday() -> None:
+    from wheel_screener.api.expiries import expiry_ladder, is_monthly
+
+    # asked ON a Friday, today's own expiry is past -- the next one is a week out
+    assert expiry_ladder(date(2026, 9, 18), 30)[0]["dte"] == 7
+    # May 2027 starts on a Saturday; its third Friday is the 21st
+    assert is_monthly(date(2027, 5, 21)) and not is_monthly(date(2027, 5, 14))
+
+
+def test_form_renders_the_dte_slider_over_the_ladder(tmp_path) -> None:
+    r = _client(_runner(_FakeService(result=[]), tmp_path)).get("/")
+    assert 'data-thumb="min"' in r.text and 'data-thumb="max"' in r.text
+    assert 'data-box="min"' in r.text and 'data-box="max"' in r.text
+    assert "dte-tick" in r.text and "is-monthly" in r.text
+    # the NUMBER boxes carry the field names, so the control still submits without JS
+    assert 'name="min_dte"' in r.text and 'name="max_dte"' in r.text
+    assert 'type="range" class="dte-thumb" data-thumb="min" min="1"' in r.text
+    assert 'name="min_dte"' not in r.text.split("dte-boxes")[0], "ranges must stay unnamed"
