@@ -23,7 +23,7 @@ Each run is a pipeline:
 4. **Pull option chains** — for the survivors, fetch live put chains from Schwab (concurrent,
    rate-limited, cached, with retry on transient hiccups).
 5. **Pick the put** — the ~−0.20Δ put nearest 30–45 DTE that's genuinely liquid (open interest,
-   tight spread, a real sellable bid).
+   a premium worth collecting, a real two-sided market).
 6. **Rank the shortlist** — by a configurable blend of fundamental quality and (conservative,
    bid-based) annualized yield → CSV.
 

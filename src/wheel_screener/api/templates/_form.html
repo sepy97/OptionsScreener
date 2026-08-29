@@ -84,10 +84,18 @@
         <input type="number" name="min_open_interest" value="{{ defaults.min_open_interest }}" min="0">
         <small>contract liquidity floor</small>
       </label>
+      <label>Min premium
+        <input type="number" name="min_premium" value="{{ defaults.min_premium }}"
+               min="0" step="0.05">
+        <small>smallest per-share credit worth selling &mdash; $0.30 on 100 shares is $30
+          against the collateral</small>
+      </label>
       <label>Max bid-ask spread
         <input type="number" name="max_spread_pct" value="{{ defaults.max_spread_pct }}"
-               min="0.01" max="1" step="0.01">
-        <small>0.10 = 10% of mid — wider allows looser fills</small>
+               min="0.01" max="1" step="0.05">
+        <small>a junk-quote guard, not a tightness filter &mdash; 1.00 keeps everything with a
+          real two-sided market. Cheap far-OTM puts have wide <em>percentage</em> spreads by
+          arithmetic, so a tight cap here silently removes most of the field</small>
       </label>
       <label>Min IV
         <input type="number" name="min_iv" value="{{ defaults.min_iv or '' }}"
