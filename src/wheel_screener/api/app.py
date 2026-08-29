@@ -309,6 +309,16 @@ def _short(text: object, limit: int = 260) -> str:
 templates.env.filters["short"] = _short
 
 
+def _money(v: object) -> str:
+    """Accountant-style, with an em dash for genuinely unknown — never a misleading $0.00."""
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return "—"
+    return f"-${abs(v):,.2f}" if v < 0 else f"${v:,.2f}"
+
+
+templates.env.filters["money"] = _money
+
+
 # The pipeline logs one stage line each (captured into job['progress']); we recover the funnel
 # counts from those strings so a finished screen can show Universe -> ... -> Candidates, with no
 # pipeline instrumentation. %d formatting means no thousands commas, so \d+ matches cleanly.
@@ -713,6 +723,26 @@ def fundamentals_route(
 # --- Portfolio ------------------------------------------------------------------------------
 
 
+# Balances are two upstream calls against a ~120/min budget, and a page refresh should not spend
+# them again. Short enough that the number still reads as "now".
+_BALANCES_TTL_SECONDS = 30.0
+
+
+def _cached_balances(request: Request, service: ScreenerService):
+    """Accounts for this request, or the recent ones. Returns ``(accounts, error)`` — never raises,
+    because a balance we cannot fetch must degrade to a message inside the page, not a 500."""
+    cache = getattr(request.app.state, "balances_cache", None)
+    now = time.monotonic()
+    if cache is not None and now - cache[0] < _BALANCES_TTL_SECONDS:
+        return cache[1], None
+    try:
+        accounts = service.brokerage_accounts()
+    except ProviderError as e:
+        return [], str(e)
+    request.app.state.balances_cache = (now, accounts)
+    return accounts, None
+
+
 def _link_for(request: Request, broker: str):
     link = (getattr(request.app.state, "links", None) or {}).get(broker)
     if link is None:
@@ -721,7 +751,11 @@ def _link_for(request: Request, broker: str):
 
 
 @app.get("/portfolio")
-def portfolio_page(request: Request, settings: Settings = Depends(get_settings)):
+def portfolio_page(
+    request: Request,
+    settings: Settings = Depends(get_settings),
+    service: ScreenerService = Depends(get_service),
+):
     """The Portfolio tab. Four states, each with a real rendering:
 
     no session -> connect · session + healthy link -> the account ·
@@ -733,13 +767,17 @@ def portfolio_page(request: Request, settings: Settings = Depends(get_settings))
     session = current_session(request)
     links = getattr(request.app.state, "links", {}) or {}
     status = {name: link.status() for name, link in links.items()}
+    connected = session is not None and any(s.connected for s in status.values())
+    accounts, error = _cached_balances(request, service) if connected else ([], None)
     return templates.TemplateResponse(
         request, "portfolio.html",
         {
             "active_tab": "portfolio",
             "session": session,
             "links": status,
-            "connected": session is not None and any(s.connected for s in status.values()),
+            "connected": connected,
+            "accounts": accounts,
+            "balances_error": error,
         },
     )
 
@@ -779,6 +817,7 @@ def portfolio_callback(request: Request, broker: str, settings: Settings = Depen
     # A relink may be a different account, so previous sessions for this broker are ended first —
     # cheaper and more certain than re-checking an account fingerprint on every later request.
     store.revoke_broker(broker)
+    request.app.state.balances_cache = None  # a relink may be a different account
     expires = status.expires_at or (datetime.now(tz=UTC) + timedelta(days=1))
     token = store.create(broker, status.account_fingerprint or "unknown", expires)
 
@@ -798,6 +837,7 @@ def portfolio_disconnect(request: Request, broker: str, settings: Settings = Dep
     store = request.app.state.sessions
     store.revoke(request.cookies.get(settings.portfolio.cookie_name))
     store.revoke_broker(broker)
+    request.app.state.balances_cache = None
     link.revoke()
     response = RedirectResponse("/portfolio", status_code=303)
     response.delete_cookie(settings.portfolio.cookie_name, path="/portfolio")

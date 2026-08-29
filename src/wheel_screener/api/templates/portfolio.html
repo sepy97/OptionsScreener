@@ -23,7 +23,36 @@
           {% endif %}
         </span>
       </header>
-      <p class="tab-lede">Balances arrive next. The link and the session are live.</p>
+      {% if balances_error %}
+        <article role="alert"><strong>{{ icon.warning() }}{{ balances_error }}</strong></article>
+      {% endif %}
+      {% for a in accounts %}
+        {% set b = a.balances %}
+        <section class="account">
+          <h3>{{ a.display_name }}
+            <span class="company-tags">{{ a.account_type.value if a.account_type else '' }}</span>
+          </h3>
+          <dl class="balance-grid">
+            <div class="balance headline">
+              <dt>Total value</dt><dd>{{ b.total_value | money }}</dd>
+            </div>
+            <div class="balance">
+              <dt>Cash</dt><dd>{{ b.cash | money }}</dd>
+              <p class="detail-note">what you can put behind a new put</p>
+            </div>
+            <div class="balance">
+              <dt>Invested</dt><dd>{{ b.invested | money }}</dd>
+            </div>
+            <div class="balance">
+              <dt>Buying power</dt><dd>{{ b.buying_power | money }}</dd>
+            </div>
+          </dl>
+        </section>
+      {% else %}
+        {% if not balances_error %}
+          <p class="tab-lede">The broker returned no accounts.</p>
+        {% endif %}
+      {% endfor %}
       <form method="post" action="/portfolio/oauth/schwab/disconnect">
         <button type="submit" class="secondary">Disconnect</button>
       </form>
