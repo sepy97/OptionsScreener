@@ -60,6 +60,23 @@ class AlpacaSettings(BaseModel):
     chain_cache_enabled: bool = True
     chain_cache_dir: str = ".cache/alpaca"
     chain_cache_ttl_seconds: int = 300
+    # ── batched chain fetch ──────────────────────────────────────────────────────────────
+    # One snapshot request per underlying made the screen entirely rate-limit-bound: measured
+    # on 817 names, 818 requests took 254s of which 94% was sleeping on the 200/min limiter,
+    # against only ~116s of actual network. Asking for many option symbols per request instead
+    # cut the same screen to ~100 requests and ~30s, with a byte-identical candidate list.
+    batch_chains: bool = True
+    # Only strikes within this fraction of spot get quoted in the batch. A 0.20-delta put sits
+    # ~6-12% OTM (measured median 0.936 x spot, 1st percentile 0.829), so the band is far wider
+    # than the strikes this strategy actually selects. Names whose liquid contracts ALL fall
+    # outside it fall back to the per-name fetch — measured at 20 names — so the band is a
+    # speed heuristic and never a correctness one.
+    strike_band_lo: float = 0.70
+    strike_band_hi: float = 1.02
+    # HARD API limits, not tuning: the snapshots endpoint 400s at 101 symbols ("symbol limit is
+    # 100") and rejects limit > 1000.
+    snapshot_batch: int = 100
+    snapshot_page_limit: int = 1000
 
 
 class FundcoreSettings(BaseModel):

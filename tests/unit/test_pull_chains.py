@@ -106,8 +106,6 @@ def test_pull_chains_timeout_flags_incomplete() -> None:
 
 def test_pull_chains_skips_names_the_prefetch_says_are_empty() -> None:
     """Names with no contracts in the window shouldn't cost a chain request at all."""
-    from wheel_screener.core.models import ProviderCaps
-
     pulled = []
 
     class _Batchable:
@@ -128,8 +126,6 @@ def test_pull_chains_skips_names_the_prefetch_says_are_empty() -> None:
 
 
 def test_a_failed_prefetch_falls_back_instead_of_losing_the_screen() -> None:
-    from wheel_screener.core.models import ProviderCaps
-
     pulled = []
 
     class _Broken:
@@ -149,8 +145,6 @@ def test_a_failed_prefetch_falls_back_instead_of_losing_the_screen() -> None:
 
 
 def test_a_provider_without_batching_is_untouched() -> None:
-    from wheel_screener.core.models import ProviderCaps
-
     pulled = []
 
     class _Solo:
@@ -163,3 +157,46 @@ def test_a_provider_without_batching_is_untouched() -> None:
 
     pull_chains(_Solo(), [_u(s) for s in ("A", "B")], ChainFilter())
     assert sorted(pulled) == ["A", "B"]
+
+
+def test_a_batch_capable_provider_skips_the_per_name_thread_pool() -> None:
+    """The thread pool was never the lever: every worker queues on the same per-minute request
+    budget, so eight threads and one thread finish together. A provider that can answer for many
+    names in a few requests must be asked that way instead."""
+    class _Batch:
+        def __init__(self) -> None:
+            self.batched: list[str] | None = None
+            self.per_name: list[str] = []
+
+        def capabilities(self):
+            return ProviderCaps(name="fake", supports_batch_chains=True, max_concurrency=8)
+
+        def get_chains(self, symbols, filt, *, cancel=None, deadline=None):
+            self.batched = list(symbols)
+            return {s: ChainSnapshot(underlying_symbol=s, contracts=[]) for s in symbols}, True
+
+        def get_chain(self, symbol, filt):
+            self.per_name.append(symbol)
+            return ChainSnapshot(underlying_symbol=symbol, contracts=[])
+
+    prov = _Batch()
+    chains, complete = pull_chains(prov, [_u("AAA"), _u("BBB")], ChainFilter())
+    assert complete and set(chains) == {"AAA", "BBB"}
+    assert prov.batched == ["AAA", "BBB"]
+    assert prov.per_name == [], "no per-name fetch when the provider can batch"
+
+
+def test_a_batch_provider_reporting_an_incomplete_fetch_marks_the_scan_partial() -> None:
+    class _Cut:
+        def capabilities(self):
+            return ProviderCaps(name="fake", supports_batch_chains=True)
+
+        def get_chains(self, symbols, filt, *, cancel=None, deadline=None):
+            return {symbols[0]: ChainSnapshot(underlying_symbol=symbols[0],
+                                              contracts=[])}, False  # cancelled/timed out mid-fetch
+
+        def get_chain(self, symbol, filt):
+            raise AssertionError("must not fall back to per-name")
+
+    chains, complete = pull_chains(_Cut(), [_u("AAA"), _u("BBB")], ChainFilter())
+    assert complete is False and set(chains) == {"AAA"}
