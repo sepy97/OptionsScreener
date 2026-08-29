@@ -9,7 +9,7 @@ from pydantic import SecretStr
 
 from wheel_screener.adapters.alpaca.provider import AlpacaChainProvider
 from wheel_screener.config import AlpacaSettings
-from wheel_screener.core.errors import RateLimitedError
+from wheel_screener.core.errors import ProviderDataError, RateLimitedError
 from wheel_screener.core.models import ChainFilter, OptionType
 
 SNAP = "https://data.alpaca.markets/v1beta1/options/snapshots/AAA"
@@ -248,3 +248,88 @@ def test_check_auth_reports_an_outage_without_raising() -> None:
     )
     detail = AlpacaChainProvider(settings).check_auth()
     assert detail is not None and "Alpaca" in detail
+
+
+# --- bulk prefetch -------------------------------------------------------------------------
+# Most of a screen's chain requests return nothing (measured: 61% of names have no contract in
+# the window), and `underlying_symbols` is plural — so one batched call can say which names are
+# worth a snapshot request at all.
+
+def _filt() -> ChainFilter:
+    return ChainFilter(option_type=OptionType.PUT, min_dte=30, max_dte=45)
+
+
+def _bulk_body(rows):
+    return {"option_contracts": [
+        {"symbol": occ, "underlying_symbol": und, "open_interest": str(oi)}
+        for und, occ, oi in rows
+    ], "next_page_token": None}
+
+
+@respx.mock
+def test_prefetch_reports_which_names_have_nothing() -> None:
+    occ = _occ()
+    route = respx.get(CONTRACTS).mock(
+        return_value=httpx.Response(200, json=_bulk_body([("AAA", occ, 800)]))
+    )
+    provider = AlpacaChainProvider(_settings())
+    empty = provider.prefetch(["AAA", "BBB", "CCC"], _filt())
+    assert empty == {"BBB", "CCC"}, "names absent from the batch have no contracts"
+    assert route.call_count == 1, "one call for all three names"
+
+
+@respx.mock
+def test_a_prefetched_name_does_not_re_request_open_interest() -> None:
+    occ = _occ()
+    bulk = respx.get(CONTRACTS).mock(
+        return_value=httpx.Response(200, json=_bulk_body([("AAA", occ, 800)]))
+    )
+    snap = respx.get(SNAP).mock(return_value=httpx.Response(200, json=_snap_body(occ)))
+    provider = AlpacaChainProvider(_settings())
+    provider.prefetch(["AAA"], _filt())
+    chain = provider.get_chain("AAA", _filt())
+    assert chain.contracts[0].open_interest == 800  # came from the prefetch
+    assert snap.call_count == 1
+    assert bulk.call_count == 1, "the per-symbol contracts call must not fire again"
+
+
+@respx.mock
+def test_a_different_window_falls_back_to_a_per_symbol_call() -> None:
+    """The prefetch is keyed by window, so a search over another DTE range can't reuse it."""
+    occ = _occ()
+    respx.get(SNAP).mock(return_value=httpx.Response(200, json=_snap_body(occ)))
+    bulk = respx.get(CONTRACTS).mock(
+        return_value=httpx.Response(200, json=_bulk_body([("AAA", occ, 800)]))
+    )
+    provider = AlpacaChainProvider(_settings())
+    provider.prefetch(["AAA"], _filt())
+    provider.get_chain("AAA", ChainFilter(option_type=OptionType.PUT, min_dte=7, max_dte=20))
+    assert bulk.call_count == 2, "second call is the per-symbol fallback for the new window"
+
+
+@respx.mock
+def test_one_unlisted_symbol_does_not_fail_the_whole_batch() -> None:
+    """The API 422s the entire batch for one bad name — but it names the offenders."""
+    occ = _occ()
+    responses = [
+        httpx.Response(422, json={"code": 42210000,
+                                  "message": "invalid underlying symbols: EQR,SATS"}),
+        httpx.Response(200, json=_bulk_body([("AAA", occ, 800)])),
+    ]
+    route = respx.get(CONTRACTS).mock(side_effect=responses)
+    provider = AlpacaChainProvider(_settings())
+    empty = provider.prefetch(["AAA", "EQR", "SATS"], _filt())
+    assert route.call_count == 2, "drops the named symbols and retries once"
+    assert "EQR" in empty and "SATS" in empty  # unlisted == no contracts, for our purposes
+
+
+@respx.mock
+def test_an_unrecoverable_422_still_raises() -> None:
+    respx.get(CONTRACTS).mock(return_value=httpx.Response(422, json={"message": "nope"}))
+    provider = AlpacaChainProvider(_settings())
+    with pytest.raises(ProviderDataError):  # a 422 we can't attribute is a real failure
+        provider.prefetch(["AAA"], _filt())
+
+
+def test_alpaca_advertises_batch_support() -> None:
+    assert AlpacaChainProvider(_settings()).capabilities().supports_batch_underlyings is True

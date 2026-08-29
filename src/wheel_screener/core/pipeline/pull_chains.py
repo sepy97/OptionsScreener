@@ -38,11 +38,14 @@ def pull_chains(
         logger.warning("chain pull skipped: no time budget remaining")
         return {}, False
 
-    workers = max(1, provider.capabilities().max_concurrency)
+    caps = provider.capabilities()
+    workers = max(1, caps.max_concurrency)
+    targets = _skip_empty_chains(provider, survivors, filt) if caps.supports_batch_underlyings \
+        else survivors
     out: dict[str, ChainSnapshot] = {}
     complete = True
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(provider.get_chain, u.symbol, filt): u.symbol for u in survivors}
+        futures = {pool.submit(provider.get_chain, u.symbol, filt): u.symbol for u in targets}
         wait_for = None if deadline is None else max(0.0, deadline - monotonic())
         try:
             for fut in as_completed(futures, timeout=wait_for):
@@ -69,3 +72,32 @@ def pull_chains(
                 f.cancel()  # cancel any not-yet-started pulls
     logger.info("chains: %d/%d survivors returned a chain", len(out), len(survivors))
     return out, complete
+
+
+def _skip_empty_chains(provider, survivors, filt):
+    """Ask a batch-capable provider which names have no contracts at all, and drop them.
+
+    Most of a screen's chain requests return nothing: measured on a 400-name run, 61% of names
+    had no put in the DTE window, and we spent a request on every one. A provider that can answer
+    for many underlyings at once resolves that in a handful of calls.
+
+    Best-effort by design — a prefetch failure falls back to pulling every name, because losing a
+    speed-up is not a reason to lose a screen.
+    """
+    prefetch = getattr(provider, "prefetch", None)
+    if prefetch is None:
+        return survivors
+    try:
+        empty = prefetch([u.symbol for u in survivors], filt)
+    except ProviderError:
+        raise  # systemic (auth/rate/outage) — the per-symbol pulls would fail the same way
+    except Exception as e:  # noqa: BLE001 - any other prefetch problem is not fatal
+        logger.warning("chain prefetch failed (%s); pulling every name individually", e)
+        return survivors
+    if not empty:
+        return survivors
+    logger.info(
+        "prefetch: %d/%d names have no contracts in the window — skipping their chain pull",
+        len(empty), len(survivors),
+    )
+    return [u for u in survivors if u.symbol not in empty]

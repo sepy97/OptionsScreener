@@ -8,6 +8,8 @@ endpoint paginates via ``next_page_token``. ``feed`` is 'indicative' (free) or '
 
 from __future__ import annotations
 
+import logging
+import re
 from datetime import date, timedelta
 
 import httpx
@@ -20,8 +22,17 @@ from wheel_screener.config import AlpacaSettings
 from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
 from wheel_screener.core.models import ChainFilter, ChainSnapshot, OptionType, ProviderCaps
 
+logger = logging.getLogger(__name__)
+
+# The contracts endpoint rejects the WHOLE batch when one underlying isn't listed — but it names
+# the offenders, so the recovery is to drop exactly those and retry.
+_INVALID_SYMBOLS = re.compile(r"invalid underlying symbols?: ([^\"}]+)")
+
 
 class AlpacaChainProvider:
+    # underlyings per bulk contracts request; 400 works, 200 keeps URLs and blast radius small
+    PREFETCH_BATCH = 200
+
     def __init__(
         self, settings: AlpacaSettings, client: httpx.Client | None = None, timeout: float = 15.0
     ) -> None:
@@ -31,6 +42,9 @@ class AlpacaChainProvider:
         # so each host gets its own limiter rather than sharing one budget (which would 429)
         self._data_limiter = RateLimiter(settings.calls_per_minute)
         self._trading_limiter = RateLimiter(settings.calls_per_minute)
+        # Populated by prefetch() before the concurrent pull and only READ during it.
+        # (window key, symbols covered, open interest by underlying).
+        self._prefetched: tuple[tuple, set[str], dict[str, dict[str, int]]] | None = None
         self._cache: DiskCache | None = (
             DiskCache(settings.chain_cache_dir, settings.chain_cache_ttl_seconds)
             if settings.chain_cache_enabled
@@ -130,6 +144,91 @@ class AlpacaChainProvider:
         )
         return oi
 
+    @staticmethod
+    def _window(from_date: date, to_date: date, side: OptionType) -> tuple:
+        return (from_date, to_date, side.value)
+
+    def _bulk_open_interest(
+        self, chunk: list[str], from_date: date, to_date: date, side: OptionType,
+        out: dict[str, dict[str, int]],
+    ) -> None:
+        """One batched, paginated contracts request, recovering from unlisted underlyings."""
+        url = f"{self._settings.trading_base_url.rstrip('/')}/v2/options/contracts"
+        remaining, token, drops = list(chunk), None, 0
+        while remaining:
+            params = {
+                "underlying_symbols": ",".join(remaining),
+                "type": side.value,
+                "status": "active",
+                "expiration_date_gte": from_date.isoformat(),
+                "expiration_date_lte": to_date.isoformat(),
+                "limit": 10000,
+            }
+            if token:
+                params["page_token"] = token
+            try:
+                page = run_with_retry(
+                    lambda p=params: self._get(url, p, self._trading_limiter),
+                    max_attempts=self._settings.max_retries + 1,
+                    multiplier=self._settings.retry_backoff_multiplier,
+                )
+            except httpx.HTTPStatusError as e:
+                bad = self._unlisted(e)
+                if not bad or drops >= 5:
+                    raise
+                drops += 1
+                remaining = [s for s in remaining if s not in bad]
+                token = None  # restart pagination; collected rows are re-added idempotently
+                logger.info("alpaca: %d underlying(s) not listed, dropped from the batch: %s",
+                            len(bad), ",".join(sorted(bad)[:8]))
+                continue
+            for c in page.get("option_contracts") or []:
+                occ, under = c.get("symbol"), c.get("underlying_symbol")
+                raw = c.get("open_interest")
+                if not occ or not under:
+                    continue
+                try:
+                    out.setdefault(under, {})[occ] = int(raw) if raw is not None else 0
+                except (TypeError, ValueError):
+                    out.setdefault(under, {})
+            token = page.get("next_page_token")
+            if not token:
+                return
+
+    @staticmethod
+    def _unlisted(exc: httpx.HTTPStatusError) -> set[str]:
+        """The underlyings a 422 blamed, so they can be dropped rather than failing the batch."""
+        if exc.response is None or exc.response.status_code != 422:
+            return set()
+        m = _INVALID_SYMBOLS.search(exc.response.text or "")
+        return {x.strip().strip('"') for x in m.group(1).split(",") if x.strip()} if m else set()
+
+    def prefetch(self, symbols: list[str], filt: ChainFilter) -> set[str]:
+        """Bulk-load open interest for many underlyings; return those with NO contracts at all.
+
+        ``underlying_symbols`` is plural, so several hundred names cost ~3 requests instead of one
+        each. The saved requests matter less than what the answer reveals: which names have nothing
+        in the window, so their snapshot call can be skipped entirely. Measured on a 400-name
+        screen, 61% of names had no contracts — and we were spending a request on every one.
+
+        Populated before the concurrent pull and only read during it.
+        """
+        today = date.today()
+        from_date = today + timedelta(days=filt.min_dte if filt.min_dte is not None else 0)
+        to_date = today + timedelta(days=filt.max_dte if filt.max_dte is not None else 60)
+        side = filt.option_type
+        wanted = list(dict.fromkeys(symbols))
+        by_symbol: dict[str, dict[str, int]] = {}
+        try:
+            for i in range(0, len(wanted), self.PREFETCH_BATCH):
+                self._bulk_open_interest(
+                    wanted[i : i + self.PREFETCH_BATCH], from_date, to_date, side, by_symbol
+                )
+        except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            raise map_http_error(e, ALPACA) from e
+        self._prefetched = (self._window(from_date, to_date, side), set(wanted), by_symbol)
+        return {s for s in wanted if s not in by_symbol}
+
     def get_chain(self, symbol: str, filt: ChainFilter) -> ChainSnapshot:
         today = date.today()
         from_date = today + timedelta(days=filt.min_dte if filt.min_dte is not None else 0)
@@ -146,9 +245,20 @@ class AlpacaChainProvider:
             if isinstance(cached, dict):
                 return build_chain(symbol, cached.get("snapshots"), cached.get("oi"), today)
 
+        # A matching prefetch already holds this symbol's open interest — don't re-ask for it.
+        prefetched = None
+        if self._prefetched is not None:
+            window, covered, by_symbol = self._prefetched
+            if window == self._window(from_date, to_date, side) and symbol in covered:
+                prefetched = by_symbol.get(symbol, {})
+
         try:
             snapshots = self._snapshots(symbol, from_date, to_date, side)
-            oi = self._open_interest(symbol, from_date, to_date, side)
+            oi = (
+                prefetched
+                if prefetched is not None
+                else self._open_interest(symbol, from_date, to_date, side)
+            )
         except ProviderError:
             raise  # never mask a typed provider error
         except (httpx.HTTPStatusError, httpx.TransportError) as e:
@@ -190,7 +300,7 @@ class AlpacaChainProvider:
     def capabilities(self) -> ProviderCaps:
         return ProviderCaps(
             name="alpaca",
-            supports_batch_underlyings=False,
+            supports_batch_underlyings=True,  # `underlying_symbols` takes a list
             max_concurrency=self._settings.max_concurrency,
             server_side_filters=["type", "expiration_date_gte", "expiration_date_lte"],
             realtime=(self._settings.feed == "opra"),
