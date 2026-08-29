@@ -174,6 +174,16 @@ rows it is far too much prose to keep resident, and excluding it is what makes t
 footprint reasonable in the first place. A deployment whose source can't supply profiles simply
 shows the ticker, and nothing else changes.
 
+## Portfolio
+
+A fourth tab showing a linked brokerage account: total value, cash, invested and buying power.
+Signing in happens **at the broker** — the site never sees those credentials and only ever reads.
+
+Access is the sign-in itself: completing the broker's OAuth issues a session, so a visitor without
+one sees a Connect page rather than an account. Everything the feature owns lives under
+`/portfolio`, and that prefix denies by default — only the three pre-session entry points are open.
+Schwab authorisations last 7 days, so reconnecting is a weekly click that doubles as the login.
+
 ## The funnel
 
 ```

@@ -241,3 +241,108 @@ def test_an_expired_link_offers_reconnect_rather_than_an_error() -> None:
         assert "Reconnect" in body and "expired" in body.lower()
     finally:
         c.__exit__(None, None, None)
+
+
+# --- balances on the tab --------------------------------------------------------------------
+
+from wheel_screener.api.app import _money  # noqa: E402
+from wheel_screener.api.deps import get_service  # noqa: E402
+from wheel_screener.core.errors import AuthExpiredError  # noqa: E402
+from wheel_screener.core.models import AccountBalances, AccountType, BrokerageAccount  # noqa: E402
+
+
+class _AccountService:
+    def __init__(self, accounts=None, error=None):
+        self._accounts, self._error, self.calls = accounts or [], error, 0
+
+    def brokerage_accounts(self):
+        self.calls += 1
+        if self._error is not None:
+            raise self._error
+        return self._accounts
+
+
+def _account(**kw):
+    balances = AccountBalances(total_value=1000.0, cash=400.0, invested=600.0, buying_power=800.0)
+    return BrokerageAccount(
+        broker="schwab", account_id="HASH", display_name="••••1337",
+        account_type=AccountType.MARGIN, balances=kw.get("balances", balances),
+    )
+
+
+def _signed_in(service):
+    c = _client()
+    app.dependency_overrides[get_service] = lambda: service
+    app.state.balances_cache = None
+    _sign_in(c)
+    return c
+
+
+def test_the_connected_tab_shows_the_money() -> None:
+    c = _signed_in(_AccountService([_account()]))
+    try:
+        body = c.get("/portfolio").text
+        assert "••••1337" in body and "margin" in body
+        assert "$1,000.00" in body and "$400.00" in body and "$600.00" in body
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_a_failed_balance_fetch_degrades_inside_the_page() -> None:
+    """A balance we cannot fetch is a message, not a 500 — the session is still valid."""
+    service = _AccountService(error=AuthExpiredError("Schwab rejected our credentials"))
+    c = _signed_in(service)
+    try:
+        r = c.get("/portfolio")
+        assert r.status_code == 200
+        assert "Schwab rejected our credentials" in r.text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_balances_are_cached_so_a_refresh_does_not_re_ask_the_broker() -> None:
+    service = _AccountService([_account()])
+    c = _signed_in(service)
+    try:
+        for _ in range(4):
+            c.get("/portfolio")
+        assert service.calls == 1
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_disconnect_drops_the_cached_numbers() -> None:
+    """Cached balances must not outlive the session that was allowed to see them."""
+    service = _AccountService([_account()])
+    c = _signed_in(service)
+    try:
+        c.get("/portfolio")
+        c.post("/portfolio/oauth/schwab/disconnect", follow_redirects=False)
+        assert app.state.balances_cache is None
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_an_anonymous_visitor_never_reaches_the_broker() -> None:
+    service = _AccountService([_account()])
+    c = _client()
+    app.dependency_overrides[get_service] = lambda: service
+    try:
+        body = c.get("/portfolio").text
+        assert service.calls == 0, "no session, no upstream call"
+        assert "$1,000.00" not in body
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_money_renders_unknown_as_a_dash_not_zero() -> None:
+    """A missing balance must never read as $0.00 — that is a claim the data does not make."""
+    assert _money(None) == "—" and _money("x") == "—"
+    assert _money(0) == "$0.00"
+    assert _money(1234.5) == "$1,234.50"
+    assert _money(-50.0) == "-$50.00"

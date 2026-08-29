@@ -502,7 +502,7 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
       and testable against a fake. It is also the riskiest code in the feature, so it is the right
       thing to build while waiting. Session store and cookie, `state` issuance and verification,
       connect / callback / disconnect, token on the volume, Caddy log suppression for the callback.
-- [ ] **P3 — the tab, balances only.** Total / cash / invested, plus the never-connected and
+- [x] **P3 — the tab, balances only.** Total / cash / invested, plus the never-connected and
       expired states. Shippable on its own: a Portfolio tab that shows what the account is worth is
       already useful.
 - [ ] **P4 — positions.** Short puts with assignment watch, share lots, committed collateral and
