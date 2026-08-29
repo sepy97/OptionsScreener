@@ -13,7 +13,10 @@ from wheel_screener.core.models import ScreenCriteria
 
 
 class ScreenRequest(BaseModel):
-    top_n: int = Field(400, ge=1, le=2000, description="Fundamental survivors to pull chains for.")
+    # None = every name that passes fundamentals. There is deliberately no upper bound: a
+    # ceiling would be a guess about the size of the field, and the day the universe outgrew it
+    # the "all names" default would quietly start capping.
+    top_n: int | None = Field(None, ge=1, description="Chains to pull; None = every survivor.")
     fundamental_weight: float = Field(0.5, ge=0.0, le=1.0, description="1=quality, 0=yield.")
     min_score: float | None = Field(None, ge=0.0, le=1.0, description="Blended-score floor.")
     min_dollar_volume: float = Field(
@@ -21,15 +24,15 @@ class ScreenRequest(BaseModel):
     )
     # annualized-yield floor; default 10%. Blank in the form -> None (no floor).
     min_yield: float | None = Field(0.10, ge=0.0, description="Drop candidates below this yield.")
-    min_dte: int = Field(21, ge=1, le=400)  # ~3 weeks
-    max_dte: int = Field(35, ge=1, le=400)  # ~5 weeks
+    min_dte: int = Field(14, ge=1, le=400)  # wide enough to always contain a monthly
+    max_dte: int = Field(45, ge=1, le=400)
     # options-quality knobs (were engine-internal; now user-adjustable)
     min_price: float = Field(20.0, ge=0.0, description="Underlying price floor.")
     max_price: float = Field(500.0, gt=0.0, description="Underlying price ceiling.")
     # entered as a positive magnitude (0.20); negated to the put's signed delta in to_criteria.
     target_delta: float = Field(0.20, gt=0.0, le=1.0, description="Target put |delta|.")
     max_abs_delta: float = Field(0.30, gt=0.0, le=1.0, description="Widest |delta| kept.")
-    min_open_interest: int = Field(100, ge=0, description="Contract open-interest floor.")
+    min_open_interest: int = Field(50, ge=0, description="Contract open-interest floor.")
     min_iv: float | None = Field(None, ge=0.0, description="Optional IV floor (blank=off).")
 
     @model_validator(mode="after")

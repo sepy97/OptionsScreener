@@ -1079,3 +1079,85 @@ def test_form_renders_the_dte_slider_over_the_ladder(tmp_path) -> None:
     assert 'name="min_dte"' in r.text and 'name="max_dte"' in r.text
     assert 'type="range" class="dte-thumb" data-thumb="min" min="1"' in r.text
     assert 'name="min_dte"' not in r.text.split("dte-boxes")[0], "ranges must stay unnamed"
+
+
+def test_web_form_defaults_match_the_request_model() -> None:
+    """A Form(...) default and its ScreenRequest counterpart are two copies of one number, and
+    a POST that omits a field takes the Form one — so a drifted pair changes a screen silently,
+    in a direction nobody chose. This binds them together."""
+    import inspect
+
+    from wheel_screener.api.app import start_run
+    from wheel_screener.api.schemas import ScreenRequest
+
+    request_defaults = ScreenRequest()
+    for name, param in inspect.signature(start_run).parameters.items():
+        default = getattr(param.default, "default", None)  # unwrap fastapi.Form(...)
+        if default is None or not hasattr(request_defaults, name):
+            continue
+        if isinstance(default, str):  # some fields arrive accountant-formatted ("25,000,000")
+            default = default.replace(",", "").strip()
+            if not default:
+                continue
+        expected = getattr(request_defaults, name)
+        if isinstance(expected, float | int) and not isinstance(expected, bool):
+            assert float(default) == float(expected), f"{name}: form {default} != model {expected}"
+
+
+def test_the_default_dte_window_holds_a_monthly_on_all_but_12_days_of_the_year() -> None:
+    """A default is the window most users never touch, so it has to hold up on every day of the
+    year — not just the day it was picked. Monthlies fall on the third Friday, so consecutive
+    ones sit 28 or 35 days apart, and a window narrower than 35 days can fall entirely between
+    two of them. 21-35 (span 15) did that for over half the year.
+
+    14-45 has a span of 32, so it still slips on 12 days — always the run-up to a 35-day gap.
+    That is a deliberate accepted cost, not an oversight: widening the top to 48 closes it
+    completely, at the price of a default that reaches further out than this strategy sells."""
+    from wheel_screener.api.expiries import expiry_ladder
+    from wheel_screener.api.schemas import ScreenRequest
+
+    def misses(lo: int, hi: int) -> list[date]:
+        out, day = [], date(2026, 1, 1)
+        while day < date(2027, 1, 1):
+            if not any(e["monthly"] and lo <= e["dte"] <= hi for e in expiry_ladder(day, hi)):
+                out.append(day)
+            day += timedelta(days=1)
+        return out
+
+    lo, hi = ScreenRequest().min_dte, ScreenRequest().max_dte
+    assert (lo, hi) == (14, 45)
+    assert len(misses(lo, hi)) == 12, "the accepted residual — see the docstring"
+    assert len(misses(21, 35)) > 180, "the window this replaced missed over half the year"
+    assert misses(14, 48) == [], "a 35-day span is the arithmetic threshold (hi >= lo + 34)"
+
+
+def test_names_to_check_defaults_to_max_and_is_not_a_number(tmp_path) -> None:
+    """"All of them" is a state, not a large integer. Any number standing in for it is a guess
+    about the size of the field, and it turns into a real cap the day the universe outgrows it
+    — silently, because the control still reads as "everything"."""
+    from wheel_screener.api.schemas import ScreenRequest
+
+    assert ScreenRequest().top_n is None
+    assert ScreenRequest().to_criteria().top_n is None
+    assert ScreenCriteria().top_n is None
+    # and no ceiling to outgrow
+    assert ScreenRequest(top_n=100_000).top_n == 100_000
+
+    r = _client(_runner(_FakeService(result=[]), tmp_path)).get("/")
+    box = r.text[r.text.index('name="top_n"') - 60:r.text.index('name="top_n"') + 200]
+    assert "MAX" in box and 'value=""' in box
+    assert "2000" not in box, "the old magic number must not be back as a value or a max"
+
+
+def test_blank_names_to_check_reaches_the_engine_as_no_cap(tmp_path) -> None:
+    svc = _FakeService(result=[_candidate()])
+    runner = _runner(svc, tmp_path)
+    started = _client(runner).post("/runs", data={"top_n": ""})
+    runner.wait(_job_id_from(started.text))
+    assert svc.seen_criteria.top_n is None
+
+    svc2 = _FakeService(result=[_candidate()])
+    runner2 = _runner(svc2, tmp_path / "b")
+    started = _client(runner2).post("/runs", data={"top_n": "25"})  # still a working speed lever
+    runner2.wait(_job_id_from(started.text))
+    assert svc2.seen_criteria.top_n == 25

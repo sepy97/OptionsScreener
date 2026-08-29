@@ -71,9 +71,13 @@ class ScreenCriteria(BaseModel):
     universe_limit: int = 50  # deep-fetch cap (by market cap) when bulk pre-rank is unavailable
     # fundamentals
     stock_profile: StockProfile = StockProfile.STALWART
-    top_n: int = 400  # names to pull chains for. Raised once the pre-rank cap stopped
-    # silently overriding it: chains cost ~200/min per host, so 400 is ~2 min worst case,
-    # and capping tighter discards high-yield names before their yield is ever measured.
+    # None = no cap: pull a chain for every name that clears the fundamental gates. It is a
+    # STATE rather than a large number on purpose — any numeric stand-in for "all of them" is a
+    # guess about how big the field is, and it silently becomes a real cap the day the universe
+    # outgrows it. The cut ranks on FUNDAMENTALS, before any yield is measured, so a cap
+    # discards high-yield names sight unseen; a measured full field (817 names) took ~4 min,
+    # well inside the 10-minute budget. Setting a number is the speed lever, not a quality one.
+    top_n: int | None = None
     min_fundamental_score: float | None = None  # 0..1 absolute-strength floor; None = keep top_n
     max_per_sector: int | None = None  # optional concentration cap on the top-N
     max_leverage: float = 4.0  # hard gate: net-debt/EBITDA ceiling
@@ -96,14 +100,22 @@ class ScreenCriteria(BaseModel):
     # options target
     target_delta: float = -0.20
     max_abs_delta: float = 0.30
-    min_dte: int = 21  # ~3 weeks
-    max_dte: int = 35  # ~5 weeks
+    # Wide enough to always contain a monthly. Monthlies land on the third Friday, so a narrow
+    # band drifts in and out of holding one: on 2026-08-29 the old 21-35 sat between the
+    # September monthly (20 days) and October's (48) and admitted no monthly at all, which cost
+    # a live screen 54% of its qualifying contracts and every name without weeklys. 14-45
+    # always spans one, whatever the day of the month.
+    min_dte: int = 14
+    max_dte: int = 45
     # 0 = strict: results stay within [min_dte, max_dte]. Set >0 to also accept an expiry up to
     # N days outside the window when none lands in-band (opt-in; may return out-of-window results).
     dte_tolerance: int = 0
     # ranking / liquidity gates
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
-    min_open_interest: int = 100
+    # Liquidity floor, measured as the strictest per-contract gate in the screen: only 12.6%
+    # of contracts cleared 100, and dropping it entirely more than doubled the result count.
+    # 50 open contracts is still a real market on the far-OTM strikes this strategy sells.
+    min_open_interest: int = 50
     # There is deliberately NO spread cap and NO premium floor here. Both were junk-quote
     # guards, and both were measured to be nearly inert: switching them off changed a live
     # screen by 1 and 3 names respectively. What they were guarding against is already covered

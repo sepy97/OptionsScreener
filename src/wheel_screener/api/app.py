@@ -362,9 +362,26 @@ def _funnel(job: object) -> list[dict]:
 templates.env.filters["funnel"] = _funnel
 
 
+def _last_field_size(job: object) -> int | None:
+    """How many names cleared fundamentals on the last run.
+
+    The form's "names to check" box defaults to MAX, and MAX is only a meaningful default if you
+    can see roughly what it costs. This is the honest source for that: a real number from a real
+    run, already parsed out of the funnel, rather than a figure hardcoded into the copy that
+    goes stale the first time the universe moves.
+    """
+    return next((s["count"] for s in _funnel(job) if s["label"] == "Fundamentals"), None)
+
+
 def _opt_float(raw: str) -> float | None:
     raw = (raw or "").strip()
     return float(raw) if raw else None
+
+
+def _opt_int(raw: str) -> int | None:
+    """Blank (or the word the UI shows for it) means no cap, not zero."""
+    raw = (raw or "").strip()
+    return None if not raw or raw.upper() == "MAX" else int(raw)
 
 
 # option prices/IV move intraday, so a precomputed snapshot older than this is flagged stale
@@ -581,6 +598,7 @@ def screener_page(request: Request, runner: JobRunner = Depends(get_job_runner))
         {
             "active_tab": "screener",
             "defaults": ScreenRequest(), "latest": latest, "latest_age": age,
+            "last_field_size": _last_field_size(latest),
             "expiries": expiry_ladder(date.today(), DTE_HORIZON_DAYS),
             "next_monthly": next_monthly(date.today(), DTE_HORIZON_DAYS),
             "dte_horizon": DTE_HORIZON_DAYS,
@@ -851,24 +869,24 @@ def portfolio_disconnect(request: Request, broker: str, settings: Settings = Dep
 @app.post("/runs")
 def start_run(
     request: Request,
-    top_n: int = Form(400),
+    top_n: str = Form(""),  # blank = MAX (no cap)
     fundamental_weight: float = Form(0.5),
     min_dollar_volume: str = Form("25,000,000"),   # accountant-formatted; commas stripped below
     min_yield: str = Form("0.10"),
-    min_dte: int = Form(21),
-    max_dte: int = Form(35),
+    min_dte: int = Form(14),
+    max_dte: int = Form(45),
     min_price: float = Form(20.0),
-    max_price: float = Form(200.0),
+    max_price: float = Form(500.0),
     target_delta: float = Form(0.20),
     max_abs_delta: float = Form(0.30),
-    min_open_interest: int = Form(100),
+    min_open_interest: int = Form(50),
     min_iv: str = Form(""),
     min_score: str = Form(""),
     runner: JobRunner = Depends(get_job_runner),
 ):
     try:
         req = ScreenRequest(
-            top_n=top_n, fundamental_weight=fundamental_weight,
+            top_n=_opt_int(top_n), fundamental_weight=fundamental_weight,
             min_dollar_volume=float((min_dollar_volume or "").replace(",", "").strip() or 0),
             min_yield=_opt_float(min_yield),
             min_dte=min_dte, max_dte=max_dte,

@@ -15,9 +15,9 @@ def test_screen_criteria_defaults() -> None:
     c = ScreenCriteria()
     assert c.stock_profile == StockProfile.STALWART
     assert c.target_delta == -0.20
-    assert c.min_dte == 21
-    assert c.max_dte == 35
-    assert c.top_n == 400
+    assert c.min_dte == 14  # wide enough that a monthly always lands inside it
+    assert c.max_dte == 45
+    assert c.top_n is None  # no cap: pull a chain for every fundamental survivor
     assert c.exchanges == ["nasdaq", "nyse"]
 
 

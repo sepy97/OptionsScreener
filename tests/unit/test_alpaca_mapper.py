@@ -67,12 +67,15 @@ def test_alpaca_chain_feeds_select_put() -> None:
 
 
 def test_select_put_honors_strict_dte_window() -> None:
-    # only an out-of-window expiry: 40 DTE, while the default window is [21, 35] (issue #26)
+    # only an out-of-window expiry: 60 DTE against an explicit [21, 35] window (issue #26).
+    # The window is pinned rather than taken from the defaults: this test is about strictness,
+    # and a widened default would otherwise turn the assertion into a tautology.
     today = date(2026, 6, 25)
-    far = f"AAA{today + timedelta(days=40):%y%m%d}P00090000"
+    strict = ScreenCriteria(min_dte=21, max_dte=35)
+    far = f"AAA{today + timedelta(days=60):%y%m%d}P00090000"
     snaps = {far: {"latestQuote": {"bp": 1.4, "ap": 1.5}, "greeks": {"delta": -0.20},
                    "impliedVolatility": 0.34}}
     chain = build_chain("AAA", snaps, {far: 800}, today)
-    assert select_put(chain, ScreenCriteria()) is None  # strict by default: 40 DTE is out of band
-    picked = select_put(chain, ScreenCriteria(dte_tolerance=10))  # opt-in tolerance admits it
-    assert picked is not None and picked.dte == 40
+    assert select_put(chain, strict) is None  # strict by default: 60 DTE is out of band
+    picked = select_put(chain, strict.model_copy(update={"dte_tolerance": 30}))  # opt-in
+    assert picked is not None and picked.dte == 60
