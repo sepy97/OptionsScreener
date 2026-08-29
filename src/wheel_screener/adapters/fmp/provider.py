@@ -11,7 +11,7 @@ from datetime import date, timedelta
 
 import httpx
 
-from wheel_screener.adapters.errors import map_http_error
+from wheel_screener.adapters.errors import FMP, map_http_error
 from wheel_screener.adapters.fmp.client import FmpClient
 from wheel_screener.adapters.fmp.mapper import map_earnings, map_metrics, map_universe_row
 from wheel_screener.config import FmpSettings
@@ -151,14 +151,26 @@ class FmpFundamentalsProvider:
         except httpx.HTTPStatusError as e:
             if e.response.status_code in (402, 404):
                 return {}  # not in subscription -> caller falls back to deep fetch
-            raise map_http_error(e) from e
+            raise map_http_error(e, FMP) from e
         except httpx.TransportError as e:
-            raise map_http_error(e) from e
+            raise map_http_error(e, FMP) from e
         out: dict[str, FundamentalMetrics] = {}
         for sym in symbols:
             if sym in ratios or sym in key_metrics:
                 out[sym] = map_metrics(ratios.get(sym, {}), key_metrics.get(sym, {}), {}, {}, {})
         return out
+
+    def check_auth(self) -> str | None:
+        """Verify the API key with one cheap, uncached call. None means healthy."""
+        if not self._settings.api_key.get_secret_value():
+            return f"{FMP} API key is not configured — {FMP.auth_remedy}"
+        try:
+            self._client.get("ratios-ttm", {"symbol": "AAPL"}, cache=False)
+        except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            return str(map_http_error(e, FMP))
+        except Exception as e:  # noqa: BLE001 - a probe must never raise
+            return f"{FMP} check failed: {e}"
+        return None
 
     def fetch_metrics(self, symbols: list[str]) -> dict[str, FundamentalMetrics]:
         """Per-symbol deep fetch (incl. EPS / equity / EBITDA sign inputs + DCF)."""
@@ -173,12 +185,12 @@ class FmpFundamentalsProvider:
                 )
                 dcf = _first(self._client.get("discounted-cash-flow", {"symbol": sym}))
             except httpx.HTTPStatusError as e:
-                mapped = map_http_error(e)
+                mapped = map_http_error(e, FMP)
                 if isinstance(mapped, ProviderDataError):
                     continue  # 4xx for this symbol (e.g. 404) -> skip just this name
                 raise mapped from e  # auth/rate/outage is systemic -> surface it
             except httpx.TransportError as e:
-                raise map_http_error(e) from e
+                raise map_http_error(e, FMP) from e
             out[sym] = map_metrics(ratios, key_metrics, income, balance, dcf)
         return out
 

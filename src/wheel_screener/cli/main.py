@@ -11,7 +11,7 @@ from typing import TypeVar
 
 import typer
 
-from wheel_screener.composition import build_service
+from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import AuthExpiredError, ProviderError, RateLimitedError
 from wheel_screener.core.models import EarningsStatus, OptionType, ScreenCriteria, Underlying
@@ -82,6 +82,41 @@ def _write_csv(names: list[Underlying], path: str) -> None:
                 round(cats.get("efficiency", 0.0), 4),
                 round(cats.get("sustainability", 0.0), 4),
             ])
+
+
+@app.command()
+def doctor() -> None:
+    """Check every configured data connection and report which one is broken.
+
+    Deliberately NOT decorated with handle_provider_errors: the point is to report every
+    connection's state, not to abort on the first failure.
+    """
+    settings = Settings()
+    service = build_service(settings)
+    probes = build_probes(settings, service)
+
+    failures = 0
+    typer.echo("Data connections\n")
+    for probe in probes:
+        check = getattr(probe.provider, "check_auth", None)
+        if check is None:
+            typer.echo(f"  ?  {probe.role:24} {probe.name:9} no check available")
+            continue
+        try:
+            detail = check()
+        except Exception as e:  # noqa: BLE001 - report, never crash the diagnostic
+            detail = f"check raised: {e}"
+        if detail is None:
+            typer.echo(f"  ok {probe.role:24} {probe.name:9} reachable, credentials accepted")
+        else:
+            failures += 1
+            typer.echo(f"  XX {probe.role:24} {probe.name:9} {detail}")
+
+    typer.echo("")
+    if failures:
+        typer.echo(f"{failures} of {len(probes)} connection(s) unhealthy.", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(f"All {len(probes)} connection(s) healthy.")
 
 
 @app.command()

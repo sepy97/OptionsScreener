@@ -156,9 +156,34 @@ can't be automated — it needs a browser):
 | `auth-login` | Schwab OAuth browser login (run weekly) |
 | `refresh-earnings` | rebuild the local earnings calendar from FMP |
 | `refresh-fundamentals` | incremental fundamentals refresh for recent reporters |
+| `doctor` | check every data connection and name the one that's broken |
 
 Global flags go *before* the command: `-v` / `-vv` for progress / per-symbol logging, and
 `--debug` for a full traceback on an unexpected error — e.g. `wheel-screener -v candidates …`.
+
+## When a data connection breaks
+
+Every provider failure names its provider and what to do about it, so
+`Alpaca rejected our credentials (HTTP 401) — check ALPACA__API_KEY …` tells you which of the
+three credentials expired without guessing.
+
+To check them all at once — locally, or on the droplet with
+`docker compose exec -T app wheel-screener doctor`:
+
+```
+$ wheel-screener doctor
+Data connections
+
+  XX option chains            alpaca    Alpaca rejected our credentials (HTTP 401) — check …
+  ok fundamentals & earnings  fmp       reachable, credentials accepted
+```
+
+`GET /health` reports the same thing as JSON, under `providers`. Readiness comes from an actual
+authenticated call, not from a key being present — a revoked key is still present, and that gap
+once let the app report `"status": "ok"` while every chain request returned 401. Probes are cached
+for 60s, and the HTTP status stays 200 whatever they say: the app is alive and its other tabs
+work, so an expired credential neither restarts the container nor rolls back a deploy — a
+redeploy would not fix it anyway.
 
 ## Logging & troubleshooting
 

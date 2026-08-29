@@ -130,3 +130,58 @@ def test_refresh_screen_populates_the_dashboard_store(tmp_path, monkeypatch) -> 
     assert result.exit_code == 0 and "candidates" in result.output
     latest = JobStore(str(tmp_path / "jobs.sqlite")).latest_done()  # what the web dashboard reads
     assert latest is not None and latest["result"][0]["symbol"] == "AAA"
+
+
+def test_doctor_names_the_broken_connection(monkeypatch) -> None:
+    """`doctor` is how this gets diagnosed on the droplet, where there is no browser."""
+    from wheel_screener.cli import main as cli_main
+    from wheel_screener.composition import Probe
+
+    class _P:
+        def __init__(self, detail):
+            self.detail = detail
+
+        def check_auth(self):
+            return self.detail
+
+    monkeypatch.setattr(cli_main, "build_service", lambda settings: object())
+    monkeypatch.setattr(cli_main, "build_probes", lambda settings, service: [
+        Probe("option chains", "alpaca", _P("Alpaca rejected our credentials (HTTP 401)")),
+        Probe("fundamentals & earnings", "fmp", _P(None)),
+    ])
+    result = runner.invoke(app, ["doctor"], env={"LOG__ENABLE_FILE": "false"})
+    assert result.exit_code == 1, "a broken connection must fail the command"
+    assert "alpaca" in result.output and "401" in result.output
+    assert "fmp" in result.output and "credentials accepted" in result.output
+
+
+def test_doctor_is_clean_when_everything_answers(monkeypatch) -> None:
+    from wheel_screener.cli import main as cli_main
+    from wheel_screener.composition import Probe
+
+    class _Ok:
+        def check_auth(self):
+            return None
+
+    monkeypatch.setattr(cli_main, "build_service", lambda settings: object())
+    monkeypatch.setattr(cli_main, "build_probes", lambda settings, service: [
+        Probe("option chains", "alpaca", _Ok()),
+    ])
+    result = runner.invoke(app, ["doctor"], env={"LOG__ENABLE_FILE": "false"})
+    assert result.exit_code == 0 and "healthy" in result.output
+
+
+def test_doctor_reports_a_probe_that_raises(monkeypatch) -> None:
+    from wheel_screener.cli import main as cli_main
+    from wheel_screener.composition import Probe
+
+    class _Boom:
+        def check_auth(self):
+            raise RuntimeError("kaboom")
+
+    monkeypatch.setattr(cli_main, "build_service", lambda settings: object())
+    monkeypatch.setattr(cli_main, "build_probes", lambda settings, service: [
+        Probe("option chains", "alpaca", _Boom()),
+    ])
+    result = runner.invoke(app, ["doctor"], env={"LOG__ENABLE_FILE": "false"})
+    assert result.exit_code == 1 and "kaboom" in result.output

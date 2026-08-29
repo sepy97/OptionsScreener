@@ -14,7 +14,7 @@ import httpx
 
 from wheel_screener.adapters.alpaca.mapper import build_chain
 from wheel_screener.adapters.cache import DiskCache
-from wheel_screener.adapters.errors import map_http_error
+from wheel_screener.adapters.errors import ALPACA, map_http_error
 from wheel_screener.adapters.http import RateLimiter, run_with_retry
 from wheel_screener.config import AlpacaSettings
 from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
@@ -43,6 +43,23 @@ class AlpacaChainProvider:
             "APCA-API-SECRET-KEY": self._settings.api_secret.get_secret_value(),
             "accept": "application/json",
         }
+
+    def check_auth(self) -> str | None:
+        """Verify the credentials with ONE cheap authenticated call. None means healthy.
+
+        ``/v2/account`` is the smallest endpoint that exercises the key pair, and it lives on the
+        trading host — the account-bound one — so it also catches a paper key pointed at the live
+        API. Presence of a key in the environment proves nothing; only a call does.
+        """
+        url = f"{self._settings.trading_base_url.rstrip('/')}/v2/account"
+        try:
+            resp = self._client.get(url, headers=self._headers(), timeout=5.0)
+            resp.raise_for_status()
+        except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            return str(map_http_error(e, ALPACA))
+        except Exception as e:  # noqa: BLE001 - a probe must never raise
+            return f"{ALPACA} check failed: {e}"
+        return None
 
     def _get(self, url: str, params: dict, limiter: RateLimiter) -> dict:
         limiter.acquire()  # re-acquired per attempt so retries respect the rate limit
@@ -135,7 +152,7 @@ class AlpacaChainProvider:
         except ProviderError:
             raise  # never mask a typed provider error
         except (httpx.HTTPStatusError, httpx.TransportError) as e:
-            raise map_http_error(e) from e  # transient kinds already retried + exhausted
+            raise map_http_error(e, ALPACA) from e  # transient kinds already retried + exhausted
         except Exception as e:  # noqa: BLE001 - any vendor failure -> a provider problem
             raise ProviderUnavailableError(f"alpaca chain fetch failed for {symbol}: {e}") from e
 

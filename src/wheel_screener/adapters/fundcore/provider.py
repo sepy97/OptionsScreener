@@ -140,6 +140,14 @@ class FundcoreReportProvider:
         else:
             self._cache = None
 
+    def check_auth(self) -> str | None:
+        """Whether reports can actually be produced here. None means healthy."""
+        if not engine_available():
+            return "the fundamentals engine is not installed in this deployment"
+        if not self._api_key:
+            return "no FMP key configured for the fundamentals engine"
+        return None
+
     def fundamental_report(
         self, symbol: str, period: str = "annual", years: int = 10
     ) -> FundamentalReport:
