@@ -10,7 +10,11 @@ from wheel_screener.core.fundamentals import (
     score_strength,
 )
 from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
-from wheel_screener.core.pipeline.rate_fundamentals import apply_earnings_blackout, select_top
+from wheel_screener.core.pipeline.rate_fundamentals import (
+    apply_earnings_blackout,
+    rate_and_rank,
+    select_top,
+)
 
 
 def _healthy(**kw) -> FundamentalMetrics:
@@ -230,3 +234,48 @@ def test_earnings_prefilter_only_drops_when_no_expiry_is_clean() -> None:
         for u in apply_earnings_blackout(names, _guard(earnings, today), today, min_dte=21)
     }
     assert kept == {"BBB", "CCC"}
+
+
+class _BulkProvider:
+    """Enough of FundamentalsProvider for rate_and_rank: bulk pre-rank plus a deep fetch."""
+
+    def __init__(self, symbols: list[str]) -> None:
+        self.symbols = symbols
+        self.deep_fetched: list[str] = []
+
+    def bulk_metrics(self, symbols):
+        return {s: _healthy() for s in symbols}
+
+    def fetch_metrics(self, symbols):
+        self.deep_fetched = list(symbols)
+        return {s: _healthy() for s in symbols}
+
+
+def test_no_cap_keeps_every_survivor_through_both_stages() -> None:
+    """top_n feeds two slices — the deep-fetch cap and the final cut — so both have to honour
+    "no cap". Miss either and MAX quietly means "the first prerank_keep names", with nothing on
+    screen to say so."""
+    today = date(2026, 6, 22)
+    names = [_u(f"S{i:03d}") for i in range(120)]
+    guard = _guard({}, today)
+    assert len(select_top(names, ScreenCriteria(top_n=None), guard, today)) == 120
+    assert len(select_top(names, ScreenCriteria(top_n=7), guard, today)) == 7
+
+
+def test_no_cap_also_lifts_the_deep_fetch_cap() -> None:
+    """prerank_keep is the cap that silently overrode top_n once already (#126). Under MAX it
+    must not quietly become the real limit — including for the expensive deep fetch."""
+    today = date(2026, 6, 22)
+    provider = _BulkProvider([f"S{i:03d}" for i in range(40)])
+    universe = [_u(sym) for sym in provider.symbols]
+
+    kept = rate_and_rank(
+        provider, universe, ScreenCriteria(top_n=None, prerank_keep=5), today, _guard({}, today)
+    )
+    assert len(kept) == 40, "prerank_keep must not cap a run that asked for every name"
+    assert len(provider.deep_fetched) == 40
+
+    capped = rate_and_rank(
+        provider, universe, ScreenCriteria(top_n=6, prerank_keep=5), today, _guard({}, today)
+    )
+    assert len(capped) == 6  # an explicit number still caps, and still outranks prerank_keep

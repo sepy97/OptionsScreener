@@ -17,7 +17,7 @@ def test_screen_criteria_defaults() -> None:
     assert c.target_delta == -0.20
     assert c.min_dte == 14  # wide enough that a monthly always lands inside it
     assert c.max_dte == 45
-    assert c.top_n == 2000  # the ceiling: pull a chain for every fundamental survivor
+    assert c.top_n is None  # no cap: pull a chain for every fundamental survivor
     assert c.exchanges == ["nasdaq", "nyse"]
 
 

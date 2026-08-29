@@ -67,11 +67,16 @@
           same in every run</small>
       </label>
       <label>Names to check
-        <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="2000">
-        <small>defaults to every name that passes fundamentals &mdash; ~800 today, about four
-          minutes. <strong>Lower is faster</strong>, and that is the only thing it buys: the cut
-          ranks on fundamentals before any yield is measured, so a tight cap hides high-yield
-          names sight unseen</small>
+        {# Blank is the default and it means "no cap" -- shown as MAX rather than a number,
+           because any number here would be a guess at the size of the field that silently
+           becomes a real cap once the universe outgrows it. #}
+        <input type="text" name="top_n" value="" inputmode="numeric"
+               placeholder="MAX &mdash; every name">
+        <small>blank screens everything that passes fundamentals{% if last_field_size %}
+          &mdash; <strong>{{ last_field_size }}</strong> names last run{% endif %}, a few
+          minutes. <strong>Lower is faster</strong>, and that is all it buys: the cut ranks on
+          fundamentals before any yield is measured, so a cap hides high-yield names sight
+          unseen</small>
       </label>
       <label>Min yield
         <input type="number" name="min_yield" step="0.01" min="0" value="{{ defaults.min_yield }}">

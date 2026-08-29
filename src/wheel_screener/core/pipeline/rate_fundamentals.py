@@ -93,7 +93,7 @@ def select_top(
         survivors = [u for u in survivors if (u.fundamental_score or 0.0) >= floor]
     if criteria.max_per_sector is not None:
         survivors = _cap_per_sector(survivors, criteria.max_per_sector)
-    kept = survivors[: criteria.top_n]
+    kept = survivors if criteria.top_n is None else survivors[: criteria.top_n]
     logger.info(
         "fundamentals: %d/%d passed gates · %d report before the earliest expiry (≤%dd) · "
         "top %d kept · calendar covers %d symbols",
@@ -130,8 +130,9 @@ def rate_and_rank(
         prelim = rank_by_fundamentals(
             viable, criteria.factor_weights, criteria.stock_profile
         )
-        cap = max(criteria.prerank_keep, criteria.top_n)
-        if criteria.top_n > criteria.prerank_keep:
+        # top_n None means "no cap", so the deep fetch must not be capped either.
+        cap = None if criteria.top_n is None else max(criteria.prerank_keep, criteria.top_n)
+        if criteria.top_n is not None and criteria.top_n > criteria.prerank_keep:
             # Without this the cap silently overrode top_n and the caller's "check N names" was
             # a no-op above ~prerank_keep — the control looked live and did nothing.
             logger.info(
@@ -139,7 +140,7 @@ def rate_and_rank(
                 "top_n means what it says",
                 criteria.prerank_keep, criteria.top_n, cap,
             )
-        keep = prelim[:cap]
+        keep = prelim if cap is None else prelim[:cap]
         logger.info(
             "prerank: %d/%d names kept for the deep fetch (%d gated out first)",
             len(keep), len(universe), len(universe) - len(viable),

@@ -71,11 +71,13 @@ class ScreenCriteria(BaseModel):
     universe_limit: int = 50  # deep-fetch cap (by market cap) when bulk pre-rank is unavailable
     # fundamentals
     stock_profile: StockProfile = StockProfile.STALWART
-    # Every name that clears the fundamental gates. The cut ranks on FUNDAMENTALS, before any
-    # yield is measured, so anything less than "all of them" discards high-yield names sight
-    # unseen. A measured full field (817 names) took ~4 min end to end, well inside the 10-min
-    # budget. Lowering this is the speed lever; it is not a quality one.
-    top_n: int = 2000
+    # None = no cap: pull a chain for every name that clears the fundamental gates. It is a
+    # STATE rather than a large number on purpose — any numeric stand-in for "all of them" is a
+    # guess about how big the field is, and it silently becomes a real cap the day the universe
+    # outgrows it. The cut ranks on FUNDAMENTALS, before any yield is measured, so a cap
+    # discards high-yield names sight unseen; a measured full field (817 names) took ~4 min,
+    # well inside the 10-minute budget. Setting a number is the speed lever, not a quality one.
+    top_n: int | None = None
     min_fundamental_score: float | None = None  # 0..1 absolute-strength floor; None = keep top_n
     max_per_sector: int | None = None  # optional concentration cap on the top-N
     max_leverage: float = 4.0  # hard gate: net-debt/EBITDA ceiling

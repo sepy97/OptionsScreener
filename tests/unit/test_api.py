@@ -1129,3 +1129,35 @@ def test_the_default_dte_window_holds_a_monthly_on_all_but_12_days_of_the_year()
     assert len(misses(lo, hi)) == 12, "the accepted residual — see the docstring"
     assert len(misses(21, 35)) > 180, "the window this replaced missed over half the year"
     assert misses(14, 48) == [], "a 35-day span is the arithmetic threshold (hi >= lo + 34)"
+
+
+def test_names_to_check_defaults_to_max_and_is_not_a_number(tmp_path) -> None:
+    """"All of them" is a state, not a large integer. Any number standing in for it is a guess
+    about the size of the field, and it turns into a real cap the day the universe outgrows it
+    — silently, because the control still reads as "everything"."""
+    from wheel_screener.api.schemas import ScreenRequest
+
+    assert ScreenRequest().top_n is None
+    assert ScreenRequest().to_criteria().top_n is None
+    assert ScreenCriteria().top_n is None
+    # and no ceiling to outgrow
+    assert ScreenRequest(top_n=100_000).top_n == 100_000
+
+    r = _client(_runner(_FakeService(result=[]), tmp_path)).get("/")
+    box = r.text[r.text.index('name="top_n"') - 60:r.text.index('name="top_n"') + 200]
+    assert "MAX" in box and 'value=""' in box
+    assert "2000" not in box, "the old magic number must not be back as a value or a max"
+
+
+def test_blank_names_to_check_reaches_the_engine_as_no_cap(tmp_path) -> None:
+    svc = _FakeService(result=[_candidate()])
+    runner = _runner(svc, tmp_path)
+    started = _client(runner).post("/runs", data={"top_n": ""})
+    runner.wait(_job_id_from(started.text))
+    assert svc.seen_criteria.top_n is None
+
+    svc2 = _FakeService(result=[_candidate()])
+    runner2 = _runner(svc2, tmp_path / "b")
+    started = _client(runner2).post("/runs", data={"top_n": "25"})  # still a working speed lever
+    runner2.wait(_job_id_from(started.text))
+    assert svc2.seen_criteria.top_n == 25

@@ -13,9 +13,10 @@ from wheel_screener.core.models import ScreenCriteria
 
 
 class ScreenRequest(BaseModel):
-    # defaults to the ceiling: screen every name that passes fundamentals, and let a user who
-    # wants a faster run say so explicitly rather than lose names to a cap they never set
-    top_n: int = Field(2000, ge=1, le=2000, description="Fundamental survivors to pull chains for.")
+    # None = every name that passes fundamentals. There is deliberately no upper bound: a
+    # ceiling would be a guess about the size of the field, and the day the universe outgrew it
+    # the "all names" default would quietly start capping.
+    top_n: int | None = Field(None, ge=1, description="Chains to pull; None = every survivor.")
     fundamental_weight: float = Field(0.5, ge=0.0, le=1.0, description="1=quality, 0=yield.")
     min_score: float | None = Field(None, ge=0.0, le=1.0, description="Blended-score floor.")
     min_dollar_volume: float = Field(
