@@ -120,17 +120,74 @@ def test_rank_blends_fundamentals_and_yield_by_weight():
     assert rank([x, y], fundamental_weight=0.2)[0].symbol == "Y"  # yield-weighted
 
 
-def test_rank_uses_raw_absolute_strength() -> None:
-    # strength enters the blend RAW (it's already absolute 0..1), so a tiny quality gap makes a
-    # tiny score gap — it is NOT amplified into a big cohort-percentile gap.
+def test_score_is_absolute_and_identical_across_runs() -> None:
+    """The headline property: a contract scores the same whatever it was screened alongside.
+
+    Under the old within-run percentile the same candidate moved with its cohort, so scores
+    could not be compared between runs and a threshold on one filtered nothing.
+    """
+    def cand(sym, strength, yld):
+        return CandidateResult(symbol=sym, contract=_put(90, -0.2, 40, 1.0),
+                               fundamental_score=strength, annualized_yield=yld)
+
+    alone = rank([cand("A", 0.80, 0.20)])[0].score
+    crowded = [c for c in rank([cand("A", 0.80, 0.20)] + [
+        cand(f"F{i}", 0.9, 0.30) for i in range(9)
+    ]) if c.symbol == "A"][0].score
+    assert alone == crowded, "score must not depend on the size or quality of the field"
+
+
+def test_small_quality_gaps_stay_small() -> None:
     a = CandidateResult(symbol="A", contract=_put(90, -0.2, 40, 1.0),
                         fundamental_score=0.80, annualized_yield=0.20)
     b = CandidateResult(symbol="B", contract=_put(90, -0.2, 40, 1.0),
                         fundamental_score=0.79, annualized_yield=0.20)
-    ranked = rank([a, b], fundamental_weight=0.5)  # equal yield -> yield percentile 0.5 each
+    ranked = rank([a, b], fundamental_weight=0.5)
     assert ranked[0].symbol == "A"  # the 0.01-stronger name edges ahead
-    assert abs(ranked[0].score - 0.65) < 1e-9  # 0.5*0.80 (raw strength) + 0.5*0.5 (yield pct)
-    assert abs(ranked[0].score - ranked[1].score) < 0.02  # tiny gap, not cohort-amplified
+    assert abs(ranked[0].score - ranked[1].score) < 0.01  # by a hair, not a cohort-sized gap
+
+
+def test_geometric_mean_refuses_to_average_away_a_weak_half() -> None:
+    """A weighted SUM lets a poor company buy its way up on premium alone. These two are tied
+    under a sum (0.60 each); the balanced one must win."""
+    lopsided = CandidateResult(symbol="LOP", contract=_put(90, -0.2, 40, 1.0),
+                               fundamental_score=0.90, annualized_yield=0.09)  # rating 0.30
+    balanced = CandidateResult(symbol="BAL", contract=_put(90, -0.2, 40, 1.0),
+                               fundamental_score=0.60, annualized_yield=0.17)  # rating 0.60
+    ranked = rank([lopsided, balanced], fundamental_weight=0.5)
+    assert ranked[0].symbol == "BAL"
+
+
+def test_unknown_strength_is_judged_on_yield_not_zeroed() -> None:
+    """Under a geometric mean, treating unknown fundamentals as 0.0 would drive the score to
+    zero and delete the name — a far stronger claim than "we have no data" supports."""
+    unknown = CandidateResult(symbol="U", contract=_put(90, -0.2, 40, 1.0),
+                              fundamental_score=None, annualized_yield=0.25)
+    rated_zero = CandidateResult(symbol="Z", contract=_put(90, -0.2, 40, 1.0),
+                                 fundamental_score=0.0, annualized_yield=0.25)
+    ranked = rank([unknown, rated_zero], fundamental_weight=0.5)
+    assert ranked[0].symbol == "U" and ranked[0].score == 1.0
+    assert ranked[1].score == 0.0, "a name we DID rate at zero is a different statement"
+
+
+def test_min_score_filters_the_shortlist() -> None:
+    good = CandidateResult(symbol="G", contract=_put(90, -0.2, 40, 1.0),
+                           fundamental_score=0.9, annualized_yield=0.30)
+    weak = CandidateResult(symbol="W", contract=_put(90, -0.2, 40, 1.0),
+                           fundamental_score=0.3, annualized_yield=0.05)
+    assert [c.symbol for c in rank([good, weak], min_score=0.5)] == ["G"]
+    assert len(rank([good, weak])) == 2  # off by default
+
+
+def test_yield_is_graded_against_fixed_bars() -> None:
+    from wheel_screener.core.pipeline.rank import yield_rating
+
+    assert yield_rating(0.30) == 1.0  # at or above `good` tops out
+    assert yield_rating(0.25) == 1.0
+    assert yield_rating(0.15) == 0.5  # the `satisfactory` bar
+    assert yield_rating(0.0) == 0.0 and yield_rating(None) == 0.0
+    assert yield_rating(-0.1) == 0.0  # a negative yield is not "cheap"
+    assert 0.5 < yield_rating(0.20) < 1.0  # straight line between the bars
 
 
 def _good() -> FundamentalMetrics:

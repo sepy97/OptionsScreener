@@ -329,6 +329,9 @@ def refresh_screen(
     top_n: int = typer.Option(250, help="Fundamental survivors to pull chains for."),
     min_dollar_volume: float = typer.Option(25_000_000.0, help="Avg daily $-volume floor."),
     fundamental_weight: float = typer.Option(0.5, help="Rank blend: 1=fundamentals, 0=yield."),
+    min_score: float = typer.Option(
+        None, help="Drop candidates whose blended score is below this (0..1)."
+    ),
     min_yield: float = typer.Option(0.0, help="Drop candidates below this annualized yield."),
 ) -> None:
     """Run a screen and store it where the web dashboard reads 'latest results' — so a cron'd
@@ -339,6 +342,7 @@ def refresh_screen(
     criteria = ScreenCriteria(
         top_n=top_n, prerank_keep=1_000_000, min_dollar_volume=min_dollar_volume,
         fundamental_weight=fundamental_weight,
+        min_score=min_score,
         min_annualized_yield=(min_yield if min_yield > 0 else None),
     )
     runner = JobRunner(build_service(settings), JobStore(settings.jobs_db_path))

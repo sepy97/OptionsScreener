@@ -665,6 +665,7 @@ def start_run(
     min_open_interest: int = Form(100),
     max_spread_pct: float = Form(0.10),
     min_iv: str = Form(""),
+    min_score: str = Form(""),
     runner: JobRunner = Depends(get_job_runner),
 ):
     try:
@@ -677,6 +678,7 @@ def start_run(
             target_delta=target_delta, max_abs_delta=max_abs_delta,
             min_open_interest=min_open_interest, max_spread_pct=max_spread_pct,
             min_iv=_opt_float(min_iv),
+            min_score=_opt_float(min_score),
         )
     except (ValidationError, ValueError) as e:
         return templates.TemplateResponse(
