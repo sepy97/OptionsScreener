@@ -211,6 +211,16 @@ class JobRunner:
     def get(self, job_id: str) -> dict | None:
         return self.store.get(job_id)
 
+    def is_cancelling(self, job_id: str) -> bool:
+        """A cancel has been asked for but the run has not stopped yet.
+
+        Cancellation is cooperative — the pipeline checks between chain pulls — so there is a
+        real gap between the click and the job finishing. Without a way to see that gap the UI
+        can only redraw "Screening…", which reads as the button having done nothing.
+        """
+        event = self._cancels.get(job_id)
+        return event is not None and event.is_set()
+
     def wait(self, job_id: str, timeout: float = 10.0) -> None:
         """Join the worker thread — for deterministic tests."""
         thread = self._threads.get(job_id)
