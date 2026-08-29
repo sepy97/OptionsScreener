@@ -11,7 +11,7 @@ from concurrent.futures import TimeoutError as FuturesTimeout
 
 from wheel_screener.core.errors import ProviderDataError, ProviderError
 from wheel_screener.core.models import ChainFilter, ChainSnapshot, Underlying
-from wheel_screener.core.ports import ChainProvider
+from wheel_screener.core.ports import BatchChainProvider, ChainProvider
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +39,20 @@ def pull_chains(
         return {}, False
 
     caps = provider.capabilities()
+    if caps.supports_batch_chains and isinstance(provider, BatchChainProvider):
+        # The provider answers for every name in a handful of requests. Concurrency is not the
+        # lever here and never was: a screen is bound by the vendor's per-minute request budget,
+        # so eight threads simply queue on the same limiter. Fewer requests is the only thing
+        # that makes it faster, and it must not cost cancellability — the provider checks
+        # `cancel` and `deadline` between its own calls.
+        chains, complete = provider.get_chains(
+            [u.symbol for u in survivors], filt, cancel=cancel, deadline=deadline
+        )
+        if not complete:
+            logger.warning("chain pull cut short; %d/%d collected", len(chains), len(survivors))
+        logger.info("chains: %d/%d survivors returned a chain", len(chains), len(survivors))
+        return chains, complete
+
     workers = max(1, caps.max_concurrency)
     targets = _skip_empty_chains(provider, survivors, filt) if caps.supports_batch_underlyings \
         else survivors

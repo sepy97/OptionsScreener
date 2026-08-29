@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
+import time
+from collections.abc import Callable, Iterator, Sequence
 from datetime import date, timedelta
 
 import httpx
@@ -27,6 +30,14 @@ logger = logging.getLogger(__name__)
 # The contracts endpoint rejects the WHOLE batch when one underlying isn't listed — but it names
 # the offenders, so the recovery is to drop exactly those and retry.
 _INVALID_SYMBOLS = re.compile(r"invalid underlying symbols?: ([^\"}]+)")
+# The STOCK snapshots endpoint uses a different phrase and names one ticker at a time, so a
+# batch of 100 has to be retried repeatedly rather than cleaned up in a single pass.
+_INVALID_STOCK_SYMBOL = re.compile(r"invalid symbol: ([A-Za-z0-9.\-]+)")
+
+
+def _chunks(seq: Sequence[str], n: int) -> Iterator[list[str]]:
+    for i in range(0, len(seq), n):
+        yield list(seq[i : i + n])
 
 
 class AlpacaChainProvider:
@@ -150,9 +161,14 @@ class AlpacaChainProvider:
 
     def _bulk_open_interest(
         self, chunk: list[str], from_date: date, to_date: date, side: OptionType,
-        out: dict[str, dict[str, int]],
+        out: dict[str, dict[str, int]], strikes: dict[str, float] | None = None,
     ) -> None:
-        """One batched, paginated contracts request, recovering from unlisted underlyings."""
+        """One batched, paginated contracts request, recovering from unlisted underlyings.
+
+        ``strikes`` (optional, OCC symbol -> strike) rides along free: the batched fetch needs a
+        strike per contract to decide which ones are worth quoting, and this payload already
+        carries it. Fetching it separately would be a second pass over the same rows.
+        """
         url = f"{self._settings.trading_base_url.rstrip('/')}/v2/options/contracts"
         remaining, token, drops = list(chunk), None, 0
         while remaining:
@@ -191,6 +207,11 @@ class AlpacaChainProvider:
                     out.setdefault(under, {})[occ] = int(raw) if raw is not None else 0
                 except (TypeError, ValueError):
                     out.setdefault(under, {})
+                if strikes is not None:
+                    try:
+                        strikes[occ] = float(c["strike_price"])
+                    except (KeyError, TypeError, ValueError):
+                        pass  # a contract we cannot place against spot simply isn't batched
             token = page.get("next_page_token")
             if not token:
                 return
@@ -297,10 +318,210 @@ class AlpacaChainProvider:
                 return float(raw)
         return None
 
+    # ── batched fetch ────────────────────────────────────────────────────────────────────
+    def _bulk_spot(self, symbols: list[str]) -> dict[str, float]:
+        """Latest price for many underlyings, 100 per request.
+
+        Needed only to place strikes against spot. A name whose price we cannot establish is
+        NOT dropped — it goes to the per-name fallback, because guessing its moneyness is the
+        one thing that could silently cost a candidate.
+        """
+        url = f"{self._settings.data_base_url.rstrip('/')}/v2/stocks/snapshots"
+        out: dict[str, float] = {}
+        for chunk in _chunks(symbols, self._settings.snapshot_batch):
+            remaining, drops = list(chunk), 0
+            while remaining and drops <= 10:
+                try:
+                    page = run_with_retry(
+                        lambda r=remaining: self._get(
+                            url, {"symbols": ",".join(r), "feed": self._settings.stock_feed},
+                            self._data_limiter,
+                        ),
+                        max_attempts=self._settings.max_retries + 1,
+                        multiplier=self._settings.retry_backoff_multiplier,
+                    )
+                except httpx.HTTPStatusError as e:
+                    # This endpoint names ONE bad ticker at a time (and with a different phrase
+                    # than the contracts endpoint), so recovery is a loop, not a single retry.
+                    bad = self._invalid_stock_symbols(e)
+                    if not bad:
+                        raise  # a real failure (auth/outage) must not look like a bad ticker
+                    drops += 1
+                    remaining = [x for x in remaining if x not in bad]
+                    continue
+                for sym, snap in (page or {}).items():
+                    px = ((snap.get("latestTrade") or {}).get("p")
+                          or (snap.get("dailyBar") or {}).get("c"))
+                    if px:
+                        try:
+                            out[sym] = float(px)
+                        except (TypeError, ValueError):
+                            pass
+                break
+        return out
+
+    @staticmethod
+    def _invalid_stock_symbols(exc: httpx.HTTPStatusError) -> set[str]:
+        """The ticker a 400 from /v2/stocks/snapshots blamed (it reports one at a time)."""
+        if exc.response is None or exc.response.status_code != 400:
+            return set()
+        m = _INVALID_STOCK_SYMBOL.search(exc.response.text or "")
+        return {m.group(1).strip()} if m else set()
+
+    def _bulk_snapshots(
+        self, option_symbols: list[str], stop: Callable[[], bool]
+    ) -> dict[str, dict]:
+        """Quotes/greeks/IV for many OPTION symbols, ``snapshot_batch`` per request."""
+        url = f"{self._settings.data_base_url.rstrip('/')}/v1beta1/options/snapshots"
+        out: dict[str, dict] = {}
+        for chunk in _chunks(option_symbols, self._settings.snapshot_batch):
+            if stop():
+                return out
+            params = {
+                "symbols": ",".join(chunk),
+                "feed": self._settings.feed,
+                "limit": self._settings.snapshot_page_limit,
+            }
+            self._paginate(
+                url, params, lambda page: out.update(page.get("snapshots") or {}),
+                self._data_limiter,
+                attempts=self._settings.max_retries + 1,
+                mult=self._settings.retry_backoff_multiplier,
+            )
+        return out
+
+    def get_chains(
+        self, symbols: list[str], filt: ChainFilter, *,
+        cancel: threading.Event | None = None, deadline: float | None = None,
+    ) -> tuple[dict[str, ChainSnapshot], bool]:
+        """Chains for many underlyings in a handful of requests.
+
+        Three bulk calls replace one-request-per-name: the contracts reference (strikes + open
+        interest), stock snapshots (spot), and option snapshots for just the strikes near enough
+        to spot to be worth quoting. Names whose liquid contracts all fall outside that band --
+        or whose spot is unknown -- are fetched one at a time by the old path, so the band only
+        ever costs requests, never candidates.
+        """
+        today = date.today()
+        from_date, to_date = self._window_dates(filt, today)
+        side = filt.option_type
+        min_oi = filt.min_open_interest or 0
+
+        def stop() -> bool:
+            return bool(cancel is not None and cancel.is_set()) or (
+                deadline is not None and time.monotonic() >= deadline
+            )
+
+        out: dict[str, ChainSnapshot] = {}
+        todo: list[str] = []
+        for sym in symbols:
+            cached = self._cached_batch_chain(sym, from_date, to_date, side, today)
+            if cached is not None:
+                out[sym] = cached
+            else:
+                todo.append(sym)
+
+        oi_by_name: dict[str, dict[str, int]] = {}
+        strikes: dict[str, float] = {}
+        try:
+            for chunk in _chunks(todo, self.PREFETCH_BATCH):
+                if stop():
+                    return out, False
+                self._bulk_open_interest(chunk, from_date, to_date, side, oi_by_name, strikes)
+            if stop():
+                return out, False
+            spot = self._bulk_spot([s for s in todo if oi_by_name.get(s)])
+        except (httpx.HTTPStatusError, httpx.TransportError) as e:
+            raise map_http_error(e, ALPACA) from e
+
+        wanted: list[str] = []
+        fallback: list[str] = []
+        for sym in todo:
+            contracts = oi_by_name.get(sym) or {}
+            if not contracts:
+                continue  # no chain at all in this window — nothing to fetch or fall back to
+            liquid = [occ for occ, oi in contracts.items() if oi >= min_oi and occ in strikes]
+            if not liquid:
+                continue  # nothing tradeable; the per-name path would find nothing either
+            px = spot.get(sym)
+            in_band = [] if px is None else [
+                occ for occ in liquid
+                if self._settings.strike_band_lo * px
+                <= strikes[occ]
+                <= self._settings.strike_band_hi * px
+            ]
+            if in_band:
+                wanted.extend(in_band)
+            else:
+                fallback.append(sym)
+
+        # The vendor already told us which underlying each contract belongs to, so use that
+        # rather than parsing the OCC symbol. Parsing looks equivalent and is not: an ADJUSTED
+        # contract (HON2..., issued after a corporate action) carries a root no naive pattern
+        # matches, and quietly dropping those made the batched path pick a different strike
+        # than the per-name path for one name in 817.
+        owner = {occ: under for under, per in oi_by_name.items() for occ in per}
+        snaps = self._bulk_snapshots(wanted, stop)
+        by_name: dict[str, dict[str, dict]] = {}
+        for occ, snap in snaps.items():
+            under = owner.get(occ)
+            if under:
+                by_name.setdefault(under, {})[occ] = snap
+        for sym, per in by_name.items():
+            chain = build_chain(sym, per, oi_by_name.get(sym) or {}, today)
+            out[sym] = chain
+            self._store_batch_chain(sym, from_date, to_date, side, per, oi_by_name.get(sym) or {})
+
+        if fallback:
+            logger.info(
+                "alpaca: %d/%d name(s) had no liquid strike inside the %.2f-%.2f band; "
+                "fetching those individually",
+                len(fallback), len(todo),
+                self._settings.strike_band_lo, self._settings.strike_band_hi,
+            )
+        for sym in fallback:
+            if stop():
+                return out, False
+            try:
+                out[sym] = self.get_chain(sym, filt)
+            except ProviderError:
+                raise
+            except Exception as e:  # noqa: BLE001 - one name must not sink the batch
+                logger.warning("dropping %s: fallback chain fetch failed (%s)", sym, e)
+        return out, not stop()
+
+    # A batched chain holds only the strikes near spot, so it MUST NOT share a cache key with
+    # get_chain — a ticker search reading that entry would silently get a truncated chain.
+    def _batch_cache_key(self, symbol, from_date, to_date, side) -> str:
+        return (
+            f"alpaca:batch:{symbol}:{from_date}:{to_date}:{self._settings.feed}:"
+            f"{side.value.upper()}:{self._settings.strike_band_lo}-{self._settings.strike_band_hi}"
+        )
+
+    def _cached_batch_chain(self, symbol, from_date, to_date, side, today):
+        if self._cache is None:
+            return None
+        cached = self._cache.get(self._batch_cache_key(symbol, from_date, to_date, side))
+        if not isinstance(cached, dict):
+            return None
+        return build_chain(symbol, cached.get("snapshots"), cached.get("oi"), today)
+
+    def _store_batch_chain(self, symbol, from_date, to_date, side, snapshots, oi) -> None:
+        if self._cache is not None:
+            self._cache.set(self._batch_cache_key(symbol, from_date, to_date, side),
+                            {"snapshots": snapshots, "oi": oi})
+
+    def _window_dates(self, filt: ChainFilter, today: date) -> tuple[date, date]:
+        return (
+            today + timedelta(days=filt.min_dte if filt.min_dte is not None else 0),
+            today + timedelta(days=filt.max_dte if filt.max_dte is not None else 60),
+        )
+
     def capabilities(self) -> ProviderCaps:
         return ProviderCaps(
             name="alpaca",
             supports_batch_underlyings=True,  # `underlying_symbols` takes a list
+            supports_batch_chains=self._settings.batch_chains,
             max_concurrency=self._settings.max_concurrency,
             server_side_filters=["type", "expiration_date_gte", "expiration_date_lte"],
             realtime=(self._settings.feed == "opra"),

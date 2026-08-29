@@ -390,6 +390,9 @@ class ProviderCaps(BaseModel):
 
     name: str
     supports_batch_underlyings: bool = False
+    # The provider can fetch MANY underlyings' chains in a handful of requests
+    # (:class:`BatchChainProvider`), instead of one request per name.
+    supports_batch_chains: bool = False
     max_concurrency: int = 1
     server_side_filters: list[str] = Field(default_factory=list)
     realtime: bool = False

@@ -7,6 +7,7 @@ see docs/PLAN.md. Schwab's per-contract IV is still surfaced on OptionContract.)
 
 from __future__ import annotations
 
+import threading
 from datetime import date
 from typing import Protocol, runtime_checkable
 
@@ -56,6 +57,30 @@ class ChainProvider(Protocol):
     def get_chain(self, symbol: str, filt: ChainFilter) -> ChainSnapshot: ...
 
     def capabilities(self) -> ProviderCaps: ...
+
+
+@runtime_checkable
+class BatchChainProvider(Protocol):
+    """A chain source that can serve MANY underlyings in a few requests.
+
+    Optional, like the profile and report ports: a provider without it is fetched one name at a
+    time and nothing else changes. It exists because the per-name shape is what makes a screen
+    slow — the cost is requests, not bytes, and a vendor that accepts a list of symbols can
+    answer for hundreds of names in the request budget one name used to spend.
+
+    Returns ``(chains, complete)`` with the same meaning as ``pull_chains``: ``complete`` is
+    False when ``cancel`` or ``deadline`` cut the fetch short, so partial results are never
+    mistaken for a finished scan.
+    """
+
+    def get_chains(
+        self,
+        symbols: list[str],
+        filt: ChainFilter,
+        *,
+        cancel: threading.Event | None = None,
+        deadline: float | None = None,
+    ) -> tuple[dict[str, ChainSnapshot], bool]: ...
 
 
 @runtime_checkable

@@ -333,3 +333,162 @@ def test_an_unrecoverable_422_still_raises() -> None:
 
 def test_alpaca_advertises_batch_support() -> None:
     assert AlpacaChainProvider(_settings()).capabilities().supports_batch_underlyings is True
+
+
+# ── batched fetch ──────────────────────────────────────────────────────────────────────────
+# One snapshot request per underlying made a screen entirely rate-limit-bound: 817 names cost
+# 832 requests and 246s, of which 94% was sleeping on the limiter. Asking for many option
+# symbols per request cut the same screen to 117 requests and 18s, picking the identical
+# contract for all 314 candidates.
+
+BULK_SNAP = "https://data.alpaca.markets/v1beta1/options/snapshots"
+STOCKS = "https://data.alpaca.markets/v2/stocks/snapshots"
+FILT = ChainFilter(min_dte=30, max_dte=45, min_open_interest=100)
+
+
+def _occ_for(under: str, strike: int, root: str | None = None) -> str:
+    exp = date.today() + timedelta(days=40)
+    return f"{root or under}{exp:%y%m%d}P{strike * 1000:08d}"
+
+
+def _contracts_body(*rows) -> dict:
+    """rows: (underlying, occ, strike, open_interest)"""
+    return {"option_contracts": [
+        {"symbol": occ, "underlying_symbol": u, "strike_price": str(k), "open_interest": str(oi)}
+        for u, occ, k, oi in rows], "next_page_token": None}
+
+
+def _bulk_snap_body(*occs) -> dict:
+    return {"snapshots": {o: {"latestQuote": {"bp": 1.40, "ap": 1.50},
+                              "greeks": {"delta": -0.20},
+                              "impliedVolatility": 0.345} for o in occs},
+            "next_page_token": None}
+
+
+@respx.mock
+def test_get_chains_serves_many_names_in_three_requests() -> None:
+    a, b = _occ_for("AAA", 90), _occ_for("BBB", 45)
+    respx.get(STOCKS).mock(return_value=httpx.Response(200, json={
+        "AAA": {"latestTrade": {"p": 100.0}}, "BBB": {"latestTrade": {"p": 50.0}}}))
+    respx.get(CONTRACTS).mock(return_value=httpx.Response(
+        200, json=_contracts_body(("AAA", a, 90, 800), ("BBB", b, 45, 800))))
+    snaps = respx.get(BULK_SNAP).mock(
+        return_value=httpx.Response(200, json=_bulk_snap_body(a, b)))
+
+    chains, complete = AlpacaChainProvider(_settings()).get_chains(["AAA", "BBB"], FILT)
+    assert complete and set(chains) == {"AAA", "BBB"}
+    assert chains["AAA"].contracts[0].strike == 90.0
+    assert chains["BBB"].contracts[0].open_interest == 800
+    assert len(respx.calls) == 3, "three bulk requests, not one per name"
+    assert "symbols=" in str(snaps.calls.last.request.url)
+
+
+@respx.mock
+def test_a_name_with_no_strike_near_spot_falls_back_to_the_per_name_fetch() -> None:
+    """The band is a speed heuristic, so it must never be the reason a name is dropped. A name
+    whose liquid strikes all sit outside it is fetched the old way instead."""
+    far = _occ_for("AAA", 30)  # 0.30 x spot — far below the 0.70 floor
+    respx.get(STOCKS).mock(return_value=httpx.Response(
+        200, json={"AAA": {"latestTrade": {"p": 100.0}}}))
+    respx.get(CONTRACTS).mock(return_value=httpx.Response(
+        200, json=_contracts_body(("AAA", far, 30, 800))))
+    bulk = respx.get(BULK_SNAP).mock(return_value=httpx.Response(200, json=_bulk_snap_body()))
+    per_name = respx.get(SNAP).mock(return_value=httpx.Response(200, json=_snap_body(far)))
+
+    chains, complete = AlpacaChainProvider(_settings()).get_chains(["AAA"], FILT)
+    assert complete and per_name.called, "the clipped name must still be fetched"
+    assert chains["AAA"].contracts[0].strike == 30.0
+    assert not bulk.calls or "symbols=&" not in str(bulk.calls.last.request.url)
+
+
+@respx.mock
+def test_a_name_with_unknown_spot_falls_back_rather_than_guessing_moneyness() -> None:
+    occ = _occ_for("AAA", 90)
+    respx.get(STOCKS).mock(return_value=httpx.Response(200, json={}))  # no price for AAA
+    respx.get(CONTRACTS).mock(return_value=httpx.Response(
+        200, json=_contracts_body(("AAA", occ, 90, 800))))
+    respx.get(BULK_SNAP).mock(return_value=httpx.Response(200, json=_bulk_snap_body()))
+    per_name = respx.get(SNAP).mock(return_value=httpx.Response(200, json=_snap_body(occ)))
+
+    chains, _ = AlpacaChainProvider(_settings()).get_chains(["AAA"], FILT)
+    assert per_name.called and chains["AAA"].contracts[0].strike == 90.0
+
+
+@respx.mock
+def test_snapshot_requests_never_exceed_the_hard_100_symbol_cap() -> None:
+    """101 symbols returns 400 'symbol limit is 100'. This is an API limit, not a tuning knob."""
+    # the band is 0.70-1.02 x spot, so the strikes have to be packed inside that range to
+    # exercise the chunking at all -- spread them wider and the band, not the cap, does the work
+    rows = [("AAA", _occ_for("AAA", k), k, 800) for k in range(7000, 7251)]  # 251, all in band
+    respx.get(STOCKS).mock(return_value=httpx.Response(
+        200, json={"AAA": {"latestTrade": {"p": 10000.0}}}))
+    respx.get(CONTRACTS).mock(return_value=httpx.Response(200, json=_contracts_body(*rows)))
+    bulk = respx.get(BULK_SNAP).mock(
+        return_value=httpx.Response(200, json=_bulk_snap_body(rows[0][1])))
+
+    AlpacaChainProvider(_settings()).get_chains(["AAA"], FILT)
+    assert len(bulk.calls) == 3  # 251 symbols -> 100 + 100 + 51
+    for call in bulk.calls:
+        n = len(dict(httpx.URL(str(call.request.url)).params)["symbols"].split(","))
+        assert n <= 100, f"sent {n} symbols in one request"
+
+
+@respx.mock
+def test_one_unlisted_ticker_does_not_sink_a_batch_of_spot_lookups() -> None:
+    """The stock endpoint names ONE bad ticker at a time, and phrases it differently from the
+    contracts endpoint ('invalid symbol' vs 'invalid underlying symbols'). Without handling
+    both, a single unlisted name fails the whole 100-symbol batch."""
+    occ = _occ_for("AAA", 90)
+    responses = [
+        httpx.Response(400, json={"message": "code=400, message=invalid symbol: BRK-B"}),
+        httpx.Response(200, json={"AAA": {"latestTrade": {"p": 100.0}}}),
+    ]
+    respx.get(STOCKS).mock(side_effect=responses)
+    respx.get(CONTRACTS).mock(return_value=httpx.Response(
+        200, json=_contracts_body(("AAA", occ, 90, 800))))
+    respx.get(BULK_SNAP).mock(return_value=httpx.Response(200, json=_bulk_snap_body(occ)))
+
+    chains, complete = AlpacaChainProvider(_settings()).get_chains(["AAA", "BRK-B"], FILT)
+    assert complete and chains["AAA"].contracts[0].strike == 90.0
+
+
+@respx.mock
+def test_the_underlying_comes_from_the_vendor_not_from_parsing_the_occ_symbol() -> None:
+    """An ADJUSTED contract (root AAA1, issued after a corporate action) has a symbol no naive
+    OCC pattern matches. Parsing dropped it silently and changed which strike a real screen
+    picked for one name in 817; the contracts payload already says who owns it."""
+    adjusted = _occ_for("AAA", 90, root="AAA1")
+    respx.get(STOCKS).mock(return_value=httpx.Response(
+        200, json={"AAA": {"latestTrade": {"p": 100.0}}}))
+    respx.get(CONTRACTS).mock(return_value=httpx.Response(
+        200, json=_contracts_body(("AAA", adjusted, 90, 800))))
+    respx.get(BULK_SNAP).mock(return_value=httpx.Response(
+        200, json=_bulk_snap_body(adjusted)))
+
+    chains, _ = AlpacaChainProvider(_settings()).get_chains(["AAA"], FILT)
+    assert "AAA" in chains and chains["AAA"].contracts[0].option_symbol == adjusted
+
+
+@respx.mock
+def test_get_chains_stops_when_cancelled_and_reports_an_incomplete_scan() -> None:
+    import threading
+    occ = _occ_for("AAA", 90)
+    cancel = threading.Event()
+    respx.get(STOCKS).mock(return_value=httpx.Response(
+        200, json={"AAA": {"latestTrade": {"p": 100.0}}}))
+    respx.get(CONTRACTS).mock(side_effect=lambda req: (
+        cancel.set(), httpx.Response(200, json=_contracts_body(("AAA", occ, 90, 800))))[1])
+
+    chains, complete = AlpacaChainProvider(_settings()).get_chains(
+        ["AAA"], FILT, cancel=cancel)
+    assert complete is False, "a cancelled fetch must not look like a finished one"
+    assert chains == {}
+
+
+@respx.mock
+def test_a_batched_chain_is_cached_under_its_own_key() -> None:
+    """A batched chain holds only the strikes near spot. Sharing get_chain's key would hand a
+    ticker search a silently truncated chain."""
+    prov = AlpacaChainProvider(_settings())
+    single = prov._batch_cache_key("AAA", date(2026, 9, 1), date(2026, 9, 30), OptionType.PUT)
+    assert "batch" in single and "0.7-1.02" in single
