@@ -69,8 +69,9 @@ def test_select_put_picks_best_yield_near_target_delta():
 
 
 def test_select_put_applies_gates():
-    crit = ScreenCriteria(min_dte=30, max_dte=45)  # min_oi=100, |Δ|<=0.30, min_premium=0.30
-    assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=50)]), crit) is None      # low OI
+    crit = ScreenCriteria(min_dte=30, max_dte=45)  # defaults: min_oi=50, |Δ| <= 0.30
+    assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=49)]), crit) is None      # low OI
+    assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=50)]), crit) is not None  # on the floor
     assert select_put(_chain([_put(90, -0.40, 40, 1.5)]), crit) is None  # |delta|>0.30
     assert select_put(_chain([_put(90, -0.20, 10, 1.5)]), crit) is None  # DTE below window
     assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # bid 0 = unsellable

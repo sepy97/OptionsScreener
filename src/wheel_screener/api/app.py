@@ -851,17 +851,17 @@ def portfolio_disconnect(request: Request, broker: str, settings: Settings = Dep
 @app.post("/runs")
 def start_run(
     request: Request,
-    top_n: int = Form(400),
+    top_n: int = Form(2000),
     fundamental_weight: float = Form(0.5),
     min_dollar_volume: str = Form("25,000,000"),   # accountant-formatted; commas stripped below
     min_yield: str = Form("0.10"),
-    min_dte: int = Form(21),
-    max_dte: int = Form(35),
+    min_dte: int = Form(14),
+    max_dte: int = Form(45),
     min_price: float = Form(20.0),
-    max_price: float = Form(200.0),
+    max_price: float = Form(500.0),
     target_delta: float = Form(0.20),
     max_abs_delta: float = Form(0.30),
-    min_open_interest: int = Form(100),
+    min_open_interest: int = Form(50),
     min_iv: str = Form(""),
     min_score: str = Form(""),
     runner: JobRunner = Depends(get_job_runner),
