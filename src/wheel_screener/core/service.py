@@ -18,6 +18,7 @@ from wheel_screener.core.fundamentals import (
 from wheel_screener.core.models import (
     CandidateResult,
     ChainFilter,
+    CompanyProfile,
     EarningsPolicy,
     EarningsStatus,
     FundamentalMetrics,
@@ -39,6 +40,7 @@ from wheel_screener.core.pipeline.select_strike import (
 from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.ports import (
     ChainProvider,
+    CompanyProfileProvider,
     FundamentalReportProvider,
     FundamentalsProvider,
 )
@@ -80,6 +82,8 @@ class ScreenerService:
     chains: ChainProvider
     # optional: the long-form report engine ships separately and may not be installed
     reports: FundamentalReportProvider | None = None
+    # optional: company identity/description. Context only — absence shows a bare ticker.
+    profiles: CompanyProfileProvider | None = None
     _scores: dict[str, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def _universe_scores(self, criteria: ScreenCriteria, today: date) -> dict[str, float]:
@@ -404,3 +408,16 @@ class ScreenerService:
                 "fundamental reports are not configured for this deployment"
             )
         return self.reports.fundamental_report(symbol, period=period, years=years)
+
+    def company_profile(self, symbol: str) -> CompanyProfile | None:
+        """Who this ticker is, or None when the deployment can't say.
+
+        Never raises: a missing profile costs a line of context, and must not take a page with it.
+        """
+        if self.profiles is None:
+            return None
+        try:
+            return self.profiles.company_profile(symbol)
+        except Exception as e:  # noqa: BLE001 - optional context, never fatal
+            logger.warning("company profile unavailable for %s: %s", symbol, e)
+            return None

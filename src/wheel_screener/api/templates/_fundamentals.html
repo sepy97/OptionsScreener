@@ -1,4 +1,5 @@
 {% import "_icons.html" as icon %}
+{% import "_company.html" as co %}
 {% set unit = 'fiscal years' if report.period == 'annual' else 'quarters' %}
 <header class="results-head">
   <strong>{{ report.symbol }}</strong>
@@ -9,6 +10,7 @@
   {% if report.partial %}
     <span class="badge">{{ icon.warning() }}Limited history</span>
   {% endif %}
+{{ co.company(profile|default(none)) }}
 </header>
 
 <p class="grade-legend">

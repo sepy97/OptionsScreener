@@ -161,6 +161,18 @@ can't be automated — it needs a browser):
 Global flags go *before* the command: `-v` / `-vv` for progress / per-symbol logging, and
 `--debug` for a full traceback on an unexpected error — e.g. `wheel-screener -v candidates …`.
 
+## Company context
+
+Clicking a row in the screener, searching a ticker, or opening a fundamentals report shows the
+company's name, sector/industry and a short description of what it actually does — because a
+bare ticker doesn't tell you whether you want to own the thing.
+
+It comes from the **local store**, so it costs no API call and no extra credential. The
+description column is read lazily for one symbol at a time and memoised: across ~90,000 profile
+rows it is far too much prose to keep resident, and excluding it is what makes the store's memory
+footprint reasonable in the first place. A deployment whose source can't supply profiles simply
+shows the ticker, and nothing else changes.
+
 ## The funnel
 
 ```

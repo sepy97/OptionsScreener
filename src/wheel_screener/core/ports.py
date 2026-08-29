@@ -13,6 +13,7 @@ from typing import Protocol, runtime_checkable
 from wheel_screener.core.models import (
     ChainFilter,
     ChainSnapshot,
+    CompanyProfile,
     FundamentalMetrics,
     FundamentalReport,
     ProviderCaps,
@@ -70,3 +71,14 @@ class FundamentalReportProvider(Protocol):
     def fundamental_report(
         self, symbol: str, period: str = "annual", years: int = 10
     ) -> FundamentalReport: ...
+
+
+@runtime_checkable
+class CompanyProfileProvider(Protocol):
+    """Company identity and description for one symbol.
+
+    Separate from :class:`FundamentalsProvider` because it is optional context, not screening
+    input: a deployment without it simply shows a bare ticker, and nothing else degrades.
+    """
+
+    def company_profile(self, symbol: str) -> CompanyProfile | None: ...
