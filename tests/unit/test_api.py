@@ -963,3 +963,32 @@ def test_candidate_card_names_the_company(tmp_path) -> None:
     assert "Anon Incorporated" in r.text
     assert "Technology" in r.text and "Software" in r.text
     assert "Anon makes widgets" in r.text
+
+
+def test_every_number_input_default_is_actually_submittable(tmp_path) -> None:
+    """A number input whose value isn't on its own min/step grid blocks form submission.
+
+    The browser reports an invalid control by focusing it — but these live inside a collapsed
+    <details>, which can't take focus, so the submit silently does nothing and the Run button
+    appears dead. This shipped once; a rendered-form check is the only thing that catches it.
+    """
+    import re
+    from decimal import Decimal
+
+    client = _client(_runner(_FakeService(), tmp_path))
+    for path in ("/", "/search"):
+        html = client.get(path).text
+        for m in re.finditer(r'<input([^>]*type="number"[^>]*)>', html):
+            attrs = dict(re.findall(r'(\w[\w-]*)="([^"]*)"', m.group(1)))
+            value, step = attrs.get("value", ""), attrs.get("step")
+            if value == "" or step in (None, "any"):
+                continue
+            name = attrs.get("name", "?")
+            base = Decimal(attrs["min"]) if attrs.get("min") else Decimal(0)
+            offsets = (Decimal(value) - base) / Decimal(step)
+            assert offsets == offsets.to_integral_value(), (
+                f"{path}: {name}={value} is not on its step grid "
+                f"(min={attrs.get('min')}, step={step}) — the form will refuse to submit"
+            )
+            if attrs.get("max"):
+                assert Decimal(value) <= Decimal(attrs["max"]), f"{path}: {name} exceeds max"
