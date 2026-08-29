@@ -7,7 +7,8 @@ part that goes stale fastest. Target release: **v2.0.0**.
 
 | Decision | State |
 |---|---|
-| Auth posture for account data | **proposed: Basic Auth on `/portfolio*` now, Sign-in-with-Schwab later** (section 1) |
+| Auth posture for account data | **decided: Sign in with Schwab** (section 1a) |
+| Multi-broker support | designed for from day one, Schwab implemented first (section 1b) |
 | Schwab callback URL changed in the developer portal | not started |
 | Read-only invariant | agreed (see Security) |
 | Release label | v2.0.0 |
@@ -80,15 +81,133 @@ The cost is real auth code: a cookie-signing secret, a session expiry policy (ti
 independent), binding the session to the account hash so a session issued for one account cannot
 view another, and mandatory `state` verification.
 
-**Proposed sequencing.** Ship behind **Basic Auth scoped to `/portfolio*`** first — the middleware
-(`_basic_auth_gate`) and its exemption list (`_path_exempt`) already exist, tested and deployed, so
-it is a few lines rather than a new subsystem. Move to Sign-in-with-Schwab afterwards, once the rest
-of the tab is proven. This is the one part of the feature where a subtle bug exposes a brokerage
-account, so the boring option goes first and the elegant one arrives when it is the only thing
-changing.
+**Decided: Sign in with Schwab**, with no Basic-Auth interim. The interim was proposed to keep the
+risky code small; it was dropped in favour of building the real thing once. The rest of this
+document assumes it.
 
-Whichever is chosen, it must also cover **`/portfolio/schwab/callback`** — that route carries the
-authorization code.
+The gate must also cover **`/portfolio/schwab/callback`** — that route carries the authorization
+code.
+
+---
+
+## 1a. Sign in with Schwab — implementation
+
+### Two layers, deliberately separate
+
+| Layer | Answers | Lifetime |
+|---|---|---|
+| **Session** | may this *visitor* see the portfolio? | capped at the link's expiry |
+| **Link** | which *broker account* is connected, with what credentials? | Schwab: 7 days |
+
+Conflating them is the mistake section 1 describes. Keeping them apart is also what makes other
+brokers possible: a session can be minted by any broker that authenticates a human, while a link
+merely needs credentials from somewhere.
+
+### Verified mechanics
+
+Checked against the installed schwab-py 1.5.1, not assumed:
+
+```python
+get_auth_context(api_key, callback_url, state=None)   # -> AuthContext(callback_url, authorization_url, state)
+client_from_received_url(api_key, app_secret, auth_context, received_url, token_write_func)
+```
+
+`client_from_received_url` reads only `auth_context.callback_url` and `auth_context.state`, and the
+library's own source notes the OAuth client "cannot be passed around". **So only the `state` string
+has to survive the redirect** — the context is reconstructible. No PKCE verifier to persist, no
+server affinity, and an app restart mid-flow costs one re-click rather than a wedged state.
+
+### The state machine
+
+```
+no session cookie                 -> Connect page (list of linkable brokers)
+session + link healthy            -> the portfolio
+session + link expired            -> the portfolio chrome, with Reconnect
+session + no link (disconnected)  -> Connect page
+```
+
+Session and link expire independently, so all four states are reachable and each gets a real
+rendering. "Link expired" in particular must never surface as an error page: it is the normal
+weekly condition.
+
+### Sessions
+
+- **Server-side, in SQLite on the volume** (a `sessions` table beside the jobs DB), not a stateless
+  signed cookie. Stateless is less code, but revocation is the point: Disconnect has to actually end
+  the session, and a server-side row makes that true rather than approximately true.
+- Cookie carries an opaque random id only. `HttpOnly`, `Secure`, `SameSite=Lax` — Lax rather than
+  Strict because the callback arrives as a cross-site top-level redirect from Schwab.
+- Signed with `AUTH__SESSION_SECRET`. **Fail closed**: with the portfolio enabled and no secret set,
+  the app refuses to start, exactly as `AUTH__REQUIRED` already does.
+- **Expiry is capped at the link's expiry.** One clock to reason about, and it makes the weekly
+  reconnect *be* the re-login rather than a second thing to remember.
+- Bound to the linked account fingerprint, so a session minted for one account cannot read another
+  connected later.
+
+### CSRF and the `state`
+
+`state` is random, single-use, stored server-side with a short TTL, and verified on callback. An
+unrecognised or reused `state` is rejected outright. Without this the callback is a place to point
+someone else's browser.
+
+### Security specifics
+
+- **The authorization code appears in the callback URL, and Caddy logs request URLs.** That puts a
+  live credential in the access log. Mitigate by suppressing query strings for that path (or the
+  route entirely) in the Caddyfile — cheap, and easy to forget until it is in a log shipper.
+- Tokens live on the mounted volume, `0600`, uid 10001. Never in the image, never in a log line.
+- The connect and callback routes are rate-limited like the other expensive endpoints.
+- Disconnect revokes the session row **and** deletes the stored token; neither alone is enough.
+- Read-only invariant unchanged: only GET endpoints, ever.
+
+---
+
+## 1b. Supporting other brokers
+
+The port is broker-neutral from the start; only Schwab is implemented. What actually varies:
+
+| Broker | How a link is established | Can it mint a session? |
+|---|---|---|
+| Schwab | OAuth2, 7-day refresh | yes |
+| E*TRADE | OAuth 1.0a | yes |
+| Tastytrade | username/password -> session token | yes |
+| Alpaca | API key/secret, configured server-side | **no — no human authenticates** |
+| IBKR | self-hosted gateway | probably not deployable here |
+
+**The load-bearing consequence:** a key-based broker cannot be the login, because nobody proves who
+they are — the credentials are just sitting in the server's config. So broker-as-login requires at
+least one OAuth-capable link. If a key-only broker is ever the sole integration, a password gate has
+to come back for the tab. Worth knowing before the abstraction implies otherwise.
+
+### Ports
+
+```python
+class BrokerageAccountProvider(Protocol):      # reading, broker-neutral
+    def accounts(self) -> list[BrokerageAccount]: ...
+    def positions(self, account_id: str) -> list[Position]: ...
+    def link_status(self) -> LinkStatus: ...    # connected? expires when?
+
+class OAuthBrokerLink(Protocol):               # only brokers that authenticate a human
+    def authorize_url(self, state: str) -> str: ...
+    def complete(self, received_url: str, state: str) -> LinkedIdentity: ...
+    def revoke(self) -> None: ...
+```
+
+Splitting the reading port from the linking port is what keeps a key-based broker implementable: it
+provides the first and simply does not provide the second.
+
+### Storage
+
+Per-broker rather than the current single file: `/data/links/{broker}.json`, so a second broker is
+additive rather than a migration. `SCHWAB__TOKEN_PATH` keeps working for the existing CLI flow.
+
+### Normalisation
+
+Adapters translate into broker-neutral `BrokerageAccount` and `Position`, with options carrying
+underlying / strike / expiry / right / DTE as fields rather than a broker's own symbol format. The
+normalising is the adapter's job precisely because every broker spells it differently.
+
+Multi-user is explicitly **out of scope**: one operator, one session at a time, no user table.
 
 ---
 
@@ -187,15 +306,15 @@ rather than left as "later".
 - [ ] **P1 — read path.** Port, adapter, models, and a `wheel-screener positions` CLI command.
       Deliberately web-free: it proves the data model against a real account before any OAuth
       plumbing exists.
-- [ ] **P2 — server-side OAuth.** connect / callback / disconnect, state verification, token on the
-      volume. Gate `/portfolio*` (including the callback) with the existing Basic-Auth middleware.
+- [ ] **P2 — sessions + OAuth.** Session store and cookie, `state` issuance and verification,
+      connect / callback / disconnect, token on the volume, Caddy log suppression for the callback.
 - [ ] **P3 — the tab.** Templates, the capacity / puts / shares views, and the never-connected and
       expired states.
 - [ ] **P4 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture.
 - [ ] **P5 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
-- [ ] *(later)* **Sign in with Schwab** — replace the Basic-Auth gate with a session issued by the
-      OAuth callback, so the weekly reconnect doubles as the login.
+- [ ] *(later)* **A second broker**, to prove the abstraction is real rather than Schwab wearing a
+      trench coat.
 
 ---
 
