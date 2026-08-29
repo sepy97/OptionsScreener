@@ -12,6 +12,7 @@ from typing import Protocol, runtime_checkable
 
 from wheel_screener.core.models import (
     BrokerageAccount,
+    BrokerLinkStatus,
     ChainFilter,
     ChainSnapshot,
     CompanyProfile,
@@ -95,3 +96,24 @@ class BrokerageAccountProvider(Protocol):
     """
 
     def accounts(self) -> list[BrokerageAccount]: ...
+
+
+@runtime_checkable
+class OAuthBrokerLink(Protocol):
+    """Establishing and ending a link with a broker that authenticates a human.
+
+    Only brokers with a user-facing authorization flow implement this. A broker whose credentials
+    are configured server-side (an API key in the environment) provides
+    :class:`BrokerageAccountProvider` and nothing here — nobody authenticates, so it can neither
+    prove who is asking nor mint a session.
+    """
+
+    broker: str
+
+    def authorize_url(self, state: str) -> str: ...
+
+    def complete(self, received_url: str, state: str) -> BrokerLinkStatus: ...
+
+    def status(self) -> BrokerLinkStatus: ...
+
+    def revoke(self) -> None: ...

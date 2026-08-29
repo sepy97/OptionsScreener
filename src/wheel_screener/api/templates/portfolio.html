@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icon %}
+{% block content %}
+  <article>
+    <h2>Portfolio</h2>
+    {% set schwab = links.get('schwab') %}
+    {% if not session %}
+      {# No session: the only thing this page may show is a way in. #}
+      <p class="tab-lede">Connect a brokerage account to see what it holds. You sign in at the
+        broker &mdash; this site never sees your credentials, and only ever reads.</p>
+      <form method="get" action="/portfolio/oauth/schwab/connect">
+        <button type="submit" class="run-btn">Sign in with Schwab</button>
+      </form>
+      <p class="detail-note">Schwab authorisations last 7 days, so this is a weekly click rather
+        than a one-off setup.</p>
+    {% elif schwab and schwab.connected %}
+      <header class="results-head">
+        <strong>Connected</strong>
+        <span class="result-stats">
+          <span>Broker <b>Schwab</b></span>
+          {% if schwab.expires_at %}
+            <span>Authorisation ends <b>{{ schwab.expires_at.strftime('%d %b %H:%M') }} UTC</b></span>
+          {% endif %}
+        </span>
+      </header>
+      <p class="tab-lede">Balances arrive next. The link and the session are live.</p>
+      <form method="post" action="/portfolio/oauth/schwab/disconnect">
+        <button type="submit" class="secondary">Disconnect</button>
+      </form>
+    {% else %}
+      {# Session outlived the broker authorisation: the normal weekly condition, not an error. #}
+      <header class="results-head">
+        <strong>{{ icon.warning() }}Authorisation expired</strong>
+      </header>
+      <p class="tab-lede">Schwab authorisations last 7 days. Reconnecting takes one click and
+        signs you back in at the same time.</p>
+      <form method="get" action="/portfolio/oauth/schwab/connect">
+        <button type="submit" class="run-btn">Reconnect Schwab</button>
+      </form>
+    {% endif %}
+  </article>
+{% endblock %}

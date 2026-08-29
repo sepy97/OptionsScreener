@@ -7,7 +7,7 @@ part that goes stale fastest. Target release: **v2.0.0**.
 
 | Decision | State |
 |---|---|
-| Auth posture for account data | **decided: Sign in with Schwab** (section 1a) |
+| Auth posture for account data | **built: Sign in with Schwab** (section 1a) |
 | Multi-broker support | designed for from day one, Schwab implemented first (section 1b) |
 | Schwab app has **Accounts and Trading** entitlement | **YES — live 2026-08-29**, working even while the app shows *Modification Pending* |
 | Callback URL | chosen: `https://steadybull.net/portfolio/oauth/schwab/callback` — not yet registered |
@@ -138,8 +138,10 @@ weekly condition.
   the session, and a server-side row makes that true rather than approximately true.
 - Cookie carries an opaque random id only. `HttpOnly`, `Secure`, `SameSite=Lax` — Lax rather than
   Strict because the callback arrives as a cross-site top-level redirect from Schwab.
-- Signed with `AUTH__SESSION_SECRET`. **Fail closed**: with the portfolio enabled and no secret set,
-  the app refuses to start, exactly as `AUTH__REQUIRED` already does.
+- **No signing secret, in the end.** The plan called for one; building it showed it earns nothing.
+  The cookie carries a 256-bit random id and the store is authoritative, so every request looks the
+  record up anyway — an HMAC would verify what the lookup already proves, at the cost of another
+  secret to place on the droplet and rotate. `AUTH__SESSION_SECRET` is therefore **not** required.
 - **Expiry is capped at the link's expiry.** One clock to reason about, and it makes the weekly
   reconnect *be* the re-login rather than a second thing to remember.
 - Bound to the linked account fingerprint, so a session minted for one account cannot read another
@@ -491,11 +493,11 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
 
 - [ ] **P0 — entitlement check, callback URL, droplet prep.** See 6a. Track A first: it sizes
       the rest and needs nothing from the portal.
-- [ ] **P1 — balances.** *Unblocked — the entitlement is live.* Port, models, adapter and a
+- [x] **P1 — balances.** *Unblocked — the entitlement is live.* Port, models, adapter and a
       `wheel-screener balances` CLI command. Mapping in section 3b.
       Deliberately web-free and positions-free: the smallest thing that proves the credentials, the
       account lookup and the mapping all work, checkable against the Schwab app by eye.
-- [ ] **P2 — sessions + OAuth.** *Not blocked by the Schwab approval*: the session store, cookie,
+- [x] **P2 — sessions + OAuth.** *Not blocked by the Schwab approval*: the session store, cookie,
       `state` handling and the four-state machine all sit behind the broker port and are buildable
       and testable against a fake. It is also the riskiest code in the feature, so it is the right
       thing to build while waiting. Session store and cookie, `state` issuance and verification,

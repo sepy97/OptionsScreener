@@ -23,6 +23,8 @@
        {% if active_tab == 'search' %}aria-current="page"{% endif %}>Search a ticker</a>
     <a href="/fundamentals" class="nav-tab{{ ' active' if active_tab == 'fundamentals' else '' }}"
        {% if active_tab == 'fundamentals' %}aria-current="page"{% endif %}>Fundamentals</a>
+    <a href="/portfolio" class="nav-tab{{ ' active' if active_tab == 'portfolio' else '' }}"
+       {% if active_tab == 'portfolio' %}aria-current="page"{% endif %}>Portfolio</a>
   </div>
 </nav>
 <main class="container">

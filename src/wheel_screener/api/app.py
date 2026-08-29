@@ -18,20 +18,22 @@ import secrets
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
 
 from wheel_screener import __version__
+from wheel_screener.adapters.schwab.link import SchwabOAuthLink
 from wheel_screener.api.deps import get_job_runner, get_service, get_settings
 from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
 from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
+from wheel_screener.api.sessions import SessionStore
 from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import (
@@ -120,6 +122,9 @@ async def lifespan(app: FastAPI):
     # credentialed connections, built once: a probe owns an HTTP client
     app.state.probes = build_probes(settings, service)
     app.state.probe_cache = {}
+    # Portfolio: one session store, and the brokers that can authenticate a human.
+    app.state.sessions = SessionStore(settings.portfolio.sessions_db_path)
+    app.state.links = {SchwabOAuthLink(settings.schwab).broker: SchwabOAuthLink(settings.schwab)}
     # let pipeline INFO logs through so background jobs can capture stage progress
     logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
     warm = getattr(service.fundamentals, "known_symbols", None)
@@ -144,6 +149,39 @@ async def _basic_auth_gate(request: Request, call_next):
                 status_code=401,
                 headers={"WWW-Authenticate": 'Basic realm="wheel-screener"'},
             )
+    return await call_next(request)
+
+
+
+# Everything the Portfolio owns lives under /portfolio, so ONE rule gates it. The rule denies by
+# default: only the entry points a visitor needs *before* having a session are exempt, and they are
+# matched exactly rather than by prefix. An exempt-by-prefix rule is how the callback — which
+# carries the authorization code — ends up unprotected by accident.
+_PORTFOLIO_PREFIX = "/portfolio"
+_PORTFOLIO_OPEN = re.compile(r"^/portfolio$|^/portfolio/oauth/[a-z0-9_-]+/(connect|callback)$")
+
+
+def _needs_portfolio_session(path: str) -> bool:
+    # `startswith("/portfolio")` alone would also claim /portfoliox and /portfolio-export, so the
+    # boundary is explicit: the prefix itself, or something beneath it.
+    under = path == _PORTFOLIO_PREFIX or path.startswith(_PORTFOLIO_PREFIX + "/")
+    return under and not _PORTFOLIO_OPEN.match(path)
+
+
+def current_session(request: Request):
+    """The live session for this request, or None. Never raises."""
+    store = getattr(request.app.state, "sessions", None)
+    settings = getattr(request.app.state, "settings", None)
+    if store is None or settings is None:
+        return None
+    return store.get(request.cookies.get(settings.portfolio.cookie_name))
+
+
+@app.middleware("http")
+async def _portfolio_session_gate(request: Request, call_next):
+    """No session, no account data."""
+    if _needs_portfolio_session(request.url.path) and current_session(request) is None:
+        return RedirectResponse("/portfolio", status_code=303)
     return await call_next(request)
 
 
@@ -670,6 +708,100 @@ def fundamentals_route(
         {"report": report, "period": report.period,
          "profile": service.company_profile(report.symbol)},
     )
+
+
+# --- Portfolio ------------------------------------------------------------------------------
+
+
+def _link_for(request: Request, broker: str):
+    link = (getattr(request.app.state, "links", None) or {}).get(broker)
+    if link is None:
+        raise HTTPException(status_code=404, detail="unknown broker")
+    return link
+
+
+@app.get("/portfolio")
+def portfolio_page(request: Request, settings: Settings = Depends(get_settings)):
+    """The Portfolio tab. Four states, each with a real rendering:
+
+    no session -> connect · session + healthy link -> the account ·
+    session + expired link -> reconnect · session + no link -> connect.
+
+    Session and link expire independently, so all four are reachable. "Link expired" in particular
+    is the normal weekly condition, not an error.
+    """
+    session = current_session(request)
+    links = getattr(request.app.state, "links", {}) or {}
+    status = {name: link.status() for name, link in links.items()}
+    return templates.TemplateResponse(
+        request, "portfolio.html",
+        {
+            "active_tab": "portfolio",
+            "session": session,
+            "links": status,
+            "connected": session is not None and any(s.connected for s in status.values()),
+        },
+    )
+
+
+@app.get("/portfolio/oauth/{broker}/connect")
+def portfolio_connect(request: Request, broker: str, settings: Settings = Depends(get_settings)):
+    """Send the browser to the broker. The `state` is ours, recorded server-side and single-use."""
+    link = _link_for(request, broker)
+    state = request.app.state.sessions.issue_state(broker, settings.portfolio.state_ttl_seconds)
+    try:
+        url = link.authorize_url(state)
+    except ProviderError as e:
+        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
+    return RedirectResponse(url, status_code=303)
+
+
+@app.get("/portfolio/oauth/{broker}/callback")
+def portfolio_callback(request: Request, broker: str, settings: Settings = Depends(get_settings)):
+    """Exchange the code and mint the session.
+
+    The incoming URL carries the authorization code, so it is never logged or echoed back.
+    """
+    link = _link_for(request, broker)
+    store = request.app.state.sessions
+    if store.consume_state(request.query_params.get("state")) != broker:
+        # unknown, expired, replayed, or issued for a different broker
+        return templates.TemplateResponse(
+            request, "_error.html",
+            {"message": "That sign-in link has expired or was already used. Please try again."},
+            status_code=400,
+        )
+    try:
+        status = link.complete(str(request.url), state=request.query_params.get("state") or "")
+    except ProviderError as e:
+        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
+
+    # A relink may be a different account, so previous sessions for this broker are ended first —
+    # cheaper and more certain than re-checking an account fingerprint on every later request.
+    store.revoke_broker(broker)
+    expires = status.expires_at or (datetime.now(tz=UTC) + timedelta(days=1))
+    token = store.create(broker, status.account_fingerprint or "unknown", expires)
+
+    response = RedirectResponse("/portfolio", status_code=303)
+    response.set_cookie(
+        settings.portfolio.cookie_name, token,
+        httponly=True, secure=settings.portfolio.cookie_secure, samesite="lax",
+        path="/portfolio", expires=expires,
+    )
+    return response
+
+
+@app.post("/portfolio/oauth/{broker}/disconnect")
+def portfolio_disconnect(request: Request, broker: str, settings: Settings = Depends(get_settings)):
+    """End the session AND delete the credential. Either alone would leave a way back in."""
+    link = _link_for(request, broker)
+    store = request.app.state.sessions
+    store.revoke(request.cookies.get(settings.portfolio.cookie_name))
+    store.revoke_broker(broker)
+    link.revoke()
+    response = RedirectResponse("/portfolio", status_code=303)
+    response.delete_cookie(settings.portfolio.cookie_name, path="/portfolio")
+    return response
 
 
 @app.post("/runs")

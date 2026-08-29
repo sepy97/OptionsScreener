@@ -6,6 +6,11 @@ steadybull.net, www.steadybull.net {
 	request_body {
 		max_size 1MB
 	}
+	# The OAuth callback carries a live authorization code in its query string, and the access log
+	# records request URIs — so a credential would land in the log. Skip logging that path only.
+	@oauth_callback path_regexp ^/portfolio/oauth/[^/]+/callback$
+	log_skip @oauth_callback
+
 	# retry a failed dial for up to 20s so a request during the app's cold-start store-warm
 	# waits and succeeds instead of returning a 502 (the app binds :8000 only after warming).
 	reverse_proxy app:8000 {

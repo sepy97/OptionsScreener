@@ -1,0 +1,243 @@
+"""Sessions, OAuth state, and the gate that stands between a stranger and an account."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime, timedelta
+
+import pytest
+
+from wheel_screener.api.sessions import SessionStore
+
+
+def _store(tmp_path) -> SessionStore:
+    return SessionStore(str(tmp_path / "sessions.sqlite"))
+
+
+def _later(days=7) -> datetime:
+    return datetime.now(tz=UTC) + timedelta(days=days)
+
+
+# --- the store ------------------------------------------------------------------------------
+
+def test_a_session_round_trips(tmp_path) -> None:
+    s = _store(tmp_path)
+    token = s.create("schwab", "fp", _later())
+    got = s.get(token)
+    assert got is not None and got.broker == "schwab" and got.account_fingerprint == "fp"
+
+
+def test_the_cookie_value_is_unguessable(tmp_path) -> None:
+    """No signing secret is used, so the id itself has to be the security property."""
+    s = _store(tmp_path)
+    tokens = {s.create("schwab", "fp", _later()) for _ in range(50)}
+    assert len(tokens) == 50
+    assert all(len(t) >= 40 for t in tokens)  # 256 bits, url-safe
+
+
+def test_an_expired_session_is_refused_and_dropped(tmp_path) -> None:
+    s = _store(tmp_path)
+    token = s.create("schwab", "fp", datetime.now(tz=UTC) - timedelta(seconds=1))
+    assert s.get(token) is None
+    assert s.get(token) is None  # and stays gone
+
+
+def test_unknown_and_empty_tokens_are_refused(tmp_path) -> None:
+    s = _store(tmp_path)
+    assert s.get("nope") is None and s.get(None) is None and s.get("") is None
+
+
+def test_revoke_ends_the_session_immediately(tmp_path) -> None:
+    """The point of a server-side store: Disconnect must actually end it, not wait for expiry."""
+    s = _store(tmp_path)
+    token = s.create("schwab", "fp", _later())
+    s.revoke(token)
+    assert s.get(token) is None
+
+
+def test_revoking_a_broker_ends_all_of_its_sessions(tmp_path) -> None:
+    s = _store(tmp_path)
+    a, b = s.create("schwab", "fp", _later()), s.create("schwab", "fp", _later())
+    other = s.create("tastytrade", "fp", _later())
+    s.revoke_broker("schwab")
+    assert s.get(a) is None and s.get(b) is None
+    assert s.get(other) is not None, "another broker's sessions are untouched"
+
+
+# --- OAuth state ----------------------------------------------------------------------------
+
+def test_state_is_single_use(tmp_path) -> None:
+    """A replayed redirect — the same callback URL opened twice — must not mint a second session."""
+    s = _store(tmp_path)
+    state = s.issue_state("schwab")
+    assert s.consume_state(state) == "schwab"
+    assert s.consume_state(state) is None
+
+
+def test_state_expires(tmp_path) -> None:
+    s = _store(tmp_path)
+    assert s.consume_state(s.issue_state("schwab", ttl_seconds=-1)) is None
+
+
+def test_unknown_state_is_refused(tmp_path) -> None:
+    s = _store(tmp_path)
+    assert s.consume_state("forged") is None and s.consume_state(None) is None
+
+
+def test_state_is_bound_to_its_broker(tmp_path) -> None:
+    s = _store(tmp_path)
+    assert s.consume_state(s.issue_state("tastytrade")) == "tastytrade"
+
+
+# --- the gate -------------------------------------------------------------------------------
+
+pytest.importorskip("fastapi")
+
+from wheel_screener.api.app import _needs_portfolio_session  # noqa: E402
+
+
+@pytest.mark.parametrize("path", [
+    "/portfolio/positions", "/portfolio/oauth/schwab/disconnect", "/portfolio/",
+    "/portfolio/anything/else",
+])
+def test_portfolio_routes_are_gated_by_default(path: str) -> None:
+    """Deny by default. An exempt-by-prefix rule is how the callback ends up unprotected."""
+    assert _needs_portfolio_session(path) is True
+
+
+@pytest.mark.parametrize("path", [
+    "/portfolio", "/portfolio/oauth/schwab/connect", "/portfolio/oauth/schwab/callback",
+])
+def test_only_the_entry_points_are_open(path: str) -> None:
+    assert _needs_portfolio_session(path) is False
+
+
+@pytest.mark.parametrize("path", ["/", "/search", "/fundamentals", "/health", "/portfoliox"])
+def test_the_rest_of_the_site_is_untouched(path: str) -> None:
+    assert _needs_portfolio_session(path) is False
+
+
+def test_the_callback_is_rate_limited() -> None:
+    from wheel_screener.api.ratelimit import is_expensive
+
+    assert is_expensive("GET", "/portfolio/oauth/schwab/callback")
+    assert is_expensive("GET", "/portfolio/oauth/schwab/connect")
+
+
+# --- the routes -----------------------------------------------------------------------------
+
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from wheel_screener.api.app import app  # noqa: E402
+from wheel_screener.core.models import BrokerLinkStatus  # noqa: E402
+
+
+class _FakeLink:
+    broker = "schwab"
+
+    def __init__(self, connected=True):
+        self.connected, self.revoked = connected, False
+
+    def status(self):
+        return BrokerLinkStatus(
+            broker="schwab", connected=self.connected,
+            expires_at=_later() if self.connected else None,
+        )
+
+    def authorize_url(self, state):
+        return f"https://schwab.example/authorize?state={state}"
+
+    def complete(self, received_url, state):
+        return self.status()
+
+    def revoke(self):
+        self.connected, self.revoked = False, True
+
+
+def _client(link=None):
+    c = TestClient(app)
+    c.__enter__()
+    app.state.settings.portfolio.cookie_secure = False  # TestClient speaks http
+    app.state.links = {"schwab": link or _FakeLink()}
+    return c
+
+
+def _sign_in(c) -> str:
+    loc = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).headers["location"]
+    state = loc.split("state=")[-1]
+    c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}", follow_redirects=False)
+    return state
+
+
+def test_a_stranger_sees_a_way_in_and_nothing_else() -> None:
+    c = _client()
+    try:
+        body = c.get("/portfolio").text
+        assert "Sign in with Schwab" in body
+        assert "Disconnect" not in body and "Connected" not in body
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_signing_in_grants_access_and_signing_out_removes_it() -> None:
+    link = _FakeLink()
+    c = _client(link)
+    try:
+        _sign_in(c)
+        assert "Connected" in c.get("/portfolio").text
+        c.post("/portfolio/oauth/schwab/disconnect", follow_redirects=False)
+        assert link.revoked, "disconnect must delete the credential, not just the session"
+        assert "Sign in with Schwab" in c.get("/portfolio").text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_forged_or_replayed_callback_mints_nothing() -> None:
+    c = _client()
+    try:
+        r = c.get("/portfolio/oauth/schwab/callback?code=X&state=forged", follow_redirects=False)
+        assert r.status_code == 400 and "ws_portfolio" not in r.headers.get("set-cookie", "")
+        state = _sign_in(c)
+        replay = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}",
+                       follow_redirects=False)
+        assert replay.status_code == 400, "state is single use"
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_the_session_cookie_is_locked_down() -> None:
+    c = _client()
+    try:
+        loc = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).headers["location"]
+        r = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={loc.split('state=')[-1]}",
+                  follow_redirects=False)
+        cookie = r.headers["set-cookie"]
+        assert "HttpOnly" in cookie, "script must not be able to read the session"
+        assert "SameSite=lax" in cookie, "Lax, not Strict: the callback is a cross-site redirect"
+        assert "Path=/portfolio" in cookie, "scoped to the feature that needs it"
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_relinking_ends_the_previous_session() -> None:
+    """A relink may be a different account, so old sessions must not survive it."""
+    c = _client()
+    try:
+        _sign_in(c)
+        first = c.cookies.get("ws_portfolio")
+        _sign_in(c)
+        assert app.state.sessions.get(first) is None
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_an_expired_link_offers_reconnect_rather_than_an_error() -> None:
+    link = _FakeLink()
+    c = _client(link)
+    try:
+        _sign_in(c)
+        link.connected = False  # the weekly condition
+        body = c.get("/portfolio").text
+        assert "Reconnect" in body and "expired" in body.lower()
+    finally:
+        c.__exit__(None, None, None)

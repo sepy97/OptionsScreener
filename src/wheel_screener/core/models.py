@@ -6,7 +6,7 @@ Framework-free: no httpx/typer/fastapi imports. Keep it that way.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import StrEnum
 
 from pydantic import BaseModel, Field, computed_field
@@ -211,6 +211,19 @@ class BrokerageAccount(BaseModel):
     display_name: str
     account_type: AccountType | None = None
     balances: AccountBalances = Field(default_factory=AccountBalances)
+
+
+class BrokerLinkStatus(BaseModel):
+    """Whether a broker is connected, and until when.
+
+    ``expires_at`` is the credential's own deadline — Schwab refresh tokens last 7 days — and is
+    what a session's lifetime is capped to, so one clock governs both.
+    """
+
+    broker: str
+    connected: bool = False
+    expires_at: datetime | None = None
+    account_fingerprint: str | None = None
 
 
 class CompanyProfile(BaseModel):

@@ -107,6 +107,23 @@ class RateLimitSettings(BaseModel):
     per_minute: int = 20  # expensive requests allowed per client IP per 60s
 
 
+class PortfolioSettings(BaseModel):
+    """The Portfolio tab and its broker link.
+
+    There is no signing secret: a session cookie carries a 256-bit random id and the server-side
+    store is authoritative, so an HMAC would verify what the lookup already proves — and it would
+    be one more secret to place on the droplet and rotate.
+    """
+
+    enabled: bool = True
+    sessions_db_path: str = "data/sessions.sqlite"
+    cookie_name: str = "ws_portfolio"
+    # Set false only for local http development; a Secure cookie is never sent over plain HTTP,
+    # so leaving it on would make the session silently fail to stick.
+    cookie_secure: bool = True
+    state_ttl_seconds: int = 600  # a login that takes >10 min is an abandoned one
+
+
 class LogSettings(BaseModel):
     """Diagnostic logging. The console level follows -v/-vv; the rotating file always
     captures ``file_level`` and up, so cron'd runs leave a recoverable history."""
@@ -134,6 +151,7 @@ class Settings(BaseSettings):
     log: LogSettings = Field(default_factory=LogSettings)
     auth: AuthSettings = Field(default_factory=AuthSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
+    portfolio: PortfolioSettings = Field(default_factory=PortfolioSettings)
 
     # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)
     chain_source: str = "schwab"
