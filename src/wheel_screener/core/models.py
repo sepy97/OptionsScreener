@@ -179,6 +179,40 @@ class FundamentalRating(BaseModel):
     strength_scores: dict[str, float] = Field(default_factory=dict)  # absolute factor scores 0..1
 
 
+class AccountType(StrEnum):
+    """How the account is funded, which changes which balance fields the broker reports."""
+
+    CASH = "cash"
+    MARGIN = "margin"
+
+
+class AccountBalances(BaseModel):
+    """What an account is worth, normalised across brokers.
+
+    ``invested`` is DERIVED as ``total_value - cash`` rather than summed from the broker's asset
+    buckets. Summing means enumerating every bucket a broker might populate — Schwab alone splits
+    long stock, bonds, mutual funds and long/short options — and silently under-reports the moment
+    one is missed. Deriving is robust to whichever buckets a given account happens to use.
+    """
+
+    total_value: float | None = None  # what the account is worth, all in
+    cash: float | None = None  # the collateral pool, for a wheel
+    invested: float | None = None  # derived; see above
+    buying_power: float | None = None  # margin accounts; None on a cash account
+    equity: float | None = None
+
+
+class BrokerageAccount(BaseModel):
+    """One account at one broker. ``account_id`` is the broker's opaque handle for API calls and
+    is never displayed; ``display_name`` is the masked number a human recognises."""
+
+    broker: str
+    account_id: str
+    display_name: str
+    account_type: AccountType | None = None
+    balances: AccountBalances = Field(default_factory=AccountBalances)
+
+
 class CompanyProfile(BaseModel):
     """Who a ticker actually is — the context a symbol alone doesn't give.
 

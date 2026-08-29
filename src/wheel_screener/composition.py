@@ -13,9 +13,11 @@ from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
 from wheel_screener.adapters.fundcore.provider import FundcoreReportProvider
 from wheel_screener.adapters.local.earnings import LocalEarningsCalendar
 from wheel_screener.adapters.local.provider import LocalFundamentalsProvider
+from wheel_screener.adapters.schwab.account import SchwabAccountProvider
 from wheel_screener.adapters.schwab.provider import SchwabChainProvider
 from wheel_screener.config import Settings
 from wheel_screener.core.ports import (
+    BrokerageAccountProvider,
     ChainProvider,
     CompanyProfileProvider,
     FundamentalReportProvider,
@@ -77,6 +79,17 @@ def _build_profiles(fundamentals: FundamentalsProvider) -> CompanyProfileProvide
     return fundamentals if isinstance(fundamentals, CompanyProfileProvider) else None
 
 
+def _build_accounts(settings: Settings) -> BrokerageAccountProvider | None:
+    """The brokerage reader, or None when no broker is linked.
+
+    Independent of `chain_source`: Schwab can supply account data while chains come from Alpaca,
+    which is exactly the production shape.
+    """
+    if not settings.schwab.client_id or not settings.schwab.client_secret.get_secret_value():
+        return None
+    return SchwabAccountProvider(settings.schwab)
+
+
 def build_service(settings: Settings | None = None) -> ScreenerService:
     settings = settings or Settings()
     fundamentals = _build_fundamentals(settings)
@@ -85,6 +98,7 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
         chains=_build_chains(settings),
         reports=_build_reports(settings),
         profiles=_build_profiles(fundamentals),
+        accounts=_build_accounts(settings),
     )
 
 

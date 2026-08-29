@@ -157,6 +157,7 @@ can't be automated — it needs a browser):
 | `refresh-earnings` | rebuild the local earnings calendar from FMP |
 | `refresh-fundamentals` | incremental fundamentals refresh for recent reporters |
 | `doctor` | check every data connection and name the one that's broken |
+| `balances` | balances of the linked brokerage account (Schwab) |
 
 Global flags go *before* the command: `-v` / `-vv` for progress / per-symbol logging, and
 `--debug` for a full traceback on an unexpected error — e.g. `wheel-screener -v candidates …`.
