@@ -7,7 +7,7 @@ part that goes stale fastest. Target release: **v2.0.0**.
 
 | Decision | State |
 |---|---|
-| Auth posture for account data | **OPEN — blocks everything** |
+| Auth posture for account data | **proposed: Basic Auth on `/portfolio*` now, Sign-in-with-Schwab later** (section 1) |
 | Schwab callback URL changed in the developer portal | not started |
 | Read-only invariant | agreed (see Security) |
 | Release label | v2.0.0 |
@@ -44,6 +44,51 @@ Two sane answers:
 
 The second is preferable if the public screener is still wanted. Either way this is decided before
 any code is written.
+
+### Does the Schwab login itself count as the tab's auth?
+
+Tempting — show a Connect page, let Schwab do the authenticating — but on its own **no**, and the
+reason is worth writing down because the idea looks sufficient.
+
+Two different authentications hide in "auth for this tab":
+
+| | what it proves | who it is for |
+|---|---|---|
+| Schwab OAuth | the **app** may read the account | Schwab |
+| Site auth | the **visitor** is the owner | this site |
+
+A Connect page does the first. The gap is what happens after the first successful connect: the
+refresh token now lives on the server, so `/portfolio` renders positions for **anyone who loads the
+URL**. The Connect page only appears while disconnected — a stranger arriving the next day doesn't
+meet a login, they meet the balances. Schwab OAuth gates *connecting*, not *viewing*.
+
+**It can be made to work** by having the callback issue a signed **session** rather than only
+storing a token — "Sign in with Schwab":
+
+```
+GET /portfolio          no session cookie -> the Connect page
+  click -> Schwab login (requires the owner's Schwab credentials)
+  -> callback -> store token AND set a signed session cookie
+  -> /portfolio -> positions
+```
+
+A stranger who clicks Connect is sent to Schwab and stops there. The property wanted — only the
+account owner sees the account — falls out correctly, and the weekly reconnect that the 7-day token
+already forces *becomes* the login, with no second password to invent.
+
+The cost is real auth code: a cookie-signing secret, a session expiry policy (tied to the token, or
+independent), binding the session to the account hash so a session issued for one account cannot
+view another, and mandatory `state` verification.
+
+**Proposed sequencing.** Ship behind **Basic Auth scoped to `/portfolio*`** first — the middleware
+(`_basic_auth_gate`) and its exemption list (`_path_exempt`) already exist, tested and deployed, so
+it is a few lines rather than a new subsystem. Move to Sign-in-with-Schwab afterwards, once the rest
+of the tab is proven. This is the one part of the feature where a subtle bug exposes a brokerage
+account, so the boring option goes first and the elegant one arrives when it is the only thing
+changing.
+
+Whichever is chosen, it must also cover **`/portfolio/schwab/callback`** — that route carries the
+authorization code.
 
 ---
 
@@ -143,12 +188,14 @@ rather than left as "later".
       Deliberately web-free: it proves the data model against a real account before any OAuth
       plumbing exists.
 - [ ] **P2 — server-side OAuth.** connect / callback / disconnect, state verification, token on the
-      volume.
+      volume. Gate `/portfolio*` (including the callback) with the existing Basic-Auth middleware.
 - [ ] **P3 — the tab.** Templates, the capacity / puts / shares views, and the never-connected and
       expired states.
 - [ ] **P4 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture.
 - [ ] **P5 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
+- [ ] *(later)* **Sign in with Schwab** — replace the Basic-Auth gate with a session issued by the
+      OAuth callback, so the weekly reconnect doubles as the login.
 
 ---
 
