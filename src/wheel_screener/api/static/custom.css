@@ -240,3 +240,17 @@ tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); 
 .metric-glossary { margin-top: 1rem; font-size: 0.85rem; }
 .metric-glossary summary { cursor: pointer; color: var(--pico-muted-color); }
 .tab-lede { color: var(--pico-muted-color); font-size: 0.9rem; }
+
+/* --- company identity (shared by the screener card, search and fundamentals) --- */
+.company { display: flex; flex-direction: column; gap: 0.15rem; margin: 0 0 0.85rem; }
+.company-name { font-weight: 600; font-size: 0.95rem; }
+.company-tags {
+  font-family: inherit; font-size: 0.72rem; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--pico-muted-color);
+}
+/* the provider's prose is the one place on these pages that reads as a paragraph, so give it
+   a measure rather than letting it run the full width of a wide table card */
+.company-desc {
+  margin: 0.35rem 0 0; font-size: 0.85rem; line-height: 1.5;
+  color: var(--pico-muted-color); max-width: 68ch;
+}

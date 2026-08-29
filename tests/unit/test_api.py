@@ -57,6 +57,9 @@ def _done_job(runner: JobRunner, *cands: CandidateResult) -> str:
 class _FakeService:
     """run_screen is configurable: return a result, raise, block on a gate, or honor cancel."""
 
+    def company_profile(self, symbol):
+        return None  # optional context; the templates render nothing without it
+
     def __init__(self, result=None, error=None, gate=None, wait_cancel=False) -> None:
         self.fundamentals = _FakeFundamentals()
         self._result = result if result is not None else []
@@ -99,6 +102,9 @@ def _runner(service: _FakeService, tmp_path) -> JobRunner:
 
 def _client(runner: JobRunner) -> TestClient:
     app.dependency_overrides[get_job_runner] = lambda: runner
+    # the candidate-detail fragment now asks the service for the company profile, so these
+    # lifespan-less clients need a service too
+    app.dependency_overrides.setdefault(get_service, lambda: _FakeService())
     return TestClient(app)
 
 
@@ -936,3 +942,24 @@ def test_search_threads_side_into_sort_links_and_export() -> None:
         assert "AAA-calls.csv" in csv.headers["content-disposition"]
     finally:
         app.dependency_overrides.clear()
+
+
+def test_candidate_card_names_the_company(tmp_path) -> None:
+    """Clicking a row should say what the company actually does, not just its ticker."""
+    from wheel_screener.core.models import CompanyProfile
+
+    class _WithProfile(_FakeService):
+        def company_profile(self, symbol):
+            return CompanyProfile(
+                symbol=symbol, name="Anon Incorporated", sector="Technology",
+                industry="Software", description="Anon makes widgets for industry.",
+            )
+
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA"))
+    app.dependency_overrides[get_service] = lambda: _WithProfile()
+    r = _client(runner).get("/runs/j/candidates/AAA")
+    assert r.status_code == 200
+    assert "Anon Incorporated" in r.text
+    assert "Technology" in r.text and "Software" in r.text
+    assert "Anon makes widgets" in r.text

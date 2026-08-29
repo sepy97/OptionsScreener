@@ -17,6 +17,7 @@ from wheel_screener.adapters.schwab.provider import SchwabChainProvider
 from wheel_screener.config import Settings
 from wheel_screener.core.ports import (
     ChainProvider,
+    CompanyProfileProvider,
     FundamentalReportProvider,
     FundamentalsProvider,
 )
@@ -67,12 +68,23 @@ def _build_reports(settings: Settings) -> FundamentalReportProvider | None:
     return FundcoreReportProvider(key, settings.fundcore)
 
 
+def _build_profiles(fundamentals: FundamentalsProvider) -> CompanyProfileProvider | None:
+    """The fundamentals source doubles as the profile source when it can serve one.
+
+    The local store already holds company descriptions, so this costs no extra call and no extra
+    credential; a source that can't answer simply leaves the tabs showing a bare ticker.
+    """
+    return fundamentals if isinstance(fundamentals, CompanyProfileProvider) else None
+
+
 def build_service(settings: Settings | None = None) -> ScreenerService:
     settings = settings or Settings()
+    fundamentals = _build_fundamentals(settings)
     return ScreenerService(
-        fundamentals=_build_fundamentals(settings),
+        fundamentals=fundamentals,
         chains=_build_chains(settings),
         reports=_build_reports(settings),
+        profiles=_build_profiles(fundamentals),
     )
 
 

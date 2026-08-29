@@ -221,6 +221,9 @@ def _core_report():
 
 
 class _StubService:
+
+    def company_profile(self, symbol):
+        return None  # optional context; the templates render nothing without it
     def __init__(self, report=None, error=None):
         self._report, self._error = report, error
         self.calls = []

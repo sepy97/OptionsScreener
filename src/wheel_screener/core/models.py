@@ -179,6 +179,24 @@ class FundamentalRating(BaseModel):
     strength_scores: dict[str, float] = Field(default_factory=dict)  # absolute factor scores 0..1
 
 
+class CompanyProfile(BaseModel):
+    """Who a ticker actually is — the context a symbol alone doesn't give.
+
+    Deliberately small: enough to answer "what does this company do" beside a contract, not a
+    dossier. ``description`` is the provider's own prose and can run to several paragraphs, so
+    callers truncate for display rather than storing a shortened copy.
+    """
+
+    symbol: str
+    name: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    description: str | None = None
+    website: str | None = None
+    country: str | None = None
+    employees: int | None = None
+
+
 class ReportCell(BaseModel):
     """One metric in one period. ``grade`` is 1.0 great / 0.5 ok / 0.0 poor, or None when the
     provider had no value — blank, which is a different statement from a failing score."""

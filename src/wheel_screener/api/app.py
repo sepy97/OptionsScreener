@@ -253,6 +253,24 @@ def _grade_class(grade: object) -> str:
 templates.env.filters["grade_class"] = _grade_class
 
 
+def _short(text: object, limit: int = 260) -> str:
+    """Trim provider prose to a readable blurb, preferring a sentence end over a hard cut."""
+    if not isinstance(text, str) or not text.strip():
+        return ""
+    flat = " ".join(text.split())
+    if len(flat) <= limit:
+        return flat
+    cut = flat[:limit]
+    stop = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    if stop >= limit * 0.5:  # a sentence ended late enough to still say something
+        return cut[: stop + 1]
+    space = cut.rfind(" ")
+    return (cut[:space] if space > 0 else cut).rstrip(",;:") + "\u2026"
+
+
+templates.env.filters["short"] = _short
+
+
 # The pipeline logs one stage line each (captured into job['progress']); we recover the funnel
 # counts from those strings so a finished screen can show Universe -> ... -> Candidates, with no
 # pipeline instrumentation. %d formatting means no thousands commas, so \d+ matches cleanly.
@@ -572,7 +590,8 @@ def search_route(
         request, "_search.html",
         {"result": result, "top_n": top_n, "sort_key": sort, "sort_order": order,
          "min_dte": min_dte, "max_dte": max_dte, "target_delta": target_delta,
-         "side": result.side.value},
+         "side": result.side.value,
+         "profile": service.company_profile(result.symbol)},
     )
 
 
@@ -647,7 +666,9 @@ def fundamentals_route(
     except ProviderError as e:
         return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
     return templates.TemplateResponse(
-        request, "_fundamentals.html", {"report": report, "period": report.period},
+        request, "_fundamentals.html",
+        {"report": report, "period": report.period,
+         "profile": service.company_profile(report.symbol)},
     )
 
 
@@ -744,7 +765,9 @@ def run_results(
 
 @app.get("/runs/{job_id}/candidates/{symbol}")
 def run_candidate(
-    request: Request, job_id: str, symbol: str, runner: JobRunner = Depends(get_job_runner)
+    request: Request, job_id: str, symbol: str,
+    runner: JobRunner = Depends(get_job_runner),
+    service: ScreenerService = Depends(get_service),
 ):
     """Candidate detail fragment (row-expand) — keyed by symbol so it survives re-sorting."""
     job = runner.get(job_id)
@@ -755,7 +778,10 @@ def run_candidate(
         return templates.TemplateResponse(
             request, "_error.html", {"message": "unknown candidate"}, status_code=404
         )
-    return templates.TemplateResponse(request, "_candidate.html", {"c": cand})
+    return templates.TemplateResponse(
+        request, "_candidate.html",
+        {"c": cand, "profile": service.company_profile(symbol)},
+    )
 
 
 @app.get("/runs/{job_id}/export.csv")

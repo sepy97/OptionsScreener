@@ -1,4 +1,5 @@
 {% import "_icons.html" as icon %}
+{% import "_company.html" as co %}
 {% set r = result %}
 {% set rows = r.contracts %}
 {% set n = rows|length %}
@@ -41,7 +42,8 @@
     {% elif not r.earnings_known %}<span class="badge" title="no earnings date could be established for this ticker — treat every expiry as event risk">{{ icon.warning() }} earnings date unknown</span>{% endif %}
     {% if rows %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}&min_dte={{ s_min_dte }}&max_dte={{ s_max_dte }}&target_delta={{ s_target_delta }}&side={{ s_side }}"
        role="button" class="secondary outline export-btn" download>{{ icon.download() }} Export CSV</a>{% endif %}
-  </header>
+  {{ co.company(profile|default(none)) }}
+</header>
   {% if rows %}
   <figure>
     <table>

@@ -1,0 +1,19 @@
+{# Who a ticker actually is. Shared by the screener's row-expand, the ticker search and the
+   fundamentals report so the same company reads the same way wherever you meet it.
+   Renders nothing at all when the deployment can't supply a profile. #}
+{%- macro company(profile) -%}
+{%- if profile -%}
+<div class="company">
+  {%- if profile.name %}<span class="company-name">{{ profile.name }}</span>{% endif -%}
+  {%- if profile.sector or profile.industry %}
+  <span class="company-tags">
+    {{- profile.sector or "" }}{% if profile.sector and profile.industry %} · {% endif %}
+    {{- profile.industry or "" -}}
+  </span>
+  {%- endif -%}
+  {%- if profile.description %}
+  <p class="company-desc">{{ profile.description | short }}</p>
+  {%- endif -%}
+</div>
+{%- endif -%}
+{%- endmacro -%}

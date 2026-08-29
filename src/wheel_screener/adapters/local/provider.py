@@ -18,7 +18,12 @@ import polars as pl
 
 from wheel_screener.adapters.local.overlay import OVERLAY_FILENAME, read_overlay
 from wheel_screener.core.errors import ProviderDataError
-from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
+from wheel_screener.core.models import (
+    CompanyProfile,
+    FundamentalMetrics,
+    ScreenCriteria,
+    Underlying,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +69,13 @@ class _EarningsSource(Protocol):
     def next_earnings(self, symbol: str, on_or_after: date) -> date | None: ...
 
 
+def _to_int(raw: object) -> int | None:
+    try:
+        return int(float(raw))  # the CSVs are read as strings; employees arrives as "12345"
+    except (TypeError, ValueError):
+        return None
+
+
 class LocalFundamentalsProvider:
     def __init__(self, data_dir: str, earnings_provider: _EarningsSource | None = None) -> None:
         self._dir = Path(os.path.expanduser(data_dir))
@@ -73,6 +85,10 @@ class LocalFundamentalsProvider:
         self._overlay: dict[str, FundamentalMetrics] | None = None  # fresh per-symbol refreshes
         self._overlay_mtime: float | None = None
         self._lock = threading.Lock()  # guards lazy load + overlay reload when shared (web)
+        # Profiles are looked up one symbol at a time and memoised. The description column is
+        # deliberately NOT part of the resident frame (see _PROFILE_COLS) — across 90k rows it
+        # would undo the lazy load's memory win for text almost no request needs.
+        self._profile_cache: dict[str, CompanyProfile | None] = {}
 
     # --- loading (lazy: scan + project so only the needed columns ever materialize) ----------
     def _scan(self, name: str) -> pl.LazyFrame:
@@ -202,6 +218,54 @@ class LocalFundamentalsProvider:
             for r in df.iter_rows(named=True)
             if r["symbol"]
         ]
+
+    # Columns worth reading for a profile lookup. Only ever materialised for ONE row.
+    _PROFILE_DETAIL_COLS = (
+        "symbol", "companyName", "sector", "industry", "description",
+        "website", "country", "fullTimeEmployees",
+    )
+
+    def company_profile(self, symbol: str) -> CompanyProfile | None:
+        """Identity and description for one symbol, or None when it isn't in the store.
+
+        Reads the profile CSVs lazily and filters to the single row, so the fat description text
+        never materialises for the other ~90,000 companies. Measured ~20ms cold across 115MB;
+        memoised after that, since a profile only changes when the store is reloaded.
+        """
+        key = (symbol or "").strip().upper()
+        if not key:
+            return None
+        if key in self._profile_cache:
+            return self._profile_cache[key]
+
+        parts = sorted(self._dir.glob("profile-bulk_part*.csv"))
+        if not parts:
+            self._profile_cache[key] = None
+            return None
+        try:
+            scan = pl.concat([pl.scan_csv(p, infer_schema_length=0) for p in parts])
+            available = [c for c in self._PROFILE_DETAIL_COLS if c in scan.collect_schema().names()]
+            row = scan.select(available).filter(pl.col("symbol") == key).head(1).collect()
+        except Exception as e:  # noqa: BLE001 - context is optional; never fail a page for it
+            logger.warning("profile lookup failed for %s: %s", key, e)
+            return None
+
+        profile = None
+        if row.height:
+            r = row.row(0, named=True)
+            profile = CompanyProfile(
+                symbol=key,
+                name=r.get("companyName") or None,
+                sector=r.get("sector") or None,
+                industry=r.get("industry") or None,
+                description=r.get("description") or None,
+                website=r.get("website") or None,
+                country=r.get("country") or None,
+                employees=_to_int(r.get("fullTimeEmployees")),
+            )
+        if len(self._profile_cache) < 2048:  # bounded: a profile is ~1KB
+            self._profile_cache[key] = profile
+        return profile
 
     def known_symbols(self) -> set[str]:
         """Every symbol in the bulk store (used by refresh-fundamentals to scope reporters)."""

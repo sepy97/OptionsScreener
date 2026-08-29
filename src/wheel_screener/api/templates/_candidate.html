@@ -1,4 +1,5 @@
 {% import "_icons.html" as icon %}
+{% import "_company.html" as co %}
 {% set k = c.contract %}
 {# default(none)/default([]): old stored snapshots predate these fields, so the key may be absent #}
 {% set fs = c.fundamental_score|default(none) %}
@@ -36,6 +37,7 @@
         {% for n in notes %}<span class="detail-note">{{ n }}</span>{% endfor %}
       </div>
       {% endif %}
+      {{ co.company(profile|default(none)) }}
       <dl class="card-grid">
         <dt>Contract</dt>
         <dd><b>${{ k.strike|num2 }}</b> strike &middot; {{ k.expiration }} &middot; {{ k.dte }} DTE
