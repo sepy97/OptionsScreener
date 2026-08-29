@@ -30,6 +30,7 @@ from pydantic import ValidationError
 from wheel_screener import __version__
 from wheel_screener.adapters.schwab.link import SchwabOAuthLink
 from wheel_screener.api.deps import get_job_runner, get_service, get_settings
+from wheel_screener.api.expiries import DTE_HORIZON_DAYS, expiry_ladder, next_monthly
 from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
 from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
@@ -580,6 +581,9 @@ def screener_page(request: Request, runner: JobRunner = Depends(get_job_runner))
         {
             "active_tab": "screener",
             "defaults": ScreenRequest(), "latest": latest, "latest_age": age,
+            "expiries": expiry_ladder(date.today(), DTE_HORIZON_DAYS),
+            "next_monthly": next_monthly(date.today(), DTE_HORIZON_DAYS),
+            "dte_horizon": DTE_HORIZON_DAYS,
             "latest_stale": stale,
             "summary": _results_summary(latest["result"] if latest else None),
         },
@@ -853,14 +857,11 @@ def start_run(
     min_yield: str = Form("0.10"),
     min_dte: int = Form(21),
     max_dte: int = Form(35),
-    timeout_seconds: str = Form(""),
     min_price: float = Form(20.0),
     max_price: float = Form(200.0),
     target_delta: float = Form(0.20),
     max_abs_delta: float = Form(0.30),
     min_open_interest: int = Form(100),
-    max_spread_pct: float = Form(1.0),
-    min_premium: float = Form(0.30),
     min_iv: str = Form(""),
     min_score: str = Form(""),
     runner: JobRunner = Depends(get_job_runner),
@@ -870,11 +871,10 @@ def start_run(
             top_n=top_n, fundamental_weight=fundamental_weight,
             min_dollar_volume=float((min_dollar_volume or "").replace(",", "").strip() or 0),
             min_yield=_opt_float(min_yield),
-            min_dte=min_dte, max_dte=max_dte, timeout_seconds=_opt_float(timeout_seconds),
+            min_dte=min_dte, max_dte=max_dte,
             min_price=min_price, max_price=max_price,
             target_delta=target_delta, max_abs_delta=max_abs_delta,
-            min_open_interest=min_open_interest, max_spread_pct=max_spread_pct,
-            min_premium=min_premium,
+            min_open_interest=min_open_interest,
             min_iv=_opt_float(min_iv),
             min_score=_opt_float(min_score),
         )

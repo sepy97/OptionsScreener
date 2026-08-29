@@ -76,27 +76,24 @@ def test_select_put_applies_gates():
     assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # bid 0 = unsellable
 
 
-def test_a_wide_percentage_spread_is_kept_but_a_non_market_is_not():
-    """Percentage spread scales inversely with premium, and this strategy sells cheap far-OTM
-    puts — so a tight percentage cap rejects the field by arithmetic rather than by liquidity.
-    The gate is a junk-quote guard now; open interest and min_premium do the real work."""
+def test_the_spread_cap_and_premium_floor_no_longer_gate_strike_selection():
+    """Both were junk-quote guards and both measured nearly inert on a live screen — switching
+    them off changed the result by 1 and 3 names. What they were guarding is covered better
+    elsewhere: a contract still needs a real bid to be priceable, and a token credit is rejected
+    by the annualized-yield floor, which weighs it against the collateral actually tied up
+    instead of against a flat dollar threshold. The spread survives as a results COLUMN — an
+    exit cost the user can see, rather than a silent cut."""
+    from wheel_screener.core.ranking import annualized_csp_yield
+
     crit = ScreenCriteria(min_dte=30, max_dte=45)
-    wide = _put(90, -0.20, 40, 1.5, spread=0.5)   # 40% of mid — a real, if wide, market
+    wide = _put(90, -0.20, 40, 1.5, spread=5.0)   # 143% of mid — once rejected outright
     assert select_put(_chain([wide]), crit) is not None
-    junk = _put(90, -0.20, 40, 1.5, spread=5.0)   # 143% of mid — a $0.01-bid style non-market
-    assert select_put(_chain([junk]), crit) is None
-    tight = crit.model_copy(update={"max_bid_ask_spread_pct": 0.10})
-    assert select_put(_chain([wide]), tight) is None, "the old cap stays available on request"
-
-
-def test_min_premium_floor_replaces_what_the_spread_cap_was_doing():
-    """A few cents of credit isn't worth tens of thousands in collateral, and a real bid is a
-    better sign of a real market than a percentage computed off a stale quote."""
-    crit = ScreenCriteria(min_dte=30, max_dte=45)
-    assert select_put(_chain([_put(90, -0.20, 40, 0.29)]), crit) is None   # under the floor
-    assert select_put(_chain([_put(90, -0.20, 40, 0.30)]), crit) is not None  # exactly on it
-    off = crit.model_copy(update={"min_premium": 0.0})
-    assert select_put(_chain([_put(90, -0.20, 40, 0.05)]), off) is not None  # opt out entirely
+    thin = _put(90, -0.20, 40, 0.05)              # a 5c credit — once under the 30c floor
+    assert select_put(_chain([thin]), crit) is not None
+    # ...and this is what disqualifies the thin one instead: 5c on a $90 strike for 40 days is
+    # 0.5%/yr, an order of magnitude under the form's 10% floor.
+    assert annualized_csp_yield(0.05, 90, 40) < 0.10
+    assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # no bid = no market
 
 
 def test_select_put_min_iv_floor():

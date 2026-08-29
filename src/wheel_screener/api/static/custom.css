@@ -275,3 +275,73 @@ tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); 
 .balance.headline { border-color: var(--wheel-accent); background: var(--wheel-accent-soft); }
 .balance.headline dd { font-size: 1.4rem; font-weight: 700; color: var(--wheel-accent-strong); }
 .balance .detail-note { margin: 0.2rem 0 0; }
+
+/* ── DTE window: a two-thumb range drawn over the real expiry ladder ─────────────────── */
+.dte-field { position: relative; }
+.dte-note {
+  display: block; color: var(--pico-muted-color); font-weight: 400;
+  margin: -0.15rem 0 0.6rem;
+}
+.dte-note strong { color: var(--ink); font-variant-numeric: tabular-nums; }
+
+/* Bar height encodes how broadly an expiry is listed: monthlies exist on every optionable
+   name, weeklies only on the liquid subset. Ticks sit at their true position on the scale,
+   so the gap between two monthlies is visible as a gap. */
+.dte-ladder { position: relative; height: 40px; margin: 0 10px 2px; }
+.dte-tick {
+  position: absolute; bottom: 0; width: 5px; transform: translateX(-50%);
+  background: var(--border); border-radius: 2px 2px 0 0;
+  transition: background 0.12s ease;
+}
+.dte-tick.is-monthly { width: 7px; background: rgba(16, 24, 40, 0.22); }
+.dte-tick.in-range { background: var(--wheel-accent); }
+.dte-tick.is-monthly.in-range { background: var(--wheel-accent-strong); }
+
+.dte-slider { position: relative; height: 26px; margin: 0 10px; }
+.dte-track, .dte-fill {
+  position: absolute; top: 50%; height: 4px; margin-top: -2px; border-radius: 2px;
+}
+.dte-track { left: 0; right: 0; background: var(--border); }
+.dte-fill { background: var(--ink); }
+
+.dte-thumb {
+  /* A native range insets its thumb by half a thumb-width at each end, so an input sized to
+     the track puts value=min ~10px right of 0%. Overhanging by that much on both sides lines
+     the thumb centres up with the track ends -- and with the ladder ticks above, which are
+     positioned on the same 10px inset. */
+  position: absolute; left: -10px; top: 0; width: calc(100% + 20px);
+  margin: 0; padding: 0; height: 26px; background: none; border: 0; box-shadow: none;
+  -webkit-appearance: none; appearance: none;
+  pointer-events: none;  /* the track is inert; only the thumbs take the pointer */
+}
+.dte-thumb:focus { outline: none; box-shadow: none; }
+.dte-thumb::-webkit-slider-runnable-track { background: none; border: 0; height: 26px; }
+.dte-thumb::-moz-range-track { background: none; border: 0; height: 26px; }
+.dte-thumb::-webkit-slider-thumb {
+  -webkit-appearance: none; pointer-events: auto; cursor: grab;
+  width: 20px; height: 20px; margin-top: 3px; border-radius: 50%;
+  background: var(--ink); border: 0; box-shadow: var(--shadow);
+}
+.dte-thumb::-moz-range-thumb {
+  pointer-events: auto; cursor: grab;
+  width: 20px; height: 20px; border-radius: 50%;
+  background: var(--ink); border: 0; box-shadow: var(--shadow);
+}
+.dte-thumb::-webkit-slider-thumb:active { cursor: grabbing; }
+.dte-thumb:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px var(--wheel-accent-soft); }
+.dte-thumb:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px var(--wheel-accent-soft); }
+
+.dte-boxes { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; margin-top: 0.9rem; }
+.dte-boxes label {
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 0.5rem 0.75rem;
+  font-size: 0.75rem; font-weight: 500; color: var(--pico-muted-color); margin: 0;
+}
+.dte-boxes label:focus-within { border-color: var(--wheel-accent); }
+.dte-boxes input {
+  border: 0; padding: 0; margin: 0; height: auto; background: none; box-shadow: none;
+  font-size: 1.35rem; font-weight: 600; color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.dte-boxes input:focus { outline: none; box-shadow: none; }
+/* the DTE block is much taller than the segmented control beside it */
+.grid-top { align-items: start; }

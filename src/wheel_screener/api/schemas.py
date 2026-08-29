@@ -23,22 +23,13 @@ class ScreenRequest(BaseModel):
     min_yield: float | None = Field(0.10, ge=0.0, description="Drop candidates below this yield.")
     min_dte: int = Field(21, ge=1, le=400)  # ~3 weeks
     max_dte: int = Field(35, ge=1, le=400)  # ~5 weeks
-    timeout_seconds: float | None = Field(
-        600.0, gt=0.0, description="Wall-clock budget (default 10 min); past it, partial results."
-    )
     # options-quality knobs (were engine-internal; now user-adjustable)
     min_price: float = Field(20.0, ge=0.0, description="Underlying price floor.")
-    max_price: float = Field(200.0, gt=0.0, description="Underlying price ceiling.")
+    max_price: float = Field(500.0, gt=0.0, description="Underlying price ceiling.")
     # entered as a positive magnitude (0.20); negated to the put's signed delta in to_criteria.
     target_delta: float = Field(0.20, gt=0.0, le=1.0, description="Target put |delta|.")
     max_abs_delta: float = Field(0.30, gt=0.0, le=1.0, description="Widest |delta| kept.")
     min_open_interest: int = Field(100, ge=0, description="Contract open-interest floor.")
-    max_spread_pct: float = Field(
-        1.0, gt=0.0, le=1.0, description="Junk-quote guard, not a tightness filter."
-    )
-    min_premium: float = Field(
-        0.30, ge=0.0, description="Smallest per-share credit worth selling."
-    )
     min_iv: float | None = Field(None, ge=0.0, description="Optional IV floor (blank=off).")
 
     @model_validator(mode="after")
@@ -61,13 +52,10 @@ class ScreenRequest(BaseModel):
             min_annualized_yield=self.min_yield,
             min_dte=self.min_dte,
             max_dte=self.max_dte,
-            max_runtime_seconds=self.timeout_seconds,
             min_price=self.min_price,
             max_price=self.max_price,
             target_delta=-abs(self.target_delta),  # puts have negative delta
             max_abs_delta=self.max_abs_delta,
             min_open_interest=self.min_open_interest,
-            max_bid_ask_spread_pct=self.max_spread_pct,
-            min_premium=self.min_premium,
             min_iv=self.min_iv,
         )
