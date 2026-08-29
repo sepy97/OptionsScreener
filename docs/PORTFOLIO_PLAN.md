@@ -9,7 +9,8 @@ part that goes stale fastest. Target release: **v2.0.0**.
 |---|---|
 | Auth posture for account data | **decided: Sign in with Schwab** (section 1a) |
 | Multi-broker support | designed for from day one, Schwab implemented first (section 1b) |
-| Schwab callback URL changed in the developer portal | not started |
+| Schwab app has **Accounts and Trading** entitlement | **UNKNOWN — settle first, it sizes P0** |
+| Callback URL | chosen: `https://steadybull.net/oauth/schwab/callback` — not yet registered |
 | Read-only invariant | agreed (see Security) |
 | Release label | v2.0.0 |
 
@@ -85,7 +86,7 @@ view another, and mandatory `state` verification.
 risky code small; it was dropped in favour of building the real thing once. The rest of this
 document assumes it.
 
-The gate must also cover **`/portfolio/schwab/callback`** — that route carries the authorization
+The gate must also cover **`/oauth/schwab/callback`** — that route carries the authorization
 code.
 
 ---
@@ -230,7 +231,7 @@ So the flow really is one click:
 ```
 
 **External prerequisite, likely the longest pole:** the Schwab app registers
-`https://127.0.0.1:8182` today. It needs `https://steadybull.net/portfolio/schwab/callback`.
+`https://127.0.0.1:8182` today. It needs `https://steadybull.net/oauth/schwab/callback`.
 Schwab app edits can require re-approval, so start this early. Check whether **both** callbacks can
 be registered — otherwise the local `auth-login` flow stops working.
 
@@ -312,7 +313,7 @@ Follows the shape already used for chains and for fundamental reports.
 | Adapter | `adapters/schwab/account.py` over `get_account_numbers()` + `get_account(hash, fields=POSITIONS)` |
 | Models | `BrokerageAccount` (cash, buying power, equity) · `Position` (equity and option legs) |
 | Service | `portfolio()`, returning `None` when not connected |
-| Routes | `GET /portfolio` · `GET /portfolio/schwab/connect` · `GET /portfolio/schwab/callback` · `POST /portfolio/schwab/disconnect` |
+| Routes | `GET /portfolio` · `GET /oauth/schwab/connect` · `GET /oauth/schwab/callback` · `POST /oauth/schwab/disconnect` |
 
 Schwab allows ~120 req/min; a portfolio view is 2 calls. Cache briefly (30–60s) so a refresh spree
 can't burn the budget.
@@ -353,9 +354,65 @@ rather than left as "later".
 
 ---
 
+## 6a. P0 in detail
+
+Three tracks. Track A is cheap, needs nothing from anyone, and determines how large the others are —
+so it goes first.
+
+### Track A — does the Schwab app have account access at all?
+
+The existing app was created for **market data** (option chains). Reading balances needs the
+**Accounts and Trading** product, a separate entitlement. If it is missing, P0 is not "change a URL",
+it is "get a second app approved", and that becomes the critical path for the whole feature.
+
+This is answerable today with no portal change and no code, because the loopback callback is still
+registered:
+
+```bash
+uv run wheel-screener auth-login          # browser login, ~1 min
+uv run python -c "
+from wheel_screener.adapters.schwab.auth import load_client
+from wheel_screener.config import Settings
+r = load_client(Settings().schwab).get_account_numbers()
+print(r.status_code, r.text[:300])
+"
+```
+
+- **200 + accounts** -> entitled; P0 shrinks to the callback URL.
+- **401 / 403 / empty** -> market-data only; a new or amended app is needed, with its own approval.
+
+### Track B — the callback URL (portal; has approval latency)
+
+**`https://steadybull.net/oauth/schwab/callback`**, decided once. Changing it later costs another
+approval cycle, so it is fixed now. `/oauth/{broker}/callback` rather than a path under
+`/portfolio` because this flow *is* the login, not a portfolio implementation detail, and it scales
+when a second broker arrives.
+
+Register it, and keep `https://127.0.0.1:8182` alongside if Schwab permits multiple callbacks —
+otherwise local `auth-login` stops working, and with it Track A's trick.
+
+**Verification needs no code.** Once approved, build the authorize URL, open it, log in, and watch
+where the browser lands. A **404 on steadybull.net carrying `?code=…` is success**: it proves
+registration, approval, HTTPS and exact-match all work. The route itself does not exist until P2.
+
+### Track C — droplet prep (no waiting)
+
+```bash
+# /srv/steadybull/.env
+SCHWAB__CLIENT_ID=...
+SCHWAB__CLIENT_SECRET=...
+AUTH__SESSION_SECRET=$(openssl rand -hex 32)
+
+sudo mkdir -p /srv/steadybull/data/links
+sudo chown -R 10001:10001 /srv/steadybull/data/links
+```
+
+---
+
 ## 7. Phases
 
-- [ ] **P0 — decisions + Schwab app callback change.** Blocking, with external latency.
+- [ ] **P0 — entitlement check, callback URL, droplet prep.** See 6a. Track A first: it sizes
+      the rest and needs nothing from the portal.
 - [ ] **P1 — balances.** Port, models, adapter and a `wheel-screener balances` CLI command.
       Deliberately web-free and positions-free: the smallest thing that proves the credentials, the
       account lookup and the mapping all work, checkable against the Schwab app by eye.
