@@ -129,6 +129,11 @@ SCHWAB__CLIENT_ID=...
 SCHWAB__CLIENT_SECRET=...
 ```
 
+`SCHWAB__CALLBACK_URL` is set by `docker-compose.yml`, not `.env` — it defaults to a loopback
+address for the CLI's local login flow, and a deploy that inherited that default would send the
+visitor's browser to their own machine with the authorization code attached. The web sign-in stays
+disabled (the tab says the broker isn't set up) until the callback points at this site.
+
 ```bash
 sudo mkdir -p /srv/steadybull/data/links
 sudo chown -R 10001:10001 /srv/steadybull/data/links

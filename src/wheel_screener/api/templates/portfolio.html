@@ -4,7 +4,11 @@
   <article>
     <h2>Portfolio</h2>
     {% set schwab = links.get('schwab') %}
-    {% if not session %}
+    {% if not session and not (schwab and schwab.configured) %}
+      {# Nothing to sign in to. Offering a button that errors is worse than saying so. #}
+      <p class="tab-lede">No brokerage is set up on this deployment yet, so there is nothing to
+        connect to. Once one is configured, signing in happens here in one click.</p>
+    {% elif not session %}
       {# No session: the only thing this page may show is a way in. #}
       <p class="tab-lede">Connect a brokerage account to see what it holds. You sign in at the
         broker &mdash; this site never sees your credentials, and only ever reads.</p>
