@@ -23,6 +23,11 @@ services:
       EARNINGS_PATH: /data/earnings_calendar.csv
       JOBS_DB_PATH: /data/jobs.sqlite
       LOG__DIR: /data/logs
+      # Portfolio state MUST live on the volume. Both default to paths inside the container, and
+      # a deploy replaces the container — so leaving them would sign every session out and destroy
+      # the broker link on each release, looking like "Schwab keeps disconnecting".
+      PORTFOLIO__SESSIONS_DB_PATH: /data/sessions.sqlite
+      SCHWAB__TOKEN_PATH: /data/links/schwab_token.json
     volumes:
       # host ./data holds the slim store (fundamentals/), jobs DB, logs.
       # the container runs as uid 10001 — `sudo chown -R 10001:10001 ./data` first (see DEPLOY.md).

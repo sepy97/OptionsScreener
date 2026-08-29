@@ -117,6 +117,31 @@ docker compose up -d --build
 Later: `MINOR` for features, `PATCH` for hotfixes (both deploy), `MAJOR` when a release needs a
 manual migration step. (A GitHub Action to deploy automatically on a `vX.Y.Z` tag is step #6.)
 
+## Portfolio tab (optional)
+
+The tab appears for everyone, but it can only connect a broker once Schwab credentials are on the
+droplet. Without them, clicking *Sign in with Schwab* shows a configuration error and nothing else
+in the app is affected.
+
+```
+# /srv/steadybull/.env
+SCHWAB__CLIENT_ID=...
+SCHWAB__CLIENT_SECRET=...
+```
+
+```bash
+sudo mkdir -p /srv/steadybull/data/links
+sudo chown -R 10001:10001 /srv/steadybull/data/links
+```
+
+The session store and the broker token are written to the mounted volume (`compose` sets
+`PORTFOLIO__SESSIONS_DB_PATH` and `SCHWAB__TOKEN_PATH`) — a deploy replaces the container, so
+anything left inside it would be destroyed on every release.
+
+The Schwab app must also have the **Accounts and Trading** product and must register
+`https://steadybull.net/portfolio/oauth/schwab/callback` as a callback URL. Schwab authorisations
+last 7 days; reconnecting is a weekly click that doubles as the login.
+
 ## Diagnosing a broken data connection
 
 ```bash
