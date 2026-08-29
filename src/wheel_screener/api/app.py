@@ -258,6 +258,9 @@ templates.env.filters["grade_class"] = _grade_class
 # pipeline instrumentation. %d formatting means no thousands commas, so \d+ matches cleanly.
 _FUNNEL_STAGES = (
     ("Universe", re.compile(r"^universe: (\d+) names")),
+    # The pre-rank cut used to be invisible here, which is how it went unnoticed that it —
+    # not top_n — was deciding how many names ever reached a chain.
+    ("Rated", re.compile(r"^prerank: (\d+)/")),
     ("Fundamentals", re.compile(r"^fundamentals: (\d+)/")),
     ("Chains", re.compile(r"^chains: (\d+)/")),
 )
@@ -651,7 +654,7 @@ def fundamentals_route(
 @app.post("/runs")
 def start_run(
     request: Request,
-    top_n: int = Form(150),
+    top_n: int = Form(400),
     fundamental_weight: float = Form(0.5),
     min_dollar_volume: str = Form("25,000,000"),   # accountant-formatted; commas stripped below
     min_yield: str = Form("0.10"),

@@ -470,3 +470,65 @@ def test_screen_stays_put_only():
     out = service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE)
     assert chains.requested_types == [OptionType.PUT]
     assert all(c.contract.option_type is OptionType.PUT for c in out)
+
+
+def test_top_n_is_not_silently_overridden_by_the_prerank_cap() -> None:
+    """The pre-rank cap used to override top_n without saying so, which made the caller's
+    "check N names" a no-op above ~prerank_keep — a control that looked live and did nothing."""
+    from wheel_screener.core.earnings import EarningsGuard
+    from wheel_screener.core.models import EarningsPolicy, Underlying
+    from wheel_screener.core.pipeline.rate_fundamentals import rate_and_rank
+
+    names = [
+        Underlying(symbol=f"S{i:03}", price=100.0, market_cap=1e10, sector="Tech")
+        for i in range(300)
+    ]
+    good = FundamentalMetrics(
+        pe=12.0, ps=1.0, pb=1.5, roe=0.25, roa=0.12, ros=0.15, eps=4.0,
+        debt_to_equity=0.5, current_ratio=2.0, net_debt_to_ebitda=1.0,
+        total_equity=1e9, net_income=1e8, free_cash_flow=1e8, ebitda=2e8,
+    )
+
+    class _Provider:
+        def bulk_metrics(self, symbols):
+            return dict.fromkeys(symbols, good)
+
+        def fetch_metrics(self, symbols):
+            return dict.fromkeys(symbols, good)
+
+    guard = EarningsGuard({}, date(2026, 8, 29), policy=EarningsPolicy.OFF)
+    crit = ScreenCriteria(prerank_keep=50, top_n=200)
+    kept = rate_and_rank(_Provider(), names, crit, date(2026, 8, 29), guard)
+    assert len(kept) == 200, "top_n must win when it asks for more than prerank_keep"
+
+
+def test_the_prerank_cap_gates_before_it_cuts() -> None:
+    """Gating is free, so cap slots must not be spent on names that are about to be gated out."""
+    from wheel_screener.core.earnings import EarningsGuard
+    from wheel_screener.core.models import EarningsPolicy, Underlying
+    from wheel_screener.core.pipeline.rate_fundamentals import rate_and_rank
+
+    ok = FundamentalMetrics(
+        pe=12.0, ps=1.0, pb=1.5, roe=0.25, roa=0.12, ros=0.15, eps=4.0,
+        debt_to_equity=0.5, current_ratio=2.0, net_debt_to_ebitda=1.0,
+        total_equity=1e9, net_income=1e8, free_cash_flow=1e8, ebitda=2e8,
+    )
+    loss = ok.model_copy(update={"eps": -1.0, "net_income": -1e8})  # loss_maker: a HARD failure
+    names = [
+        Underlying(symbol=f"S{i:03}", price=100.0, market_cap=1e10, sector="Tech")
+        for i in range(40)
+    ]
+
+    class _Provider:
+        # keyed off the SYMBOL, not list position, so the deep fetch can't reassign metrics
+        # to a different set of names than the pre-rank saw
+        def bulk_metrics(self, symbols):
+            return {s: (ok if int(s[1:]) % 2 == 0 else loss) for s in symbols}
+
+        def fetch_metrics(self, symbols):
+            return self.bulk_metrics(symbols)
+
+    guard = EarningsGuard({}, date(2026, 8, 29), policy=EarningsPolicy.OFF)
+    crit = ScreenCriteria(prerank_keep=10, top_n=10)
+    kept = rate_and_rank(_Provider(), names, crit, date(2026, 8, 29), guard)
+    assert len(kept) == 10, "all 10 slots should hold viable names, not gate-failures"

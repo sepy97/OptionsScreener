@@ -65,11 +65,15 @@ class ScreenCriteria(BaseModel):
     # lever against the chain-pull rate limit — fewer wasted calls on names that can't qualify
     min_dollar_volume: float = 25_000_000.0
     exchanges: list[str] = Field(default_factory=lambda: ["nasdaq", "nyse"])
-    prerank_keep: int = 150  # names kept after the cheap bulk pre-rank, for the deep fetch
+    # Bounds the DEEP fetch, which is free for the local store but ~5 API calls per name
+    # for the live FMP source. Always raised to at least top_n, or top_n would be inert.
+    prerank_keep: int = 1000
     universe_limit: int = 50  # deep-fetch cap (by market cap) when bulk pre-rank is unavailable
     # fundamentals
     stock_profile: StockProfile = StockProfile.STALWART
-    top_n: int = 50  # keep the top N (by peer percentile) for the chain pull
+    top_n: int = 400  # names to pull chains for. Raised once the pre-rank cap stopped
+    # silently overriding it: chains cost ~200/min per host, so 400 is ~2 min worst case,
+    # and capping tighter discards high-yield names before their yield is ever measured.
     min_fundamental_score: float | None = None  # 0..1 absolute-strength floor; None = keep top_n
     max_per_sector: int | None = None  # optional concentration cap on the top-N
     max_leverage: float = 4.0  # hard gate: net-debt/EBITDA ceiling

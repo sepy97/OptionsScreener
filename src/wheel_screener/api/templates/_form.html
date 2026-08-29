@@ -38,8 +38,9 @@
           same in every run</small>
       </label>
       <label>Names to check
-        <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="500">
-        <small>more = broader but slower (the chain pull is rate-limited)</small>
+        <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="1000">
+        <small>~200 chains/min, so 400 takes about two minutes. Capping tight hides high-yield
+          names: the cut ranks on fundamentals before any yield is measured</small>
       </label>
       <label>Min yield
         <input type="number" name="min_yield" step="0.01" min="0" value="{{ defaults.min_yield }}">
