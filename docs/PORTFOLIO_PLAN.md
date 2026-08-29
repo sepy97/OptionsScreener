@@ -250,6 +250,58 @@ than treated as an error:
 
 ---
 
+## 3a. First milestone: the balance
+
+The first thing built and shipped is **the account's money**, not its positions. It is the cheapest
+possible proof that every layer works end to end, and unlike positions it can be checked by eye
+against the Schwab app.
+
+`get_account(hash)` returns **balances by default** — positions are an opt-in `fields` parameter
+(verified against schwab-py 1.5.1). So the whole read path is two calls:
+
+```
+get_account_numbers()   -> account number -> hash
+get_account(hash)       -> balances, no fields=  (positions deliberately not requested)
+```
+
+### What to show
+
+| | |
+|---|---|
+| **Total value** | the headline number — what the account is worth |
+| **Cash** | for a wheel, this *is* the collateral pool |
+| **Invested** | long market value: what is tied up in positions |
+| **Buying power** | margin accounts only |
+
+Total / cash / invested is the right trio here: it answers "how much dry powder do I have" without
+needing a single position parsed.
+
+### The shape to design against
+
+Schwab returns `securitiesAccount` with a `type` of `CASH` or `MARGIN`, **and the balance objects
+differ between them** — a margin account reports buying power and maintenance requirement, a cash
+account reports cash available for trading. The adapter normalises both into one
+`AccountBalances` model rather than leaking that split upward:
+
+```
+AccountBalances: total_value · cash · long_market_value · buying_power (None on cash) ·
+                 account_type · as_of
+```
+
+**Exact field spellings are unverified** — they cannot be confirmed without a live account, and the
+same was true of FMP, where the adapter uses defensive `_pick`-style mapping for exactly this
+reason. Do the same here, and keep the raw payload available while developing (excluded from
+serialisation, as `OptionContract.raw` already is).
+
+### Acceptance
+
+**The numbers match the Schwab app.** That is the real test: a mapping whose field names cannot be
+verified from documentation is verified by comparison, and a unit test over a fixture only proves
+the fixture was transcribed faithfully. Capture one real payload as a fixture *after* it matches, so
+regressions are caught thereafter.
+
+---
+
 ## 4. Architecture
 
 Follows the shape already used for chains and for fundamental reports.
@@ -269,7 +321,8 @@ can't burn the budget.
 
 ## 5. What to show
 
-Generic position tables are the boring version. The valuable view is wheel-shaped:
+Generic position tables are the boring version. The valuable view is wheel-shaped — though note
+**balances ship first** (section 3a) and everything below lands in P4:
 
 - **Capacity** — cash and buying power minus collateral already committed. Answers "how much more
   can I sell?"
@@ -303,15 +356,18 @@ rather than left as "later".
 ## 7. Phases
 
 - [ ] **P0 — decisions + Schwab app callback change.** Blocking, with external latency.
-- [ ] **P1 — read path.** Port, adapter, models, and a `wheel-screener positions` CLI command.
-      Deliberately web-free: it proves the data model against a real account before any OAuth
-      plumbing exists.
+- [ ] **P1 — balances.** Port, models, adapter and a `wheel-screener balances` CLI command.
+      Deliberately web-free and positions-free: the smallest thing that proves the credentials, the
+      account lookup and the mapping all work, checkable against the Schwab app by eye.
 - [ ] **P2 — sessions + OAuth.** Session store and cookie, `state` issuance and verification,
       connect / callback / disconnect, token on the volume, Caddy log suppression for the callback.
-- [ ] **P3 — the tab.** Templates, the capacity / puts / shares views, and the never-connected and
-      expired states.
-- [ ] **P4 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture.
-- [ ] **P5 — cross-links** into screener and search.
+- [ ] **P3 — the tab, balances only.** Total / cash / invested, plus the never-connected and
+      expired states. Shippable on its own: a Portfolio tab that shows what the account is worth is
+      already useful.
+- [ ] **P4 — positions.** Short puts with assignment watch, share lots, committed collateral and
+      capacity. This is where option normalisation lands, which is why it is not in P1.
+- [ ] **P5 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture.
+- [ ] **P6 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
 - [ ] *(later)* **A second broker**, to prove the abstraction is real rather than Schwab wearing a
       trench coat.
