@@ -93,8 +93,9 @@ def _eligible_contracts(
 ) -> list[OptionContract]:
     """Contracts of ``option_type`` that pass the sellability gates: has a delta, DTE within
     [min,max] (±tolerance), |delta| <= max_abs_delta, open interest >= min, a real sellable bid
-    (>0), a computable bid/ask spread within the limit, (when a min_iv floor is set) a known IV >=
-    it, and — when a ``guard`` is supplied — no earnings report inside the contract's life.
+    (>0 and at least ``min_premium``), a bid/ask spread within the limit, (when a min_iv floor
+    is set) a known IV >= it, and — when a ``guard`` is supplied — no earnings report inside the
+    contract's life.
 
     The earnings check belongs HERE, not at the name level: it is the only stage that knows the
     expiration. Filtering by name against the DTE window instead both over-filters (a name
@@ -111,6 +112,7 @@ def _eligible_contracts(
         and (c.open_interest or 0) >= criteria.min_open_interest
         and c.bid is not None
         and c.bid > 0
+        and c.bid >= criteria.min_premium
         and c.spread_pct is not None
         and c.spread_pct <= criteria.max_bid_ask_spread_pct
         and (

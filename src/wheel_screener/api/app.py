@@ -258,6 +258,9 @@ templates.env.filters["grade_class"] = _grade_class
 # pipeline instrumentation. %d formatting means no thousands commas, so \d+ matches cleanly.
 _FUNNEL_STAGES = (
     ("Universe", re.compile(r"^universe: (\d+) names")),
+    # The pre-rank cut used to be invisible here, which is how it went unnoticed that it —
+    # not top_n — was deciding how many names ever reached a chain.
+    ("Rated", re.compile(r"^prerank: (\d+)/")),
     ("Fundamentals", re.compile(r"^fundamentals: (\d+)/")),
     ("Chains", re.compile(r"^chains: (\d+)/")),
 )
@@ -651,7 +654,7 @@ def fundamentals_route(
 @app.post("/runs")
 def start_run(
     request: Request,
-    top_n: int = Form(150),
+    top_n: int = Form(400),
     fundamental_weight: float = Form(0.5),
     min_dollar_volume: str = Form("25,000,000"),   # accountant-formatted; commas stripped below
     min_yield: str = Form("0.10"),
@@ -663,7 +666,8 @@ def start_run(
     target_delta: float = Form(0.20),
     max_abs_delta: float = Form(0.30),
     min_open_interest: int = Form(100),
-    max_spread_pct: float = Form(0.10),
+    max_spread_pct: float = Form(1.0),
+    min_premium: float = Form(0.30),
     min_iv: str = Form(""),
     min_score: str = Form(""),
     runner: JobRunner = Depends(get_job_runner),
@@ -677,6 +681,7 @@ def start_run(
             min_price=min_price, max_price=max_price,
             target_delta=target_delta, max_abs_delta=max_abs_delta,
             min_open_interest=min_open_interest, max_spread_pct=max_spread_pct,
+            min_premium=min_premium,
             min_iv=_opt_float(min_iv),
             min_score=_opt_float(min_score),
         )

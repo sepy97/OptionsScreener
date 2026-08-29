@@ -13,7 +13,7 @@ from wheel_screener.core.models import ScreenCriteria
 
 
 class ScreenRequest(BaseModel):
-    top_n: int = Field(150, ge=1, le=2000, description="Fundamental survivors to pull chains for.")
+    top_n: int = Field(400, ge=1, le=2000, description="Fundamental survivors to pull chains for.")
     fundamental_weight: float = Field(0.5, ge=0.0, le=1.0, description="1=quality, 0=yield.")
     min_score: float | None = Field(None, ge=0.0, le=1.0, description="Blended-score floor.")
     min_dollar_volume: float = Field(
@@ -33,7 +33,12 @@ class ScreenRequest(BaseModel):
     target_delta: float = Field(0.20, gt=0.0, le=1.0, description="Target put |delta|.")
     max_abs_delta: float = Field(0.30, gt=0.0, le=1.0, description="Widest |delta| kept.")
     min_open_interest: int = Field(100, ge=0, description="Contract open-interest floor.")
-    max_spread_pct: float = Field(0.10, gt=0.0, le=1.0, description="Max bid-ask spread fraction.")
+    max_spread_pct: float = Field(
+        1.0, gt=0.0, le=1.0, description="Junk-quote guard, not a tightness filter."
+    )
+    min_premium: float = Field(
+        0.30, ge=0.0, description="Smallest per-share credit worth selling."
+    )
     min_iv: float | None = Field(None, ge=0.0, description="Optional IV floor (blank=off).")
 
     @model_validator(mode="after")
@@ -63,5 +68,6 @@ class ScreenRequest(BaseModel):
             max_abs_delta=self.max_abs_delta,
             min_open_interest=self.min_open_interest,
             max_bid_ask_spread_pct=self.max_spread_pct,
+            min_premium=self.min_premium,
             min_iv=self.min_iv,
         )

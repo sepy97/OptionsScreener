@@ -59,6 +59,16 @@ def _cap_per_sector(names: list[Underlying], cap: int) -> list[Underlying]:
     return out
 
 
+# Reasons that mean "we could not judge", as opposed to "this name fails". A name is never
+# dropped at the cheap pre-rank stage for missing data — it goes to the deep fetch instead.
+_COVERAGE_REASONS = frozenset({"insufficient_data", "no_metrics"})
+
+
+def _hard_gate_reasons(metrics, criteria) -> list[str]:
+    """Gate failures that the cheap bulk metrics can decide on their own."""
+    return [r for r in gate_reasons(metrics, criteria) if r not in _COVERAGE_REASONS]
+
+
 def select_top(
     names: list[Underlying],
     criteria: ScreenCriteria,
@@ -109,12 +119,31 @@ def rate_and_rank(
     if bulk:
         for u in universe:
             u.metrics = bulk.get(u.symbol)
+        # Gate BEFORE the cap. Gating is free (it reads metrics we already hold), so spending
+        # cap slots on names that are about to be gated out is pure waste. Only HARD failures
+        # count here: the pre-rank metrics are the cheap bulk ones, so a name with thin coverage
+        # must survive to the deep fetch and be judged there, not dropped for missing data.
+        viable = [
+            u for u in universe
+            if u.metrics is not None and not _hard_gate_reasons(u.metrics, criteria)
+        ]
         prelim = rank_by_fundamentals(
-            [u for u in universe if u.metrics is not None],
-            criteria.factor_weights,
-            criteria.stock_profile,
+            viable, criteria.factor_weights, criteria.stock_profile
         )
-        keep = prelim[: criteria.prerank_keep]
+        cap = max(criteria.prerank_keep, criteria.top_n)
+        if criteria.top_n > criteria.prerank_keep:
+            # Without this the cap silently overrode top_n and the caller's "check N names" was
+            # a no-op above ~prerank_keep — the control looked live and did nothing.
+            logger.info(
+                "prerank_keep (%d) is below top_n (%d); raising the deep-fetch cap to %d so "
+                "top_n means what it says",
+                criteria.prerank_keep, criteria.top_n, cap,
+            )
+        keep = prelim[:cap]
+        logger.info(
+            "prerank: %d/%d names kept for the deep fetch (%d gated out first)",
+            len(keep), len(universe), len(universe) - len(viable),
+        )
     else:
         keep = sorted(universe, key=lambda u: u.market_cap or 0.0, reverse=True)[
             : criteria.universe_limit

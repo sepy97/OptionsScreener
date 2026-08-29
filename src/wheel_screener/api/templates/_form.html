@@ -38,8 +38,9 @@
           same in every run</small>
       </label>
       <label>Names to check
-        <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="500">
-        <small>more = broader but slower (the chain pull is rate-limited)</small>
+        <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="1000">
+        <small>~200 chains/min, so 400 takes about two minutes. Capping tight hides high-yield
+          names: the cut ranks on fundamentals before any yield is measured</small>
       </label>
       <label>Min yield
         <input type="number" name="min_yield" step="0.01" min="0" value="{{ defaults.min_yield }}">
@@ -84,10 +85,18 @@
         <input type="number" name="min_open_interest" value="{{ defaults.min_open_interest }}" min="0">
         <small>contract liquidity floor</small>
       </label>
+      <label>Min premium
+        <input type="number" name="min_premium" value="{{ defaults.min_premium }}"
+               min="0" step="0.05">
+        <small>smallest per-share credit worth selling &mdash; $0.30 on 100 shares is $30
+          against the collateral</small>
+      </label>
       <label>Max bid-ask spread
         <input type="number" name="max_spread_pct" value="{{ defaults.max_spread_pct }}"
-               min="0.01" max="1" step="0.01">
-        <small>0.10 = 10% of mid — wider allows looser fills</small>
+               min="0.01" max="1" step="0.05">
+        <small>a junk-quote guard, not a tightness filter &mdash; 1.00 keeps everything with a
+          real two-sided market. Cheap far-OTM puts have wide <em>percentage</em> spreads by
+          arithmetic, so a tight cap here silently removes most of the field</small>
       </label>
       <label>Min IV
         <input type="number" name="min_iv" value="{{ defaults.min_iv or '' }}"

@@ -17,7 +17,7 @@ def test_screen_criteria_defaults() -> None:
     assert c.target_delta == -0.20
     assert c.min_dte == 21
     assert c.max_dte == 35
-    assert c.top_n == 50
+    assert c.top_n == 400
     assert c.exchanges == ["nasdaq", "nyse"]
 
 

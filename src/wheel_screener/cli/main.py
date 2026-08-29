@@ -326,7 +326,7 @@ def _print_search(r: object) -> None:
 @app.command("refresh-screen")
 @handle_provider_errors
 def refresh_screen(
-    top_n: int = typer.Option(250, help="Fundamental survivors to pull chains for."),
+    top_n: int = typer.Option(400, help="Fundamental survivors to pull chains for."),
     min_dollar_volume: float = typer.Option(25_000_000.0, help="Avg daily $-volume floor."),
     fundamental_weight: float = typer.Option(0.5, help="Rank blend: 1=fundamentals, 0=yield."),
     min_score: float = typer.Option(
@@ -374,7 +374,7 @@ def candidates(
     min_dollar_volume: float = typer.Option(
         25_000_000.0, help="Skip stocks below this avg daily $-volume (0 = off)."
     ),
-    top_n: int = typer.Option(250, help="Fundamental survivors to pull chains for."),
+    top_n: int = typer.Option(400, help="Fundamental survivors to pull chains for."),
     min_yield: float = typer.Option(0.0, help="Drop candidates below this annualized yield."),
     fundamental_weight: float = typer.Option(
         0.5, help="Rank blend: 1.0 = all fundamentals, 0.0 = all yield."

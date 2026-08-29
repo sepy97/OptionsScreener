@@ -65,11 +65,15 @@ class ScreenCriteria(BaseModel):
     # lever against the chain-pull rate limit — fewer wasted calls on names that can't qualify
     min_dollar_volume: float = 25_000_000.0
     exchanges: list[str] = Field(default_factory=lambda: ["nasdaq", "nyse"])
-    prerank_keep: int = 150  # names kept after the cheap bulk pre-rank, for the deep fetch
+    # Bounds the DEEP fetch, which is free for the local store but ~5 API calls per name
+    # for the live FMP source. Always raised to at least top_n, or top_n would be inert.
+    prerank_keep: int = 1000
     universe_limit: int = 50  # deep-fetch cap (by market cap) when bulk pre-rank is unavailable
     # fundamentals
     stock_profile: StockProfile = StockProfile.STALWART
-    top_n: int = 50  # keep the top N (by peer percentile) for the chain pull
+    top_n: int = 400  # names to pull chains for. Raised once the pre-rank cap stopped
+    # silently overriding it: chains cost ~200/min per host, so 400 is ~2 min worst case,
+    # and capping tighter discards high-yield names before their yield is ever measured.
     min_fundamental_score: float | None = None  # 0..1 absolute-strength floor; None = keep top_n
     max_per_sector: int | None = None  # optional concentration cap on the top-N
     max_leverage: float = 4.0  # hard gate: net-debt/EBITDA ceiling
@@ -100,7 +104,18 @@ class ScreenCriteria(BaseModel):
     # ranking / liquidity gates
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
     min_open_interest: int = 100
-    max_bid_ask_spread_pct: float = 0.10
+    # A JUNK-QUOTE GUARD, not a tightness filter. Percentage spread scales inversely with
+    # premium, and this strategy deliberately sells cheap far-OTM puts — so a 10% cap asked for
+    # a two-tick market on the cheapest contracts in the chain and rejected roughly half the
+    # field on a delayed quote the user never sees. Liquidity is gated by open interest and by
+    # min_premium; this only rejects quotes that aren't markets at all (a $0.01 bid vs a $0.54
+    # ask). Yields credit the BID, so a wide spread never overstated a return — it is an exit
+    # cost, which belongs on screen rather than in a silent threshold.
+    max_bid_ask_spread_pct: float = 1.0
+    # Smallest per-share credit worth selling. Does the work the spread cap was doing badly:
+    # a few cents of premium isn't worth tens of thousands in collateral, and a real bid is a
+    # better sign of a real market than a percentage computed off a stale one.
+    min_premium: float = 0.30
     # optional IV floor on the selected put (None = off). Elevated IV = richer premium; when set,
     # a contract must have a known implied vol at or above this fraction (0.40 == 40%) to qualify.
     min_iv: float | None = None

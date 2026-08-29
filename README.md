@@ -23,7 +23,7 @@ Each run is a pipeline:
 4. **Pull option chains** — for the survivors, fetch live put chains from Schwab (concurrent,
    rate-limited, cached, with retry on transient hiccups).
 5. **Pick the put** — the ~−0.20Δ put nearest 30–45 DTE that's genuinely liquid (open interest,
-   tight spread, a real sellable bid).
+   a premium worth collecting, a real two-sided market).
 6. **Rank the shortlist** — by a configurable blend of fundamental quality and (conservative,
    bid-based) annualized yield → CSV.
 
@@ -160,6 +160,22 @@ can't be automated — it needs a browser):
 
 Global flags go *before* the command: `-v` / `-vv` for progress / per-symbol logging, and
 `--debug` for a full traceback on an unexpected error — e.g. `wheel-screener -v candidates …`.
+
+## The funnel
+
+```
+universe        every common stock in the price + dollar-volume band
+  Rated         deep-fetched and rated — bounded by top_n (the cap gates FIRST, so slots
+                aren't spent on names that are about to fail)
+  Fundamentals  passed the hard gate, minus names reporting before the earliest expiry
+  Chains        returned an option chain
+  Candidates    had a contract clearing every sellability gate
+```
+
+The **Rated** step is the one that decides how much of the market you actually see. It ranks on
+fundamentals, and yield is only measured afterwards — so capping it tightly hides high-yield
+names before their yield is ever computed. It costs ~200 chains/min, so the default of 400 takes
+about two minutes; the dashboard serves the last scheduled run instantly regardless.
 
 ## How the score works
 
