@@ -9,7 +9,7 @@ part that goes stale fastest. Target release: **v2.0.0**.
 |---|---|
 | Auth posture for account data | **decided: Sign in with Schwab** (section 1a) |
 | Multi-broker support | designed for from day one, Schwab implemented first (section 1b) |
-| Schwab app has **Accounts and Trading** entitlement | **NO — confirmed 2026-08-29. Approval is now the critical path.** |
+| Schwab app has **Accounts and Trading** entitlement | **YES — live 2026-08-29**, working even while the app shows *Modification Pending* |
 | Callback URL | chosen: `https://steadybull.net/portfolio/oauth/schwab/callback` — not yet registered |
 | Read-only invariant | agreed (see Security) |
 | Release label | v2.0.0 |
@@ -381,7 +381,7 @@ print(r.status_code, r.text[:300])
 - **200 + accounts** -> entitled; P0 shrinks to the callback URL.
 - **401 / 403 / empty** -> market-data only; a new or amended app is needed, with its own approval.
 
-**Result, 2026-08-29: 401 `Client not authorized`.** The app is Market Data only. Proven with a
+**Result, 2026-08-29 (first attempt): 401 `Client not authorized`.** The app was Market Data only. Proven with a
 freshly minted token, both calls in the same moment:
 
 ```
@@ -406,6 +406,58 @@ edit rather than waiting for the entitlement to land first:
 the single click that makes "sign in with Schwab" worth building. The usual argument for leaving a
 working app alone — disruption during re-review — does not apply: production uses Alpaca for chains,
 so nothing live depends on this app.
+
+### Then it started working
+
+After the entitlement was requested, `get_account_numbers()` and `get_accounts()` both returned 200 **while
+the app still showed *Modification Pending***. So the product became usable before the status
+cleared, and the existing token carried the new scope — no re-login was needed.
+
+Useful to know, and worth not over-generalising: the **callback URL** change in the same submission
+is a different matter, and is not exercised until the redirect is actually attempted. Do not assume
+it is live because the entitlement is.
+
+---
+
+## 3b. Verified balance mapping
+
+Read from the live account on 2026-08-29 (`securitiesAccount.type = MARGIN`), so these are the real
+spellings rather than inferred ones. The caveat in section 3a about unverified field names is
+resolved for margin accounts; **a CASH account still has a different shape** and remains unverified.
+
+`currentBalances` is the block to read (`initialBalances` is start-of-day, `projectedBalances` is
+buying-power projections).
+
+| Our field | Schwab field | Note |
+|---|---|---|
+| `total_value` | `liquidationValue` | the headline: what the account is worth |
+| `cash` | `cashBalance` (+ `moneyMarketFund` when swept) | see trap 1 |
+| `long_market_value` | **derive**: `total_value - cash` | see trap 2 |
+| `buying_power` | `buyingPower` | margin only; a cash account exposes `cashAvailableForTrading` |
+| `equity` | `equity` | not the same as either of the above |
+| `account_type` | `securitiesAccount.type` | `CASH` or `MARGIN` |
+
+### Two traps found in real data
+
+1. **`cashBalance` is not necessarily the cash.** Brokers sweep idle cash into a money-market fund,
+   which lands in `moneyMarketFund` instead. On the test account `liquidationValue` matched neither
+   `cashBalance` nor `cashBalance + moneyMarketFund`, so treat "cash" as a sum of the cash-like
+   buckets and reconcile against the app.
+
+2. **`longMarketValue` is not "invested".** On the test account it was **zero** while `bondValue`,
+   `longMarginValue` and `shortOptionMarketValue` were not — bonds and options live in their own
+   buckets. Summing buckets means enumerating every asset class Schwab might populate and silently
+   under-reporting when one is missed.
+
+   **So derive invested as `liquidationValue - cash`** rather than summing. It is robust to whichever
+   buckets a given account happens to use, which is exactly the failure mode that would otherwise
+   ship a plausible-looking wrong number.
+
+The test account carries bond and short-option exposure, which is fortunate: it exercises buckets a
+simpler cash-and-equities account would have left at zero, and it is how both traps surfaced.
+
+**Acceptance is unchanged**: the displayed numbers must match the Schwab app. Verified field *names*
+and *relationships* are not the same as a verified total.
 
 ### Track B — the callback URL (portal; has approval latency)
 
@@ -439,7 +491,8 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
 
 - [ ] **P0 — entitlement check, callback URL, droplet prep.** See 6a. Track A first: it sizes
       the rest and needs nothing from the portal.
-- [ ] **P1 — balances.** Port, models, adapter and a `wheel-screener balances` CLI command.
+- [ ] **P1 — balances.** *Unblocked — the entitlement is live.* Port, models, adapter and a
+      `wheel-screener balances` CLI command. Mapping in section 3b.
       Deliberately web-free and positions-free: the smallest thing that proves the credentials, the
       account lookup and the mapping all work, checkable against the Schwab app by eye.
 - [ ] **P2 — sessions + OAuth.** *Not blocked by the Schwab approval*: the session store, cookie,
