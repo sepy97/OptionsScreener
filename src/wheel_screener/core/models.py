@@ -104,7 +104,18 @@ class ScreenCriteria(BaseModel):
     # ranking / liquidity gates
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
     min_open_interest: int = 100
-    max_bid_ask_spread_pct: float = 0.10
+    # A JUNK-QUOTE GUARD, not a tightness filter. Percentage spread scales inversely with
+    # premium, and this strategy deliberately sells cheap far-OTM puts — so a 10% cap asked for
+    # a two-tick market on the cheapest contracts in the chain and rejected roughly half the
+    # field on a delayed quote the user never sees. Liquidity is gated by open interest and by
+    # min_premium; this only rejects quotes that aren't markets at all (a $0.01 bid vs a $0.54
+    # ask). Yields credit the BID, so a wide spread never overstated a return — it is an exit
+    # cost, which belongs on screen rather than in a silent threshold.
+    max_bid_ask_spread_pct: float = 1.0
+    # Smallest per-share credit worth selling. Does the work the spread cap was doing badly:
+    # a few cents of premium isn't worth tens of thousands in collateral, and a real bid is a
+    # better sign of a real market than a percentage computed off a stale one.
+    min_premium: float = 0.30
     # optional IV floor on the selected put (None = off). Elevated IV = richer premium; when set,
     # a contract must have a known implied vol at or above this fraction (0.40 == 40%) to qualify.
     min_iv: float | None = None

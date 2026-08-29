@@ -69,12 +69,34 @@ def test_select_put_picks_best_yield_near_target_delta():
 
 
 def test_select_put_applies_gates():
-    crit = ScreenCriteria(min_dte=30, max_dte=45)  # min_oi=100, max_spread=0.10, |Δ|≤0.30
+    crit = ScreenCriteria(min_dte=30, max_dte=45)  # min_oi=100, |Δ|<=0.30, min_premium=0.30
     assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=50)]), crit) is None      # low OI
-    assert select_put(_chain([_put(90, -0.20, 40, 1.5, spread=0.5)]), crit) is None  # wide spread
     assert select_put(_chain([_put(90, -0.40, 40, 1.5)]), crit) is None  # |delta|>0.30
     assert select_put(_chain([_put(90, -0.20, 10, 1.5)]), crit) is None  # DTE below window
     assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # bid 0 = unsellable
+
+
+def test_a_wide_percentage_spread_is_kept_but_a_non_market_is_not():
+    """Percentage spread scales inversely with premium, and this strategy sells cheap far-OTM
+    puts — so a tight percentage cap rejects the field by arithmetic rather than by liquidity.
+    The gate is a junk-quote guard now; open interest and min_premium do the real work."""
+    crit = ScreenCriteria(min_dte=30, max_dte=45)
+    wide = _put(90, -0.20, 40, 1.5, spread=0.5)   # 40% of mid — a real, if wide, market
+    assert select_put(_chain([wide]), crit) is not None
+    junk = _put(90, -0.20, 40, 1.5, spread=5.0)   # 143% of mid — a $0.01-bid style non-market
+    assert select_put(_chain([junk]), crit) is None
+    tight = crit.model_copy(update={"max_bid_ask_spread_pct": 0.10})
+    assert select_put(_chain([wide]), tight) is None, "the old cap stays available on request"
+
+
+def test_min_premium_floor_replaces_what_the_spread_cap_was_doing():
+    """A few cents of credit isn't worth tens of thousands in collateral, and a real bid is a
+    better sign of a real market than a percentage computed off a stale quote."""
+    crit = ScreenCriteria(min_dte=30, max_dte=45)
+    assert select_put(_chain([_put(90, -0.20, 40, 0.29)]), crit) is None   # under the floor
+    assert select_put(_chain([_put(90, -0.20, 40, 0.30)]), crit) is not None  # exactly on it
+    off = crit.model_copy(update={"min_premium": 0.0})
+    assert select_put(_chain([_put(90, -0.20, 40, 0.05)]), off) is not None  # opt out entirely
 
 
 def test_select_put_min_iv_floor():
