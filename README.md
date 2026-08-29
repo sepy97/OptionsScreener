@@ -121,7 +121,7 @@ Runs the full pipeline live and writes a ranked CSV. Handy flags:
 | `annualized_yield` | `(bid/strike) × (365/dte)` — computed off the bid |
 | `collateral` | `strike × 100` (the cash you set aside) |
 | `fundamental_score` | 0–1 cross-sectional fundamental composite |
-| `score` | final blended rank score |
+| `score` | 0–1 blended score: weighted **geometric** mean of strength and yield-rating (absolute — comparable across runs) |
 
 > `screen` (fundamentals-only, no chains, no Schwab needed) ranks the universe by fundamentals
 > alone — a quick, free check.
@@ -160,6 +160,35 @@ can't be automated — it needs a browser):
 
 Global flags go *before* the command: `-v` / `-vv` for progress / per-symbol logging, and
 `--debug` for a full traceback on an unexpected error — e.g. `wheel-screener -v candidates …`.
+
+## How the score works
+
+```
+score = strength^w × yield_rating^(1−w)
+```
+
+Both halves are absolute 0–1 ratings, so **the same contract scores the same in every run** —
+which is what makes the number comparable over time and usable as a filter (`--min-score`, or
+*Minimum score* in the web form).
+
+- **strength** is the company's absolute financial-strength rating, unchanged by its peers.
+- **yield_rating** grades the annualized yield against fixed bars: 1.0 at `yield_good` (25%),
+  0.5 at `yield_satisfactory` (15%), straight-line between and below. These are the same
+  anchors the Yield column is coloured by, so the number and the colour agree.
+- **`w`** is the *Rank by* preference dial — which half leads, not a claim about their relative
+  worth. The presets tilt (0.25 / 0.5 / 0.75) rather than reaching the ends, where the score
+  would collapse into either a pure yield ordering or a copy of the Strength column.
+
+It is a **geometric** mean on purpose: a weighted sum lets a poor company buy its way up the
+list on premium alone, while a geometric mean drags the score down whenever either half is
+weak. A name whose fundamentals were never established is judged on its yield alone rather
+than being scored 0 — under a geometric mean that would delete it from the list, which is a
+much stronger claim than "no data" supports.
+
+Earlier versions scored yield as a within-run *percentile*. That made the score a rank position
+in a measurement's clothing: incomparable between runs, blind to the distance between
+candidates, capped at (n−0.5)/n, and useless as a threshold since the best of any list always
+sat near the top of it.
 
 ## When a data connection breaks
 

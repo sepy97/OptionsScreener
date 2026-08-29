@@ -77,8 +77,18 @@ class ScreenCriteria(BaseModel):
     factor_weights: dict[str, float] = Field(
         default_factory=lambda: {"valuation": 0.20, "efficiency": 0.45, "sustainability": 0.35}
     )
-    # final rank blends fundamental quality + yield (1 = all fundamentals, 0 = all yield)
+    # final rank blends fundamental quality + yield as a weighted GEOMETRIC mean, so a name
+    # cannot buy its way up the list by being excellent at one half and poor at the other.
+    # The weight is a preference dial (which half leads), not a claim about relative worth.
     fundamental_weight: float = 0.5
+    # Bars the annualized yield is graded against, 1.0 at `good` and 0.5 at `satisfactory`.
+    # These are the same anchors the results table colours by, so score and colour agree.
+    yield_good: float = 0.25
+    yield_satisfactory: float = 0.15
+    # Absolute floor on the blended score (None = off). Only meaningful because the score is
+    # absolute: a threshold on a within-run percentile would filter nothing, since the best of
+    # any list always ranks near the top of it.
+    min_score: float | None = None
     # options target
     target_delta: float = -0.20
     max_abs_delta: float = 0.30

@@ -12,22 +12,31 @@
     </div>
     <fieldset class="rank-by">
       <legend>Rank by</legend>
+      {# The presets TILT the blend rather than reaching its ends. At 0 the score ignores
+         quality entirely and collapses into a rank position; at 1 it just restates the
+         Strength column. 0.25 / 0.75 keeps both signals in every score. #}
       <div class="segmented">
-        <input type="radio" name="fundamental_weight" value="0" id="rank-yield"
-               {% if defaults.fundamental_weight == 0 %}checked{% endif %}>
-        <label for="rank-yield">Higher yield<small>most premium</small></label>
+        <input type="radio" name="fundamental_weight" value="0.25" id="rank-yield"
+               {% if defaults.fundamental_weight == 0.25 %}checked{% endif %}>
+        <label for="rank-yield">Higher yield<small>mostly premium</small></label>
         <input type="radio" name="fundamental_weight" value="0.5" id="rank-bal"
                {% if defaults.fundamental_weight == 0.5 %}checked{% endif %}>
         <label for="rank-bal">Balanced<small>premium + quality</small></label>
-        <input type="radio" name="fundamental_weight" value="1" id="rank-qual"
-               {% if defaults.fundamental_weight == 1 %}checked{% endif %}>
-        <label for="rank-qual">Better quality<small>safer to own</small></label>
+        <input type="radio" name="fundamental_weight" value="0.75" id="rank-qual"
+               {% if defaults.fundamental_weight == 0.75 %}checked{% endif %}>
+        <label for="rank-qual">Better quality<small>mostly quality</small></label>
       </div>
     </fieldset>
   </div>
   <details class="advanced">
     <summary>Advanced filters</summary>
     <div class="grid">
+      <label>Minimum score
+        <input type="text" name="min_score" value="" inputmode="decimal"
+               placeholder="off — e.g. 0.60">
+        <small>drop trades below this blended score (0&ndash;1); absolute, so it means the
+          same in every run</small>
+      </label>
       <label>Names to check
         <input type="number" name="top_n" value="{{ defaults.top_n }}" min="1" max="500">
         <small>more = broader but slower (the chain pull is rate-limited)</small>

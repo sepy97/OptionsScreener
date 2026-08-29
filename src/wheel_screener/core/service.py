@@ -271,7 +271,13 @@ class ScreenerService:
             sum(1 for c in candidates if c.earnings_status is EarningsStatus.UNKNOWN),
             criteria.fundamental_weight,
         )
-        return rank(candidates, criteria.fundamental_weight)
+        return rank(
+            candidates,
+            criteria.fundamental_weight,
+            yield_good=criteria.yield_good,
+            yield_satisfactory=criteria.yield_satisfactory,
+            min_score=criteria.min_score,
+        )
 
     def search_ticker(
         self,
