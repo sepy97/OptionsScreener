@@ -10,7 +10,7 @@ part that goes stale fastest. Target release: **v2.0.0**.
 | Auth posture for account data | **decided: Sign in with Schwab** (section 1a) |
 | Multi-broker support | designed for from day one, Schwab implemented first (section 1b) |
 | Schwab app has **Accounts and Trading** entitlement | **UNKNOWN — settle first, it sizes P0** |
-| Callback URL | chosen: `https://steadybull.net/oauth/schwab/callback` — not yet registered |
+| Callback URL | chosen: `https://steadybull.net/portfolio/oauth/schwab/callback` — not yet registered |
 | Read-only invariant | agreed (see Security) |
 | Release label | v2.0.0 |
 
@@ -86,8 +86,8 @@ view another, and mandatory `state` verification.
 risky code small; it was dropped in favour of building the real thing once. The rest of this
 document assumes it.
 
-The gate must also cover **`/oauth/schwab/callback`** — that route carries the authorization
-code.
+The gate covers the whole **`/portfolio`** prefix, which is why every route the feature owns lives
+under it (section 6a, Track B) — including the callback, which carries the authorization code.
 
 ---
 
@@ -231,7 +231,7 @@ So the flow really is one click:
 ```
 
 **External prerequisite, likely the longest pole:** the Schwab app registers
-`https://127.0.0.1:8182` today. It needs `https://steadybull.net/oauth/schwab/callback`.
+`https://127.0.0.1:8182` today. It needs `https://steadybull.net/portfolio/oauth/schwab/callback`.
 Schwab app edits can require re-approval, so start this early. Check whether **both** callbacks can
 be registered — otherwise the local `auth-login` flow stops working.
 
@@ -313,7 +313,7 @@ Follows the shape already used for chains and for fundamental reports.
 | Adapter | `adapters/schwab/account.py` over `get_account_numbers()` + `get_account(hash, fields=POSITIONS)` |
 | Models | `BrokerageAccount` (cash, buying power, equity) · `Position` (equity and option legs) |
 | Service | `portfolio()`, returning `None` when not connected |
-| Routes | `GET /portfolio` · `GET /oauth/schwab/connect` · `GET /oauth/schwab/callback` · `POST /oauth/schwab/disconnect` |
+| Routes | `GET /portfolio` · `GET /portfolio/oauth/schwab/connect` · `GET /portfolio/oauth/schwab/callback` · `POST /portfolio/oauth/schwab/disconnect` |
 
 Schwab allows ~120 req/min; a portfolio view is 2 calls. Cache briefly (30–60s) so a refresh spree
 can't burn the budget.
@@ -383,7 +383,7 @@ print(r.status_code, r.text[:300])
 
 ### Track B — the callback URL (portal; has approval latency)
 
-**`https://steadybull.net/oauth/schwab/callback`**, decided once. Changing it later costs another
+**`https://steadybull.net/portfolio/oauth/schwab/callback`**, decided once. Changing it later costs another
 approval cycle, so it is fixed now. `/oauth/{broker}/callback` rather than a path under
 `/portfolio` because this flow *is* the login, not a portfolio implementation detail, and it scales
 when a second broker arrives.
