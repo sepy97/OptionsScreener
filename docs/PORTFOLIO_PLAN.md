@@ -9,7 +9,7 @@ part that goes stale fastest. Target release: **v2.0.0**.
 |---|---|
 | Auth posture for account data | **decided: Sign in with Schwab** (section 1a) |
 | Multi-broker support | designed for from day one, Schwab implemented first (section 1b) |
-| Schwab app has **Accounts and Trading** entitlement | **UNKNOWN — settle first, it sizes P0** |
+| Schwab app has **Accounts and Trading** entitlement | **NO — confirmed 2026-08-29. Approval is now the critical path.** |
 | Callback URL | chosen: `https://steadybull.net/portfolio/oauth/schwab/callback` — not yet registered |
 | Read-only invariant | agreed (see Security) |
 | Release label | v2.0.0 |
@@ -381,6 +381,32 @@ print(r.status_code, r.text[:300])
 - **200 + accounts** -> entitled; P0 shrinks to the callback URL.
 - **401 / 403 / empty** -> market-data only; a new or amended app is needed, with its own approval.
 
+**Result, 2026-08-29: 401 `Client not authorized`.** The app is Market Data only. Proven with a
+freshly minted token, both calls in the same moment:
+
+```
+market data  get_quote(AAPL)        -> 200
+accounts     get_account_numbers()  -> 401 "Client not authorized"
+```
+
+Same credentials, same token — so this is an entitlement gap, not an auth failure. **A Schwab
+approval is therefore the critical path for v2.0.0.**
+
+### Consequence: make one submission, not two
+
+An approval cycle is now unavoidable, so the callback URL change (Track B) rides along in the same
+edit rather than waiting for the entitlement to land first:
+
+1. add **Accounts and Trading Production** alongside Market Data
+2. set the callback to `https://steadybull.net/portfolio/oauth/schwab/callback`
+3. keep `https://127.0.0.1:8182` if multiple callbacks are permitted
+4. submit once, wait for **Ready For Use**
+
+**One app, not two.** A second app means two client IDs, two tokens and two logins, which defeats
+the single click that makes "sign in with Schwab" worth building. The usual argument for leaving a
+working app alone — disruption during re-review — does not apply: production uses Alpaca for chains,
+so nothing live depends on this app.
+
 ### Track B — the callback URL (portal; has approval latency)
 
 **`https://steadybull.net/portfolio/oauth/schwab/callback`**, decided once. Changing it later costs another
@@ -416,7 +442,10 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
 - [ ] **P1 — balances.** Port, models, adapter and a `wheel-screener balances` CLI command.
       Deliberately web-free and positions-free: the smallest thing that proves the credentials, the
       account lookup and the mapping all work, checkable against the Schwab app by eye.
-- [ ] **P2 — sessions + OAuth.** Session store and cookie, `state` issuance and verification,
+- [ ] **P2 — sessions + OAuth.** *Not blocked by the Schwab approval*: the session store, cookie,
+      `state` handling and the four-state machine all sit behind the broker port and are buildable
+      and testable against a fake. It is also the riskiest code in the feature, so it is the right
+      thing to build while waiting. Session store and cookie, `state` issuance and verification,
       connect / callback / disconnect, token on the volume, Caddy log suppression for the callback.
 - [ ] **P3 — the tab, balances only.** Total / cash / invested, plus the never-connected and
       expired states. Shippable on its own: a Portfolio tab that shows what the account is worth is
