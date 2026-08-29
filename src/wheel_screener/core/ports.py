@@ -11,6 +11,7 @@ from datetime import date
 from typing import Protocol, runtime_checkable
 
 from wheel_screener.core.models import (
+    BrokerageAccount,
     ChainFilter,
     ChainSnapshot,
     CompanyProfile,
@@ -82,3 +83,15 @@ class CompanyProfileProvider(Protocol):
     """
 
     def company_profile(self, symbol: str) -> CompanyProfile | None: ...
+
+
+@runtime_checkable
+class BrokerageAccountProvider(Protocol):
+    """Read-only view of the linked brokerage accounts.
+
+    Deliberately separate from the *linking* port (establishing credentials): a broker whose
+    credentials are configured server-side can implement this and never authenticate a human,
+    while an OAuth broker implements both. Read-only by construction — no order ever crosses it.
+    """
+
+    def accounts(self) -> list[BrokerageAccount]: ...

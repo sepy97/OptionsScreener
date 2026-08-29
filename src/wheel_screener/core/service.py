@@ -16,6 +16,7 @@ from wheel_screener.core.fundamentals import (
     score_strength,
 )
 from wheel_screener.core.models import (
+    BrokerageAccount,
     CandidateResult,
     ChainFilter,
     CompanyProfile,
@@ -39,6 +40,7 @@ from wheel_screener.core.pipeline.select_strike import (
 )
 from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.ports import (
+    BrokerageAccountProvider,
     ChainProvider,
     CompanyProfileProvider,
     FundamentalReportProvider,
@@ -84,6 +86,8 @@ class ScreenerService:
     reports: FundamentalReportProvider | None = None
     # optional: company identity/description. Context only — absence shows a bare ticker.
     profiles: CompanyProfileProvider | None = None
+    # optional: the linked brokerage. None when no broker is connected.
+    accounts: BrokerageAccountProvider | None = None
     _scores: dict[str, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def _universe_scores(self, criteria: ScreenCriteria, today: date) -> dict[str, float]:
@@ -421,3 +425,14 @@ class ScreenerService:
         except Exception as e:  # noqa: BLE001 - optional context, never fatal
             logger.warning("company profile unavailable for %s: %s", symbol, e)
             return None
+
+    def brokerage_accounts(self) -> list[BrokerageAccount]:
+        """Balances for every linked brokerage account.
+
+        Raises ``ProviderUnavailableError`` when no broker is linked, rather than returning an
+        empty list: "nothing connected" and "connected but you hold nothing" are different
+        answers and the caller must be able to tell them apart.
+        """
+        if self.accounts is None:
+            raise ProviderUnavailableError("no brokerage account is linked to this deployment")
+        return self.accounts.accounts()

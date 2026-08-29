@@ -85,6 +85,40 @@ def _write_csv(names: list[Underlying], path: str) -> None:
 
 
 @app.command()
+@handle_provider_errors
+def balances() -> None:
+    """Show the balances of every linked brokerage account.
+
+    The first slice of the Portfolio work, deliberately without positions: it proves the
+    credentials, the account lookup and the balance mapping, and the numbers can be checked
+    against the broker's own app by eye.
+    """
+    settings = Settings()
+    accounts = build_service(settings).brokerage_accounts()
+    if not accounts:
+        typer.echo("No accounts returned. The broker is linked but reported nothing.")
+        return
+
+    def money(v: float | None) -> str:
+        return "—" if v is None else f"${v:,.2f}"
+
+    for acct in accounts:
+        kind = acct.account_type.value if acct.account_type else "unknown"
+        typer.echo(f"\n{acct.broker} {acct.display_name}  ({kind})")
+        b = acct.balances
+        rows = [
+            ("Total value", b.total_value),
+            ("Cash", b.cash),
+            ("Invested", b.invested),
+            ("Buying power", b.buying_power),
+        ]
+        width = max(len(money(v)) for _, v in rows)
+        for label, value in rows:
+            typer.echo(f"  {label:<14}{money(value):>{width}}")
+    typer.echo("\nCheck these against the broker's app — that is what proves the mapping.")
+
+
+@app.command()
 def doctor() -> None:
     """Check every configured data connection and report which one is broken.
 
