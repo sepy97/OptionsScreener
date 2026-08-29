@@ -117,6 +117,19 @@ docker compose up -d --build
 Later: `MINOR` for features, `PATCH` for hotfixes (both deploy), `MAJOR` when a release needs a
 manual migration step. (A GitHub Action to deploy automatically on a `vX.Y.Z` tag is step #6.)
 
+## Diagnosing a broken data connection
+
+```bash
+cd /srv/steadybull
+docker compose exec -T app wheel-screener doctor     # names the failing provider
+curl -s https://steadybull.net/health                # same, as JSON under `providers`
+```
+
+Credentials live in `/srv/steadybull/.env`. After editing it, `docker compose up -d` recreates
+the container — no rebuild needed, since only the environment changed. Note that Alpaca and FMP
+are static key/secret pairs regenerated in their dashboards (Alpaca shows the secret once), while
+Schwab is OAuth and is refreshed with `auth-login`.
+
 ## Rollback & backups
 
 - **Rollback:** `git checkout v<previous>` and `docker compose up -d --build`.

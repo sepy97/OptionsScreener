@@ -210,3 +210,41 @@ def test_spot_falls_back_to_the_daily_bar_then_gives_up_quietly() -> None:
     assert AlpacaChainProvider(_settings()).spot("AAA") == 100.5
     respx.get(url).mock(return_value=httpx.Response(500))
     assert AlpacaChainProvider(_settings(max_retries=0)).spot("AAA") is None
+
+
+@respx.mock
+def test_check_auth_reports_a_rejected_key() -> None:
+    """Presence of a key proves nothing — a revoked key is still present. Only a call tells."""
+    settings = AlpacaSettings(
+        api_key="k", api_secret="s", trading_base_url="https://paper-api.alpaca.markets"
+    )
+    respx.get("https://paper-api.alpaca.markets/v2/account").mock(
+        return_value=httpx.Response(401, json={"message": "unauthorized."})
+    )
+    detail = AlpacaChainProvider(settings).check_auth()
+    assert detail is not None
+    assert "Alpaca" in detail and "401" in detail
+    assert "ALPACA__API_KEY" in detail, "must say which setting to fix"
+    assert "paper-api" in detail, "must mention the paper/live mismatch trap"
+
+
+@respx.mock
+def test_check_auth_returns_none_when_the_key_works() -> None:
+    settings = AlpacaSettings(
+        api_key="k", api_secret="s", trading_base_url="https://paper-api.alpaca.markets"
+    )
+    route = respx.get("https://paper-api.alpaca.markets/v2/account").mock(
+        return_value=httpx.Response(200, json={"id": "acct"})
+    )
+    assert AlpacaChainProvider(settings).check_auth() is None
+    assert route.call_count == 1, "one cheap call, not a chain pull"
+
+
+@respx.mock
+def test_check_auth_reports_an_outage_without_raising() -> None:
+    settings = AlpacaSettings(api_key="k", api_secret="s")
+    respx.get(url__startswith="https://api.alpaca.markets").mock(
+        side_effect=httpx.ConnectError("no route")
+    )
+    detail = AlpacaChainProvider(settings).check_auth()
+    assert detail is not None and "Alpaca" in detail

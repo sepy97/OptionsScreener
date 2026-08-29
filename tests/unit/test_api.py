@@ -315,29 +315,93 @@ def test_provider_error_handler_maps_status() -> None:
     assert rate.headers.get("Retry-After") == "60"
 
 
-def _health_client(settings: Settings) -> TestClient:
+class _StubProbe:
+    """Stands in for a credentialed connection. Counts calls so caching can be asserted."""
+
+    def __init__(self, detail: str | None) -> None:
+        self.detail, self.calls = detail, 0
+
+    def check_auth(self) -> str | None:
+        self.calls += 1
+        return self.detail
+
+
+def _health_client(settings: Settings, *probes) -> TestClient:
     app.dependency_overrides[get_service] = lambda: _FakeService()
     app.dependency_overrides[get_settings] = lambda: settings
+    app.state.probes = list(probes)
+    app.state.probe_cache = {}  # a fresh window per test
     return TestClient(app)
 
 
-def test_health_ok_when_chain_source_ready(tmp_path) -> None:
-    # schwab source is ready when its OAuth token file exists (pin the source; dev .env may differ)
-    settings = Settings(chain_source="schwab")
-    token = tmp_path / "token.json"
-    token.write_text("{}")
-    settings.schwab.token_path = str(token)
-    body = _health_client(settings).get("/health").json()
-    assert body == {
-        "status": "ok", "store_loaded": True, "chain_source": "schwab", "chain_ready": True,
-    }
+def _probe(role: str, name: str, detail: str | None):
+    from wheel_screener.composition import Probe
+
+    return Probe(role, name, _StubProbe(detail))
 
 
-def test_health_degraded_when_chain_source_unready(tmp_path) -> None:
+def test_health_ok_when_every_connection_answers() -> None:
     settings = Settings(chain_source="schwab")
-    settings.schwab.token_path = str(tmp_path / "missing.json")
-    body = _health_client(settings).get("/health").json()
-    assert body["chain_ready"] is False and body["status"] == "degraded"
+    body = _health_client(
+        settings, _probe("option chains", "schwab", None), _probe("x", "fmp", None)
+    ).get("/health").json()
+    assert body["status"] == "ok"
+    assert body["chain_ready"] is True
+    assert [p["ready"] for p in body["providers"]] == [True, True]
+
+
+def test_health_names_the_connection_that_failed() -> None:
+    """A revoked key is still PRESENT, so a presence check reported healthy while every chain
+    request 401'd. Readiness must come from a real call, and must say which one broke."""
+    settings = Settings(chain_source="alpaca")
+    detail = "Alpaca rejected our credentials (HTTP 401) — check ALPACA__API_KEY"
+    response = _health_client(
+        settings, _probe("option chains", "alpaca", detail), _probe("x", "fmp", None)
+    ).get("/health")
+    body = response.json()
+    assert response.status_code == 200, "liveness must survive an expired credential"
+    assert body["status"] == "degraded" and body["chain_ready"] is False
+    broken = [p for p in body["providers"] if not p["ready"]]
+    assert len(broken) == 1
+    assert broken[0]["name"] == "alpaca" and "401" in broken[0]["detail"]
+    assert [p["name"] for p in body["providers"] if p["ready"]] == ["fmp"]
+
+
+def test_health_degrades_on_a_non_chain_connection_too() -> None:
+    settings = Settings(chain_source="schwab")
+    body = _health_client(
+        settings,
+        _probe("option chains", "schwab", None),
+        _probe("fundamentals & earnings", "fmp", "FMP rejected our credentials (HTTP 401)"),
+    ).get("/health").json()
+    assert body["status"] == "degraded"
+    assert body["chain_ready"] is True, "chains are fine; something else is not"
+
+
+def test_health_probe_is_cached_across_polls() -> None:
+    """/health is polled every 30s by the container and in a tight loop during a deploy, so a
+    live probe must not cost an upstream call each time."""
+    settings = Settings(chain_source="schwab")
+    client = _health_client(settings, _probe("option chains", "schwab", None))
+    probe = app.state.probes[0].provider
+    for _ in range(4):
+        client.get("/health")
+    assert probe.calls == 1
+
+
+def test_health_survives_a_probe_that_raises() -> None:
+    class _Exploding:
+        def check_auth(self):
+            raise RuntimeError("boom")
+
+    from wheel_screener.composition import Probe
+
+    settings = Settings(chain_source="schwab")
+    client = _health_client(settings)
+    app.state.probes = [Probe("option chains", "schwab", _Exploding())]
+    body = client.get("/health").json()
+    assert body["status"] == "degraded"
+    assert "boom" in body["providers"][0]["detail"]
 
 
 # --- HTML (HTMX) UI ---
@@ -513,22 +577,30 @@ def test_rate_limit_throttles_expensive_endpoints() -> None:
 
 
 def test_health_reflects_active_chain_source() -> None:
+    """The active source is echoed, and readiness comes from CALLING it.
+
+    A configured key used to imply ready. That is the bug this replaced: the key was still
+    configured after Alpaca revoked it, so health read `ok` while every chain request 401'd.
+    """
     from wheel_screener.api.deps import get_service, get_settings
     from wheel_screener.config import AlpacaSettings, Settings
 
     app.dependency_overrides[get_service] = lambda: _FakeService()
     try:
-        # Alpaca configured -> ready via key/secret (NOT gated on a Schwab token that never exists)
-        app.dependency_overrides[get_settings] = lambda: Settings(
+        settings = Settings(
             chain_source="alpaca", alpaca=AlpacaSettings(api_key="k", api_secret="s")
         )
-        j = TestClient(app).get("/health").json()
+        app.dependency_overrides[get_settings] = lambda: settings
+
+        client = _health_client(settings, _probe("option chains", "alpaca", None))
+        j = client.get("/health").json()
         assert j["chain_source"] == "alpaca" and j["chain_ready"] is True and j["status"] == "ok"
-        # Alpaca with no creds -> degraded (explicit empty AlpacaSettings so dev .env can't leak in)
-        app.dependency_overrides[get_settings] = lambda: Settings(
-            chain_source="alpaca", alpaca=AlpacaSettings()
+
+        # same configured key, now rejected upstream -> degraded despite being "configured"
+        client = _health_client(
+            settings, _probe("option chains", "alpaca", "Alpaca rejected our credentials (401)")
         )
-        j2 = TestClient(app).get("/health").json()
+        j2 = client.get("/health").json()
         assert j2["chain_ready"] is False and j2["status"] == "degraded"
     finally:
         app.dependency_overrides.clear()

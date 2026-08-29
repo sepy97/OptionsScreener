@@ -32,7 +32,7 @@ from wheel_screener.api.deps import get_job_runner, get_service, get_settings
 from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
 from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
-from wheel_screener.composition import build_service
+from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import (
     AuthExpiredError,
@@ -117,6 +117,9 @@ async def lifespan(app: FastAPI):
         if settings.rate_limit.enabled else None
     )
     app.state.job_runner = JobRunner(service, JobStore(settings.jobs_db_path))
+    # credentialed connections, built once: a probe owns an HTTP client
+    app.state.probes = build_probes(settings, service)
+    app.state.probe_cache = {}
     # let pipeline INFO logs through so background jobs can capture stage progress
     logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
     warm = getattr(service.fundamentals, "known_symbols", None)
@@ -396,30 +399,67 @@ async def _provider_error_handler(request: Request, exc: ProviderError) -> JSONR
     )
 
 
+# A live credential probe costs one upstream call, and /health is polled by the container every
+# 30s and in a tight loop during a deploy — so results are cached briefly.
+_PROBE_TTL_SECONDS = 60.0
+
+
+def _probe(request: Request, probe: object) -> str | None:
+    """Cached ``check_auth`` for one connection. Returns None when healthy. Never raises."""
+    check = getattr(probe.provider, "check_auth", None)
+    if check is None:
+        return None
+    cache = getattr(request.app.state, "probe_cache", None)
+    if cache is None:
+        cache = request.app.state.probe_cache = {}
+    now = time.monotonic()
+    hit = cache.get(probe.name)
+    if hit is not None and now - hit[0] < _PROBE_TTL_SECONDS:
+        return hit[1]
+    try:
+        detail = check()
+    except Exception as e:  # noqa: BLE001 - health must never raise
+        detail = f"{probe.name} check failed: {e}"
+    cache[probe.name] = (now, detail)
+    return detail
+
+
 @app.get("/health")
 def health(
+    request: Request,
     service: ScreenerService = Depends(get_service),
     settings: Settings = Depends(get_settings),
 ) -> dict:
-    """Liveness + readiness: is the local store loaded, and is the ACTIVE chain source ready?"""
+    """Liveness + readiness.
+
+    Readiness ACTUALLY CALLS each credentialed connection rather than checking that a key is
+    present: a revoked key is still present, so a presence check reported healthy while every
+    chain request returned 401. The HTTP status stays 200 whatever the result — the app is alive
+    and its other tabs work — so the container is not restarted and a deploy is not rolled back
+    over an expired credential, which redeploying would not fix anyway.
+    """
     known = getattr(service.fundamentals, "known_symbols", None)
     try:
         store_loaded = bool(known()) if known is not None else True
     except Exception:  # noqa: BLE001 - health must never raise
         store_loaded = False
-    source = settings.chain_source
-    if source == "alpaca":  # key/secret auth — ready when both are configured
-        chain_ready = bool(
-            settings.alpaca.api_key.get_secret_value()
-            and settings.alpaca.api_secret.get_secret_value()
+
+    providers = []
+    for probe in getattr(request.app.state, "probes", []):
+        detail = _probe(request, probe)
+        providers.append(
+            {"role": probe.role, "name": probe.name, "ready": detail is None, "detail": detail}
         )
-    else:  # schwab — ready when the OAuth token file is present
-        chain_ready = Path(settings.schwab.token_path).expanduser().exists()
+
+    chains = next((p for p in providers if p["role"] == "option chains"), None)
+    chain_ready = bool(chains["ready"]) if chains else False
+    degraded = [p for p in providers if not p["ready"]]
     return {
-        "status": "ok" if (store_loaded and chain_ready) else "degraded",
+        "status": "ok" if (store_loaded and not degraded) else "degraded",
         "store_loaded": store_loaded,
-        "chain_source": source,
+        "chain_source": settings.chain_source,
         "chain_ready": chain_ready,
+        "providers": providers,
     }
 
 

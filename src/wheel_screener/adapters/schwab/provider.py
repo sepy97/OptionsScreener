@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import date, timedelta
+from pathlib import Path
 
 from wheel_screener.adapters.cache import DiskCache
-from wheel_screener.adapters.errors import map_http_error
+from wheel_screener.adapters.errors import SCHWAB, map_http_error
 from wheel_screener.adapters.http import RateLimiter, run_with_retry
 from wheel_screener.adapters.schwab.mapper import parse_chain
 from wheel_screener.config import SchwabSettings
@@ -33,6 +34,17 @@ class SchwabChainProvider:
 
             self._client = load_client(self._settings)
         return self._client
+
+    def check_auth(self) -> str | None:
+        """Whether the OAuth token is present and loadable. None means healthy."""
+        path = Path(self._settings.token_path).expanduser()
+        if not path.exists():
+            return f"{SCHWAB} token file is missing at {path} — {SCHWAB.auth_remedy}"
+        try:
+            self._get_client()
+        except Exception as e:  # noqa: BLE001 - a probe must never raise
+            return f"{SCHWAB} token is unusable ({e}) — {SCHWAB.auth_remedy}"
+        return None
 
     def _fetch_payload(
         self,
@@ -88,7 +100,7 @@ class SchwabChainProvider:
         except ProviderError:
             raise  # e.g. AuthExpiredError from token load — never mask it (and never retried)
         except (httpx.HTTPStatusError, httpx.TransportError) as e:
-            raise map_http_error(e) from e  # transient kinds already retried + exhausted
+            raise map_http_error(e, SCHWAB) from e  # transient kinds already retried + exhausted
         except Exception as e:  # vendor/authlib failure: surface as a provider problem
             raise ProviderUnavailableError(f"schwab chain fetch failed for {symbol}: {e}") from e
 

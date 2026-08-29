@@ -5,6 +5,7 @@ Swapping a provider is a one-line change here; tests inject fakes instead.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
 from wheel_screener.adapters.alpaca.provider import AlpacaChainProvider
@@ -20,6 +21,15 @@ from wheel_screener.core.ports import (
     FundamentalsProvider,
 )
 from wheel_screener.core.service import ScreenerService
+
+
+@dataclass(frozen=True)
+class Probe:
+    """One credentialed connection, and how to ask whether it works."""
+
+    role: str  # what breaks when it's down, in the user's terms
+    name: str  # the vendor
+    provider: object  # anything exposing check_auth() -> str | None
 
 
 def _build_chains(settings: Settings) -> ChainProvider:
@@ -64,3 +74,19 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
         chains=_build_chains(settings),
         reports=_build_reports(settings),
     )
+
+
+def build_probes(settings: Settings, service: ScreenerService) -> list[Probe]:
+    """Every connection that needs a credential, so health and `doctor` agree on the list.
+
+    Built once and reused: a probe holds an HTTP client, so constructing one per health poll
+    would leak connections.
+    """
+    probes = [Probe("option chains", settings.chain_source, service.chains)]
+    if settings.fmp.api_key.get_secret_value():
+        probes.append(
+            Probe("fundamentals & earnings", "fmp", FmpFundamentalsProvider(settings.fmp))
+        )
+    if service.reports is not None:
+        probes.append(Probe("fundamental reports", "fundcore", service.reports))
+    return probes
