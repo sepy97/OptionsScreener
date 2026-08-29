@@ -55,6 +55,8 @@ class SlidingWindowLimiter:
 def is_expensive(method: str, path: str) -> bool:
     if method == "POST" and path in ("/runs", "/screen", "/search", "/fundamentals"):
         return True  # start a screen (HTML + JSON) / ticker search / fundamental report
+    if path.startswith("/portfolio/oauth/") and path.endswith(("/connect", "/callback")):
+        return True  # each one reaches the broker; also a brake on redirect abuse
     return method == "GET" and path == "/search/export.csv"  # a fresh search behind a download
 
 
