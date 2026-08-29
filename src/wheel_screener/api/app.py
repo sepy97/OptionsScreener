@@ -900,7 +900,10 @@ def run_progress(request: Request, job_id: str, runner: JobRunner = Depends(get_
             request, "_error.html", {"message": "unknown run"}, status_code=404
         )
     if job["status"] == "running":
-        return templates.TemplateResponse(request, "_progress.html", {"job": job})
+        return templates.TemplateResponse(
+            request, "_progress.html",
+            {"job": job, "cancelling": runner.is_cancelling(job_id)},
+        )
     if job["status"] == "failed":
         err = job.get("error") or {}
         message = f"{err.get('type', 'error')}: {err.get('detail', '')}"
@@ -979,4 +982,13 @@ def cancel_run(request: Request, job_id: str, runner: JobRunner = Depends(get_jo
         )
     if job["status"] == "running":
         runner.cancel(job_id)
-    return templates.TemplateResponse(request, "_progress.html", {"job": runner.get(job_id)})
+    fresh = runner.get(job_id)
+    if fresh is not None and fresh["status"] != "running":
+        # it finished between the click and the request — show the outcome, not a dead spinner
+        return templates.TemplateResponse(
+            request, "_results.html",
+            {"job": fresh, "summary": _results_summary(fresh.get("result"))},
+        )
+    return templates.TemplateResponse(
+        request, "_progress.html", {"job": fresh, "cancelling": runner.is_cancelling(job_id)},
+    )

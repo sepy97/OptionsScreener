@@ -992,3 +992,41 @@ def test_every_number_input_default_is_actually_submittable(tmp_path) -> None:
             )
             if attrs.get("max"):
                 assert Decimal(value) <= Decimal(attrs["max"]), f"{path}: {name} exceeds max"
+
+
+def test_cancel_shows_that_it_is_stopping_not_the_same_spinner(tmp_path) -> None:
+    """Cancellation is cooperative, so the run keeps going for a moment. Re-rendering the same
+    "Screening…" fragment in that gap is what made the button look like it did nothing."""
+    runner = _runner(_FakeService(wait_cancel=True), tmp_path)
+    client = _client(runner)
+    job_id = _job_id_from(client.post("/runs", data={}).text)
+
+    running = client.get(f"/runs/{job_id}/progress").text
+    assert "Screening" in running and "Cancel" in running
+
+    stopping = client.post(f"/runs/{job_id}/cancel").text
+    assert "Stopping" in stopping, "the click must change what the page says"
+    assert ">Cancel<" not in stopping, "and must not re-offer the button it just honoured"
+
+    # the poll keeps agreeing while the run winds down
+    assert "Stopping" in client.get(f"/runs/{job_id}/progress").text
+    runner.wait(job_id)
+
+
+def test_cancelling_shows_the_outcome_once_the_run_stops(tmp_path) -> None:
+    runner = _runner(_FakeService(wait_cancel=True), tmp_path)
+    client = _client(runner)
+    job_id = _job_id_from(client.post("/runs", data={}).text)
+    client.post(f"/runs/{job_id}/cancel")
+    runner.wait(job_id)
+    body = client.get(f"/runs/{job_id}/progress").text
+    assert "Stopping" not in body and "Screening" not in body  # it ended
+
+
+def test_cancelling_an_already_finished_run_shows_results_not_a_spinner(tmp_path) -> None:
+    """Clicking Cancel just as the run lands must not leave a spinner that never resolves."""
+    runner = _runner(_FakeService(result=[]), tmp_path)
+    _done_job(runner, _candidate("AAA"))
+    body = _client(runner).post("/runs/j/cancel").text
+    assert "Screening" not in body and "Stopping" not in body
+    assert "AAA" in body

@@ -1,12 +1,21 @@
 <article class="run-progress" hx-get="/runs/{{ job.job_id }}/progress" hx-trigger="every 2s"
          hx-swap="outerHTML" hx-target="this">
   <header>
-    <strong aria-busy="true">Screening…</strong>
-    <button hx-post="/runs/{{ job.job_id }}/cancel" hx-target="#run" hx-swap="innerHTML"
-            class="secondary outline">Cancel</button>
+    {# Cancellation is cooperative: the run stops at the next checkpoint, so there is a real gap
+       between the click and the end. Saying so is the difference between a button that looks
+       broken and one that is simply waiting. #}
+    {% if cancelling %}
+      <strong aria-busy="true">Stopping&hellip;</strong>
+      <span class="detail-note">finishing the chain pull already in flight</span>
+    {% else %}
+      <strong aria-busy="true">Screening&hellip;</strong>
+      <button hx-post="/runs/{{ job.job_id }}/cancel" hx-target="closest article"
+              hx-swap="outerHTML" hx-disabled-elt="this"
+              class="secondary outline">Cancel</button>
+    {% endif %}
   </header>
   <ul>
     {% for line in job.progress %}<li>{{ line }}</li>{% endfor %}
-    {% if not job.progress %}<li>starting…</li>{% endif %}
+    {% if not job.progress %}<li>starting&hellip;</li>{% endif %}
   </ul>
 </article>
