@@ -12,16 +12,19 @@
     </div>
     <fieldset class="rank-by">
       <legend>Rank by</legend>
+      {# The presets TILT the blend rather than reaching its ends. At 0 the score ignores
+         quality entirely and collapses into a rank position; at 1 it just restates the
+         Strength column. 0.25 / 0.75 keeps both signals in every score. #}
       <div class="segmented">
-        <input type="radio" name="fundamental_weight" value="0" id="rank-yield"
-               {% if defaults.fundamental_weight == 0 %}checked{% endif %}>
-        <label for="rank-yield">Higher yield<small>most premium</small></label>
+        <input type="radio" name="fundamental_weight" value="0.25" id="rank-yield"
+               {% if defaults.fundamental_weight == 0.25 %}checked{% endif %}>
+        <label for="rank-yield">Higher yield<small>mostly premium</small></label>
         <input type="radio" name="fundamental_weight" value="0.5" id="rank-bal"
                {% if defaults.fundamental_weight == 0.5 %}checked{% endif %}>
         <label for="rank-bal">Balanced<small>premium + quality</small></label>
-        <input type="radio" name="fundamental_weight" value="1" id="rank-qual"
-               {% if defaults.fundamental_weight == 1 %}checked{% endif %}>
-        <label for="rank-qual">Better quality<small>safer to own</small></label>
+        <input type="radio" name="fundamental_weight" value="0.75" id="rank-qual"
+               {% if defaults.fundamental_weight == 0.75 %}checked{% endif %}>
+        <label for="rank-qual">Better quality<small>mostly quality</small></label>
       </div>
     </fieldset>
   </div>

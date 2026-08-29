@@ -416,6 +416,11 @@ def test_dashboard_renders_form(tmp_path) -> None:
     assert 'hx-post="/runs"' in r.text and "Run screen" in r.text
     # segmented "Rank by" control (replaced the confusing 0..1 slider)
     assert "Rank by" in r.text and "Higher yield" in r.text and "Better quality" in r.text
+    # the presets TILT the blend; the ends are degenerate (0 ignores quality and becomes a rank
+    # position, 1 merely restates the Strength column), so neither may come back as a preset
+    assert 'value="0.25"' in r.text and 'value="0.5"' in r.text and 'value="0.75"' in r.text
+    assert 'name="fundamental_weight" value="0"' not in r.text
+    assert 'name="fundamental_weight" value="1"' not in r.text
     # DTE is now a primary control; names-to-check moved into Advanced
     assert 'name="min_dte"' in r.text and "Advanced filters" in r.text
     # options-quality knobs (#90) are adjustable in Advanced
