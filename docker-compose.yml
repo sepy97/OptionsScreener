@@ -26,6 +26,11 @@ services:
       # Portfolio state MUST live on the volume. Both default to paths inside the container, and
       # a deploy replaces the container — so leaving them would sign every session out and destroy
       # the broker link on each release, looking like "Schwab keeps disconnecting".
+      # Where Schwab sends the browser back. It defaults to a LOOPBACK address for the CLI's
+      # local login, which is always wrong for the web flow — Schwab would redirect the visitor
+      # to their own machine with the authorization code attached. Set here, not in .env, so a
+      # deploy cannot inherit the default.
+      SCHWAB__CALLBACK_URL: https://steadybull.net/portfolio/oauth/schwab/callback
       PORTFOLIO__SESSIONS_DB_PATH: /data/sessions.sqlite
       SCHWAB__TOKEN_PATH: /data/links/schwab_token.json
     volumes:

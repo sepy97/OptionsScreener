@@ -14,6 +14,7 @@ import json
 import logging
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from wheel_screener.config import SchwabSettings
 from wheel_screener.core.errors import ProviderDataError, ProviderError, ProviderUnavailableError
@@ -45,9 +46,11 @@ class SchwabOAuthLink:
 
     def authorize_url(self, state: str) -> str:
         """Where to send the browser. ``state`` is ours, issued and tracked server-side."""
-        if not self._settings.client_id or not self._settings.client_secret.get_secret_value():
+        if not self._configured:
+            # The visitor cannot act on this; it is the operator's to fix.
             raise ProviderUnavailableError(
-                "Schwab is not configured — set SCHWAB__CLIENT_ID and SCHWAB__CLIENT_SECRET"
+                "This deployment has no Schwab application configured yet, so there is nothing "
+                "to sign in to."
             )
         return self._context(state).authorization_url
 
@@ -79,20 +82,52 @@ class SchwabOAuthLink:
             raise ProviderDataError(f"Schwab rejected the authorization exchange: {e}") from e
         return self.status()
 
+    # A loopback callback is right for the CLI's local login flow and always wrong for the web
+    # one: Schwab redirects the visitor's browser there, so it must be an address that browser can
+    # reach and that this server answers on.
+    _LOOPBACK = ("127.0.0.1", "localhost", "::1")
+
+    @property
+    def _callback_is_reachable(self) -> bool:
+        host = urlsplit(self._settings.callback_url or "").hostname or ""
+        return bool(host) and host not in self._LOOPBACK
+
+    @property
+    def _configured(self) -> bool:
+        if not (self._settings.client_id and self._settings.client_secret.get_secret_value()):
+            return False
+        if not self._callback_is_reachable:
+            # Loud, because the symptom is otherwise baffling: the sign-in works, and Schwab then
+            # sends the browser to an address on the visitor's own machine with the code attached.
+            logger.warning(
+                "schwab callback_url is %r, which a browser cannot use to reach this server — set "
+                "SCHWAB__CALLBACK_URL to this site's /portfolio/oauth/schwab/callback. The web "
+                "sign-in is disabled until then.",
+                self._settings.callback_url,
+            )
+            return False
+        return True
+
     def status(self) -> BrokerLinkStatus:
-        """Whether a usable token is on disk, and when its refresh dies."""
+        """Whether a usable token is on disk, when its refresh dies, and whether this deployment
+        is even able to connect."""
         path = self._token_path
         if not path.exists():
-            return BrokerLinkStatus(broker=self.broker, connected=False)
+            return BrokerLinkStatus(
+                broker=self.broker, configured=self._configured, connected=False
+            )
         try:
             created = json.loads(path.read_text()).get("creation_timestamp")
             minted = datetime.fromtimestamp(float(created), tz=UTC)
         except Exception as e:  # noqa: BLE001 - an unreadable token is a disconnected link
             logger.warning("schwab token unreadable (%s); treating the link as disconnected", e)
-            return BrokerLinkStatus(broker=self.broker, connected=False)
+            return BrokerLinkStatus(
+                broker=self.broker, configured=self._configured, connected=False
+            )
         expires = minted + timedelta(days=REFRESH_TOKEN_DAYS)
         return BrokerLinkStatus(
             broker=self.broker,
+            configured=self._configured,
             connected=expires > datetime.now(tz=UTC),
             expires_at=expires,
         )

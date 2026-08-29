@@ -221,6 +221,11 @@ class BrokerLinkStatus(BaseModel):
     """
 
     broker: str
+    # Whether this deployment could connect at all — the broker's app credentials are present.
+    # Distinct from `connected`: "nobody has signed in yet" and "there is nothing to sign in to"
+    # are different answers, and only the second is the operator's problem rather than the
+    # visitor's.
+    configured: bool = False
     connected: bool = False
     expires_at: datetime | None = None
     account_fingerprint: str | None = None

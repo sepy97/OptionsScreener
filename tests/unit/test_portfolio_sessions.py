@@ -140,7 +140,7 @@ class _FakeLink:
 
     def status(self):
         return BrokerLinkStatus(
-            broker="schwab", connected=self.connected,
+            broker="schwab", configured=True, connected=self.connected,
             expires_at=_later() if self.connected else None,
         )
 
@@ -346,3 +346,62 @@ def test_money_renders_unknown_as_a_dash_not_zero() -> None:
     assert _money(0) == "$0.00"
     assert _money(1234.5) == "$1,234.50"
     assert _money(-50.0) == "-$50.00"
+
+
+# --- an unconfigured deployment --------------------------------------------------------------
+
+class _UnconfiguredLink(_FakeLink):
+    def status(self):
+        return BrokerLinkStatus(broker="schwab", configured=False, connected=False)
+
+    def authorize_url(self, state):
+        from wheel_screener.core.errors import ProviderUnavailableError
+
+        raise ProviderUnavailableError("This deployment has no Schwab application configured yet")
+
+
+def test_an_unconfigured_deployment_says_so_instead_of_offering_a_dead_button() -> None:
+    """'Nobody has signed in' and 'there is nothing to sign in to' are different answers, and only
+    the second is the operator's problem — so the visitor is told rather than handed a failure."""
+    c = _client(_UnconfiguredLink())
+    try:
+        body = c.get("/portfolio").text
+        assert "Sign in with Schwab" not in body
+        assert "nothing to" in body
+        assert "SCHWAB__CLIENT_ID" not in body, "server config names are not for visitors"
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_connecting_anyway_fails_without_naming_environment_variables() -> None:
+    c = _client(_UnconfiguredLink())
+    try:
+        body = c.get("/portfolio/oauth/schwab/connect").text
+        assert "no Schwab application configured" in body
+        assert "SCHWAB__CLIENT_SECRET" not in body
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_configured_deployment_still_offers_the_button() -> None:
+    c = _client(_FakeLink(connected=False))
+    try:
+        assert "Sign in with Schwab" in c.get("/portfolio").text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_loopback_callback_disables_the_web_sign_in() -> None:
+    """The callback defaults to 127.0.0.1 for the CLI's local login. Left that way on a server,
+    Schwab redirects the VISITOR'S browser to their own machine with the code attached — the
+    sign-in appears to work and lands nowhere. Treated as not configured instead."""
+    from wheel_screener.adapters.schwab.link import SchwabOAuthLink
+    from wheel_screener.config import SchwabSettings
+
+    def link(cb):
+        return SchwabOAuthLink(SchwabSettings(client_id="k", client_secret="s", callback_url=cb))
+
+    assert link("https://127.0.0.1:8182").status().configured is False
+    assert link("https://localhost:9000/x").status().configured is False
+    assert link("").status().configured is False
+    assert link("https://steadybull.net/portfolio/oauth/schwab/callback").status().configured
