@@ -45,10 +45,12 @@
               <p class="detail-note">what you can put behind a new put</p>
             </div>
             <div class="balance">
-              <dt>Invested</dt><dd>{{ b.invested | money }}</dd>
-            </div>
-            <div class="balance">
               <dt>Buying power</dt><dd>{{ b.buying_power | money }}</dd>
+              {# It exceeds total value on a margin account, which reads as an error unless the
+                 page says why: it is what the broker will LEND against the account, not money
+                 in it. Capacity beside it is the number a cash-secured seller should act on. #}
+              <p class="detail-note">includes margin the broker would lend &mdash; not cash you
+                hold</p>
             </div>
             {# The wheel question the other four cannot answer: how much more can I sell?
                Cash minus collateral already committed -- cash, not buying power, because a

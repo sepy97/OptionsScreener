@@ -283,7 +283,11 @@ def test_the_connected_tab_shows_the_money() -> None:
     try:
         body = c.get("/portfolio").text
         assert "••••1337" in body and "margin" in body
-        assert "$1,000.00" in body and "$400.00" in body and "$600.00" in body
+        assert "$1,000.00" in body and "$400.00" in body   # total value, cash
+        assert "$800.00" in body                            # buying power
+        # "Invested" was removed: on a wheel account it nets short-put liability against assets,
+        # so a growing put book made it shrink — reading as owning less rather than owing more.
+        assert "Invested" not in body and "$600.00" not in body
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)

@@ -513,6 +513,15 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
       date. Two things learned while building it, both worth keeping:
       - **Cash-equivalent rows must be dropped.** A swept money-market fund is already inside the
         cash balance; listing it as a holding double-counts the account on screen.
+      - **"Invested" was shown, then removed.** Derived as `total - cash`, it nets an
+        OBLIGATION against an asset: short puts carry a negative market value, so a growing put
+        book made the number shrink — reading as owning less rather than owing more. It survives
+        as the input to the cash-double-counting check, not as a cell. The lesson generalises:
+        a balance-sheet label borrowed from a long-only account can be actively wrong for a
+        wheel, and "what does this tell the seller?" is the test worth applying to each one.
+      - **Buying power needs a caveat next to it.** On a margin account it EXCEEDS total value,
+        which reads as a bug. It is what the broker would lend, not money held; Capacity beside
+        it is the number a cash-secured seller should act on.
       - **Every asset class is a holding.** Bonds and funds first landed in an "also held"
         footnote of raw CUSIPs, which answers nothing. The fix that mattered was noticing Schwab
         sends `cusip` as its own field: when it EQUALS the symbol, the symbol is a CUSIP and the

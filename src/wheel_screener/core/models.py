@@ -204,7 +204,12 @@ class AccountBalances(BaseModel):
 
     total_value: float | None = None  # what the account is worth, all in
     cash: float | None = None  # the collateral pool, for a wheel
-    invested: float | None = None  # derived; see above
+    # Derived (see above), and DIAGNOSTIC rather than display. It was shown on the Portfolio tab
+    # and removed: for a wheel account it nets an obligation against an asset — short puts carry a
+    # negative market value, so a growing put book made "invested" shrink, which reads as owning
+    # less rather than owing more. It stays here because it is what the cash-double-counting check
+    # below is computed from.
+    invested: float | None = None
     buying_power: float | None = None  # margin accounts; None on a cash account
     equity: float | None = None
 
