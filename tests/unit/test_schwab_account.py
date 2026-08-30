@@ -277,3 +277,41 @@ def test_assignment_watch_needs_a_price_and_says_nothing_without_one() -> None:
     shares = Position(symbol="AAPL", underlying="AAPL", kind=PositionKind.SHARES, quantity=1,
                       underlying_price=10.0)
     assert shares.in_the_money is None, "only meaningful for a short put"
+
+
+def test_a_bond_is_a_holding_with_a_readable_name_not_a_cusip() -> None:
+    """Schwab sends the CUSIP as its own field. When it equals the symbol, the symbol IS a CUSIP
+    and the description is the only label a human can read."""
+    acct = _provider([], _acct_with(_pos(
+        "912810FB9", "FIXED_INCOME", long=7.0, marketValue=7104.03,
+        instrument={"cusip": "912810FB9", "description": "US TREASURY BOND 4.5% 2044"},
+    ))).accounts()[0]
+    p = acct.positions[0]
+    assert p.symbol_is_cusip is True
+    assert p.label == "US TREASURY BOND 4.5% 2044"
+    assert p.asset_label == "Bond" and p.is_option is False
+    assert p.covered_call_lots is None, "a bond is not writable — not applicable, not zero"
+
+
+def test_an_etf_is_writable_but_a_mutual_fund_is_not() -> None:
+    acct = _provider([], _acct_with(
+        _pos("SPY", "COLLECTIVE_INVESTMENT", long=150.0, instrument={"cusip": "78462F103"}),
+        _pos("VTSAX", "MUTUAL_FUND", long=500.0),
+    )).accounts()[0]
+    spy, vtsax = acct.positions
+    assert spy.asset_label == "ETF" and spy.covered_call_lots == 1
+    assert spy.label == "SPY", "a real ticker is not replaced by a description"
+    assert vtsax.asset_label == "Mutual fund" and vtsax.covered_call_lots is None
+
+
+def test_an_unknown_asset_class_renders_as_itself_rather_than_vanishing() -> None:
+    """The bucket named 'other' is where holdings go to be forgotten. A class this code has
+    never seen should still say what it is."""
+    acct = _provider([], _acct_with(_pos("XYZ", "PREFERRED_STOCK", long=10.0))).accounts()[0]
+    assert acct.positions[0].asset_label == "Preferred Stock"
+
+
+def test_asset_class_is_carried_through_for_options_too() -> None:
+    acct = _provider([], _acct_with(_pos(
+        "AAPL  260918P00190000", "OPTION", short=1.0))).accounts()[0]
+    assert acct.positions[0].is_option is True and acct.positions[0].asset_label == "Option"

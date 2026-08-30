@@ -557,9 +557,22 @@ def _account_with_positions():
                      kind=PositionKind.SHORT_PUT, quantity=1, strike=100.0,
                      expiration=_date(2026, 9, 18), dte=20, collateral=10_000.0),  # no quote
             Position(symbol="TSLA", underlying="TSLA", kind=PositionKind.SHARES,
-                     quantity=250, average_price=210.0, market_value=60_000.0),
+                     asset_type="EQUITY", quantity=250, average_price=210.0,
+                     market_value=60_000.0),
             Position(symbol="F", underlying="F", kind=PositionKind.SHARES,
-                     quantity=40, average_price=11.0, market_value=460.0),
+                     asset_type="EQUITY", quantity=40, average_price=11.0, market_value=460.0),
+            Position(symbol="SPY", underlying="SPY", kind=PositionKind.SHARES,
+                     asset_type="COLLECTIVE_INVESTMENT", quantity=150, average_price=520.0,
+                     market_value=81_000.0),
+            # a bond: the symbol IS the CUSIP, so only the description is readable
+            Position(symbol="912810FB9", underlying="912810FB9", kind=PositionKind.OTHER,
+                     asset_type="FIXED_INCOME", symbol_is_cusip=True,
+                     description="US TREASURY BOND 4.5% 2044", quantity=7,
+                     market_value=7_104.03),
+            Position(symbol="AAPL  261016C00300000", underlying="AAPL",
+                     kind=PositionKind.SHORT_CALL, asset_type="OPTION", quantity=1,
+                     strike=300.0, expiration=_date(2026, 10, 16), dte=48,
+                     market_value=-150.0),
         ],
     )
 
@@ -608,8 +621,32 @@ def test_the_assignment_watch_distinguishes_itm_safe_and_unknown() -> None:
     assert "no quote" in body          # NVDA: unknown, and said so
 
 
-def test_share_lots_flag_how_many_calls_they_cover() -> None:
+def test_holdings_list_every_asset_class_not_just_stocks() -> None:
+    """"What do I hold" has to mean everything — a bond swept into a footnote of raw CUSIPs is
+    not an answer."""
     body = _portfolio_page()
-    assert "Shares held" in body
-    assert "2 contracts" in body, "250 shares covers two calls, not two and a half"
-    assert "under 100 shares" in body, "40 shares covers nothing, whatever it is worth"
+    assert "Holdings" in body
+    for name in ("TSLA", "SPY", "US TREASURY BOND 4.5% 2044"):
+        assert name in body
+    assert "Stock" in body and "ETF" in body and "Bond" in body
+    assert "912810FB9" in body, "the CUSIP stays visible under the readable name"
+
+
+def test_covered_call_lots_distinguish_none_from_not_applicable() -> None:
+    """A bond supports no covered calls, and that is a different statement from zero."""
+    body = _portfolio_page()
+    assert "2 contracts" in body, "250 TSLA covers two calls, not two and a half"
+    assert "1 contract" in body, "150 SPY covers one — ETFs are writable too"
+    assert "under 100" in body, "40 shares covers nothing, whatever it is worth"
+    assert "n/a" in body, "a bond is not writable at all"
+
+
+def test_no_position_is_invisible() -> None:
+    """Every row the broker returns must appear somewhere. The previous layout showed short puts
+    and shares, and quietly dropped short calls and bonds into a one-line footnote."""
+    body = _portfolio_page()
+    account = _account_with_positions()
+    for p in account.positions:
+        needle = p.description if p.symbol_is_cusip else p.underlying
+        assert needle in body, f"{p.symbol} is not rendered anywhere"
+    assert "Other options" in body and "short call" in body

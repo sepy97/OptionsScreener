@@ -97,31 +97,26 @@
             </figure>
           {% endif %}
 
-          {% set lots = a.positions | selectattr('kind', 'equalto', 'shares') | list %}
-          {% if lots %}
-            <h4>Shares held</h4>
+          {% set others = a.positions | selectattr('is_option')
+                                      | rejectattr('kind', 'equalto', 'short_put') | list %}
+          {% if others %}
+            <h4>Other options</h4>
             <figure>
             <table>
               <thead><tr>
-                <th>Symbol</th><th>Shares</th><th>Avg cost</th>
-                <th>Value</th><th>Covered calls</th>
+                <th>Symbol</th><th>Strike</th><th>Expiry</th><th>DTE</th>
+                <th>Position</th><th>Contracts</th><th>Value</th>
               </tr></thead>
               <tbody>
-                {% for p in lots | sort(attribute='market_value', reverse=true) %}
+                {% for p in others | sort(attribute='dte') %}
                   <tr>
-                    <td><b>{{ p.symbol }}</b></td>
+                    <td><b>{{ p.underlying }}</b></td>
+                    <td>{{ p.strike | money }}</td>
+                    <td>{{ p.expiration.strftime('%d %b') if p.expiration else '&mdash;' }}</td>
+                    <td>{{ p.dte if p.dte is not none else '&mdash;' }}</td>
+                    <td>{{ 'short call' if p.kind == 'short_call' else 'long' }}</td>
                     <td>{{ p.quantity | int }}</td>
-                    <td>{{ p.average_price | money }}</td>
                     <td>{{ p.market_value | money }}</td>
-                    <td>
-                      {# one contract covers exactly 100 shares; below that there is nothing
-                         to sell against, however large the position's value #}
-                      {% if p.quantity >= 100 %}
-                        <span class="badge badge--ok">{{ (p.quantity // 100) | int }} contract{{ 's' if p.quantity >= 200 else '' }}</span>
-                      {% else %}
-                        <span class="detail-note">under 100 shares</span>
-                      {% endif %}
-                    </td>
                   </tr>
                 {% endfor %}
               </tbody>
@@ -129,9 +124,46 @@
             </figure>
           {% endif %}
 
-          {% set other = a.positions | rejectattr('kind', 'in', ['short_put', 'shares']) | list %}
-          {% if other %}
-            <p class="detail-note">Also held: {{ other | map(attribute='symbol') | join(', ') }}</p>
+          {# Everything that is not an option, whatever its asset class. Bonds and funds used to
+             be a footnote of raw CUSIPs, which answers nothing. #}
+          {% set holdings = a.positions | rejectattr('is_option') | list %}
+          {% if holdings %}
+            <h4>Holdings</h4>
+            <figure>
+            <table>
+              <thead><tr>
+                <th>Holding</th><th>Type</th><th>Quantity</th><th>Avg cost</th>
+                <th>Value</th><th>Covered calls</th>
+              </tr></thead>
+              <tbody>
+                {% for p in holdings | sort(attribute='market_value', reverse=true) %}
+                  <tr>
+                    <td>
+                      <b>{{ p.label }}</b>
+                      {% if p.symbol_is_cusip %}
+                        <br><span class="detail-note">{{ p.symbol }}</span>
+                      {% endif %}
+                    </td>
+                    <td><span class="badge">{{ p.asset_label }}</span></td>
+                    <td>{{ p.quantity | int }}</td>
+                    <td>{{ p.average_price | money }}</td>
+                    <td>{{ p.market_value | money }}</td>
+                    <td>
+                      {% set lots = p.covered_call_lots %}
+                      {% if lots is none %}
+                        {# not writable at all -- a different statement from "zero" #}
+                        <span class="detail-note">n/a</span>
+                      {% elif lots %}
+                        <span class="badge badge--ok">{{ lots }} contract{{ 's' if lots > 1 else '' }}</span>
+                      {% else %}
+                        <span class="detail-note">under 100</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            </figure>
           {% endif %}
         </section>
       {% else %}

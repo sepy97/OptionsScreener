@@ -513,6 +513,10 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
       date. Two things learned while building it, both worth keeping:
       - **Cash-equivalent rows must be dropped.** A swept money-market fund is already inside the
         cash balance; listing it as a holding double-counts the account on screen.
+      - **Every asset class is a holding.** Bonds and funds first landed in an "also held"
+        footnote of raw CUSIPs, which answers nothing. The fix that mattered was noticing Schwab
+        sends `cusip` as its own field: when it EQUALS the symbol, the symbol is a CUSIP and the
+        description is the only readable label — no guessing from the string's shape.
       - **Capacity is cash minus committed collateral, never buying power.** A cash-secured put is
         secured by cash, and showing margin buying power here invites selling puts the account
         cannot cover.
