@@ -193,13 +193,15 @@ def covered_calls(
     """
     if spot is None or spot <= 0 or spot >= strike:
         return []
+    # Default to the put's own strike — the cost basis assignment hands you, so writing there is
+    # the break-even line. An explicit choice is honoured, and either way a strike the chain does
+    # not list snaps to the nearest one: emptying the table over a strike that simply is not
+    # traded looks exactly like the control doing nothing.
     listed = {c.strike for c in calls}
-    target = call_strike if call_strike is not None else (
-        strike if strike in listed
-        else min(listed, key=lambda k: abs(k - strike)) if listed else None
-    )
-    if target is None:
+    if not listed:
         return []
+    wanted = call_strike if call_strike is not None else strike
+    target = wanted if wanted in listed else min(listed, key=lambda k: abs(k - wanted))
 
     shares_value = spot * CONTRACT_MULTIPLIER * contracts
     here = strike * CONTRACT_MULTIPLIER * contracts

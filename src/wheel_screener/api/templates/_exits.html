@@ -24,11 +24,7 @@
         <input type="text" name="roll_strike" value="{{ roll_strike }}" inputmode="decimal"
                placeholder="same (${{ '%g'|format(strike) }})">
       </label>
-      <label>Call strike
-      <input type="text" name="call_strike" value="{{ call_strike }}" inputmode="decimal"
-             placeholder="same (${{ '%g'|format(strike) }})">
-    </label>
-    <label>Min DTE
+      <label>Min DTE
         <input type="number" name="min_dte" value="{{ min_dte }}" min="1" max="400">
       </label>
       <label>Max DTE
@@ -107,8 +103,19 @@
          expiring in three days annualised to 293% and sat at the top of the table as the best
          available action — against shares that would not be owned for three more weeks. #}
       {% if after %}
+        {# The call strike lives HERE, not up with the roll controls. It governs this table and
+           nothing else, and sitting above the roll ladder it looked inert — changed it, pressed
+           Reprice, and the rows it does not touch stayed put. It also has no meaning at all when
+           the put is out of the money, which is exactly when this section is absent. #}
         <h5 class="exit-after">If assigned on {{ expiry_label }}, writing a call would pay
           about</h5>
+        <div class="exit-controls exit-controls--after">
+          <label>Call strike
+            <input type="text" name="call_strike" value="{{ call_strike }}" inputmode="decimal"
+                   form="exits-form" placeholder="same (${{ '%g'|format(strike) }})">
+          </label>
+          <button type="submit" form="exits-form" class="secondary outline">Reprice</button>
+        </div>
         <figure>
         <table>
           <thead><tr>

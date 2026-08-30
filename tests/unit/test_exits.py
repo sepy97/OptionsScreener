@@ -245,3 +245,16 @@ def test_a_higher_strike_is_not_the_same_as_an_in_the_money_one() -> None:
     itm = _rolls([cur, _c(170.0, later, 7.00, 7.20)], 150.0, exp, 1, spot, TODAY,
                  roll_strike=170.0)[0]
     assert any("intrinsic" in w for w in itm.warnings), "$170 IS in the money at $164"
+
+
+def test_an_unlisted_call_strike_snaps_to_the_nearest_rather_than_emptying_the_table() -> None:
+    """Emptying the table over a strike that simply is not traded looks exactly like the control
+    doing nothing — which is how the bug was reported."""
+    from wheel_screener.core.exits import covered_calls as _cc
+
+    chain = [_c(k, TODAY + timedelta(days=26), 8.0, 8.2, kind=OptionType.CALL)
+             for k in (385.0, 390.0, 400.0)]
+    assert _cc(chain, 390.0, 1, SPOT, TODAY, call_strike=402.0)[0].strike == 400.0
+    assert _cc(chain, 390.0, 1, SPOT, TODAY, call_strike=1_000.0)[0].strike == 400.0
+    assert _cc(chain, 390.0, 1, SPOT, TODAY, call_strike=400.0)[0].strike == 400.0
+    assert _cc([], 390.0, 1, SPOT, TODAY, call_strike=400.0) == [], "no chain, no claim"

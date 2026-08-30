@@ -989,3 +989,39 @@ def test_the_days_column_headlines_one_quantity_in_every_row() -> None:
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
+
+
+def test_the_call_strike_control_sits_on_the_table_it_governs() -> None:
+    """It changes the post-assignment rows and nothing else. Placed above the roll ladder it read
+    as inert — change it, press Reprice, and the rows it does not touch stay put."""
+    from wheel_screener.core.exits import ExitOption
+
+    after = [ExitOption(kind="assign_cc", label="26-day $195 call", credit=900.0, days=26,
+                        collateral=37000.0, extrinsic=900.0, strike=195.0)]
+    c, _ = _exits_client(after=after)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18",
+            "call_strike": "195"}).text
+        assert body.index('name="call_strike"') > body.index("If assigned on"), \
+            "the control belongs below the heading of the table it drives"
+        assert 'form="exits-form"' in body, "and still submits with the rest of the panel"
+        assert 'value="195"' in body, "the chosen strike is echoed back, not reset"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_no_call_strike_control_when_there_is_nothing_for_it_to_do() -> None:
+    """An out-of-the-money put has no post-assignment table, so the control would govern
+    nothing at all."""
+    c, _ = _exits_client(after=[])
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "QCOM", "strike": 150.0, "expiry": "2026-09-04"}).text
+        assert "If assigned on" not in body
+        assert 'name="call_strike"' not in body
+        assert 'name="roll_strike"' in body, "the roll controls still apply"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
