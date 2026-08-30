@@ -405,3 +405,122 @@ def test_a_loopback_callback_disables_the_web_sign_in() -> None:
     assert link("https://localhost:9000/x").status().configured is False
     assert link("").status().configured is False
     assert link("https://steadybull.net/portfolio/oauth/schwab/callback").status().configured
+
+
+# ── token file shape ───────────────────────────────────────────────────────────────────────
+# The Portfolio tab once read "Connected" with a live expiry while every Schwab call failed
+# with `unsupported_token_type: Unsupported token_type: 'access_token'`. Both halves were true:
+# status() only reads the OUTER creation_timestamp, which survives the mistake below.
+
+def _link(tmp_path, **kw):
+    from pydantic import SecretStr
+
+    from wheel_screener.adapters.schwab.link import SchwabOAuthLink
+    from wheel_screener.config import SchwabSettings
+
+    return SchwabOAuthLink(SchwabSettings(
+        client_id="id", client_secret=SecretStr("secret"),
+        callback_url="https://example.test/portfolio/oauth/schwab/callback",
+        token_path=str(tmp_path / "schwab_token.json"), **kw))
+
+
+def _capture_writer(link):
+    """The function schwab-py is handed, without running the OAuth exchange."""
+    import json as _json
+
+    def write_token(payload, *_args):
+        link._token_path.parent.mkdir(parents=True, exist_ok=True)
+        link._token_path.write_text(_json.dumps(payload))
+    return write_token
+
+
+def test_the_token_is_written_exactly_as_schwab_py_wraps_it(tmp_path) -> None:
+    """schwab-py's TokenMetadata.wrapped_token_write_func has ALREADY applied the
+    {creation_timestamp, token} envelope before calling us. Adding a second one produced a file
+    that authlib read as a token whose type was the literal string 'access_token'."""
+    import inspect
+    import json as _json
+
+    from wheel_screener.adapters.schwab.link import SchwabOAuthLink
+
+    src = inspect.getsource(SchwabOAuthLink.complete)
+    assert "json.dumps(payload)" in src
+    assert '"token": token' not in src, "re-wrapping schwab-py's envelope is the bug"
+
+    link = _link(tmp_path)
+    wrapped = {"creation_timestamp": 1_700_000_000,
+               "token": {"access_token": "A", "refresh_token": "R", "token_type": "Bearer"}}
+    _capture_writer(link)(wrapped)
+    assert _json.loads(link._token_path.read_text()) == wrapped
+
+
+def test_a_refresh_does_not_slide_the_seven_day_authorisation_clock(tmp_path) -> None:
+    """This writer is also the update_token hook, so it runs on every ~30-minute access-token
+    refresh. Stamping our own timestamp there reset the refresh token's 7-day life each time —
+    the tab would promise a week of authorisation forever while the credential died silently."""
+    import json as _json
+
+    link = _link(tmp_path)
+    write = _capture_writer(link)
+    granted = 1_700_000_000
+    write({"creation_timestamp": granted, "token": {"access_token": "A", "token_type": "Bearer"}})
+    # ...half an hour later schwab-py refreshes the access token and writes again
+    write({"creation_timestamp": granted, "token": {"access_token": "B", "token_type": "Bearer"}})
+    on_disk = _json.loads(link._token_path.read_text())
+    assert on_disk["creation_timestamp"] == granted, "the grant time must not move on refresh"
+    assert on_disk["token"]["access_token"] == "B"
+
+
+def test_a_double_wrapped_token_is_repaired_in_place(tmp_path) -> None:
+    """The credential underneath is valid — the envelope is wrong, not the grant — so a deploy
+    must not cost someone their broker link."""
+    import json as _json
+
+    from wheel_screener.adapters.schwab.auth import repair_token_file
+
+    real = {"access_token": "A", "refresh_token": "R", "token_type": "Bearer"}
+    path = tmp_path / "t.json"
+    path.write_text(_json.dumps(
+        {"creation_timestamp": 999, "token": {"creation_timestamp": 111, "token": real}}))
+
+    assert repair_token_file(path) is True
+    fixed = _json.loads(path.read_text())
+    assert fixed == {"creation_timestamp": 111, "token": real}
+    assert fixed["creation_timestamp"] == 111, "the real grant time, not the outer re-stamp"
+    assert repair_token_file(path) is False, "must be idempotent"
+
+
+def test_repair_leaves_a_correct_token_and_junk_alone(tmp_path) -> None:
+    import json as _json
+
+    from wheel_screener.adapters.schwab.auth import repair_token_file
+
+    good = {"creation_timestamp": 111,
+            "token": {"access_token": "A", "refresh_token": "R", "token_type": "Bearer"}}
+    p = tmp_path / "good.json"
+    p.write_text(_json.dumps(good))
+    assert repair_token_file(p) is False and _json.loads(p.read_text()) == good
+
+    junk = tmp_path / "junk.json"
+    junk.write_text("not json at all")
+    assert repair_token_file(junk) is False  # unreadable, but must never raise
+    assert repair_token_file(tmp_path / "missing.json") is False
+
+
+def test_the_repaired_token_loads_with_a_usable_token_type(tmp_path) -> None:
+    """The end of the chain: a repaired file must produce a Bearer token, which is the thing
+    authlib refused to do with the double-wrapped one."""
+    import json as _json
+
+    from schwab.auth import client_from_token_file
+
+    from wheel_screener.adapters.schwab.auth import repair_token_file
+
+    real = {"access_token": "A", "refresh_token": "R", "token_type": "Bearer",
+            "expires_in": 1800, "expires_at": 9_999_999_999}
+    path = tmp_path / "t.json"
+    path.write_text(_json.dumps(
+        {"creation_timestamp": 999, "token": {"creation_timestamp": 111, "token": real}}))
+    repair_token_file(path)
+    client = client_from_token_file(str(path), "key", "secret")
+    assert client.session.token["token_type"] == "Bearer"
