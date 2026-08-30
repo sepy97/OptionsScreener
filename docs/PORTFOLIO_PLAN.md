@@ -540,9 +540,12 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
         credit — 417%/yr on gross cash, straight to the top of the table. Net of the intrinsic it
         sells it is *minus* $1,024 and commits $4,500 more collateral. Ranking on cash recommends
         the worst action hardest exactly when it is worst.
-      - **Keep and assign-then-write score identically on an ITM put**, by put-call parity. That
-        is a property of the maths, so it is asserted: if the two ever drift apart, the pricing
-        is wrong somewhere.
+      - **Writing calls is not an alternative to keeping the put — it follows it.** Assignment
+        happens when the put expires, so nothing can be written against those shares beforehand.
+        Ranked together, a call expiring in three days annualised to 293%/yr and sat at the top
+        of the table as the best available action, against shares that would not be owned for
+        another three weeks. Two lists now: alternatives available today, and what the capital
+        earns after assignment, measured from the assignment date rather than from today.
 - [ ] **P5 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture. Add: a
       *stale-quote* note for the assignment watch — spot comes from the chain provider on a
       best-effort basis and an unknown price renders "no quote", which is honest but silent about

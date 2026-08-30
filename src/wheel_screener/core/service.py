@@ -304,9 +304,10 @@ class ScreenerService:
     ):
         """Every way out of one open short put, priced and ranked.
 
-        Returns ``(rows, spot)``. The requested DTE window is always widened to contain the
-        position's own expiry — without that contract there is no cost to close, so the baseline
-        "keep" row cannot be formed and the whole table is a list of alternatives to nothing.
+        Returns ``(alternatives, after_assignment, spot)``. The requested DTE window is always
+        widened to contain the position's own expiry — without that contract there is no cost to
+        close, so the baseline "keep" row cannot be formed and the whole table becomes a list of
+        alternatives to nothing.
 
         Calls are only fetched when the put is in the money. Out of the money, assignment is not
         the live outcome, so offering an assign-and-write row would compare against a position
@@ -335,16 +336,17 @@ class ScreenerService:
             )
             calls = call_chain.contracts
 
-        rows = exits.compare(
+        rows, after = exits.compare(
             put_chain.contracts, calls, strike=strike, expiration=expiration,
             contracts=contracts, spot=spot, today=today, roll_strike=roll_strike,
             call_strike=call_strike,
         )
         logger.info(
-            "exits: %s $%g %s -> %d option(s) priced (spot %s)",
-            symbol, strike, expiration, len(rows), f"{spot:.2f}" if spot else "unknown",
+            "exits: %s $%g %s -> %d alternative(s), %d post-assignment (spot %s)",
+            symbol, strike, expiration, len(rows), len(after),
+            f"{spot:.2f}" if spot else "unknown",
         )
-        return rows, spot
+        return rows, after, spot
 
     def search_ticker(
         self,

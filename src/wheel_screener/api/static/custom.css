@@ -398,3 +398,7 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 .exit-controls button { width: auto; margin: 0; }
 .exit-best td { background: var(--wheel-accent-soft); }
 .exit-best td:first-child { box-shadow: inset 3px 0 0 var(--wheel-accent); }
+.exit-after {
+  margin: 1.25rem 0 0.4rem; font-size: 0.8125rem; font-weight: 600; color: var(--pico-muted-color);
+  text-transform: uppercase; letter-spacing: 0.03em;
+}
