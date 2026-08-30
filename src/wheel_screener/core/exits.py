@@ -46,6 +46,10 @@ class ExitOption:
     expiration: date | None = None
     # How much more (or less) collateral this action commits than the position does today.
     collateral_delta: float = 0.0
+    # Days from TODAY to this action's expiry. For a roll that is not ``days``: the credit is
+    # earned over the days the roll ADDS, but the capital is committed for the whole run. "56
+    # added" alone left the reader unable to tell whether 56 was the total or an increment.
+    total_days: int | None = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -96,9 +100,10 @@ def keep(
     collateral = strike * CONTRACT_MULTIPLIER * contracts
     cost_to_close = cur.ask * CONTRACT_MULTIPLIER * contracts
     earnable = cost_to_close - intrinsic(strike, spot, contracts)
+    remaining = (expiration - today).days
     return ExitOption(
         kind="keep", label="Keep to expiry",
-        credit=round(earnable, 2), days=(expiration - today).days,
+        credit=round(earnable, 2), days=remaining, total_days=remaining,
         collateral=collateral, extrinsic=round(earnable, 2),
         strike=strike, expiration=expiration,
     )
@@ -151,7 +156,8 @@ def rolls(
             )
         out.append(ExitOption(
             kind="roll", label=f"Roll to {c.expiration:%d %b}",
-            credit=round(credit, 2), days=added, collateral=collateral,
+            credit=round(credit, 2), days=added, total_days=(c.expiration - today).days,
+            collateral=collateral,
             extrinsic=round(time_value, 2), strike=target, expiration=c.expiration,
             collateral_delta=round(collateral - here, 2), warnings=tuple(warns),
         ))

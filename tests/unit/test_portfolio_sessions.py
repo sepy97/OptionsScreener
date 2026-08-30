@@ -706,13 +706,11 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
 
     # Shaped to the fixture's own AAPL $190 put, 2 contracts, spot $185 — a fake that answers
     # for a different position than the one clicked is a fake that will be believed.
+    # ALTERNATIVES only — keep and rolls. Writing calls is a continuation, so it belongs in the
+    # second list, exactly as the service returns it.
     default = [
         ExitOption(kind="keep", label="Keep to expiry", credit=600.0, days=20,
                    collateral=38000.0, extrinsic=600.0),
-        ExitOption(kind="assign_cc", label="Assign, sell $190 call 18 Sep", credit=580.0,
-                   days=20, collateral=37000.0, extrinsic=580.0, strike=190.0),
-        ExitOption(kind="assign_cc", label="Assign, sell $190 call 16 Oct", credit=1150.0,
-                   days=47, collateral=37000.0, extrinsic=1150.0, strike=190.0),
         ExitOption(kind="roll", label="Roll to 16 Oct", credit=420.0, days=28,
                    collateral=38000.0, extrinsic=420.0, strike=190.0),
         ExitOption(kind="roll", label="Roll to 25 Sep", credit=2300.0, days=7,
@@ -720,6 +718,16 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
                    collateral_delta=2000.0,
                    warnings=("$200 is in the money at $185.00 — part of this credit"
                              " is intrinsic",)),
+    ]
+    # a continuation, not an alternative — the service returns it as its own list
+    default_after = [
+        ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=1150.0,
+                   days=28, collateral=37000.0, extrinsic=1150.0, strike=190.0),
+    ]
+
+    default_after = [
+        ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=1150.0,
+                   days=28, collateral=37000.0, extrinsic=1150.0, strike=190.0),
     ]
 
     class _Svc:
@@ -733,7 +741,8 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
                 raise error
             # (alternatives, after-assignment, spot) — the middle list is not an alternative to
             # anything above it, which is why the service hands it back separately
-            return (default if rows is None else rows), (after or []), spot
+            return (default if rows is None else rows), (
+                default_after if after is None else after), spot
 
     svc = _Svc()
     c = _client()
@@ -782,7 +791,8 @@ def test_ways_out_prices_the_position_that_was_clicked() -> None:
         assert r.status_code == 200
         assert svc.seen["symbol"] == "AAPL" and svc.seen["strike"] == 190.0
         assert svc.seen["expiration"] == _date(2026, 9, 18)
-        assert "Keep to expiry" in r.text and "Assign, sell $190 call" in r.text
+        assert "Keep to expiry" in r.text
+        assert "Sell $190 call" in r.text and "If assigned on 18 Sep" in r.text
         assert "$390" not in r.text, "the panel must answer for the position that was clicked"
     finally:
         app.dependency_overrides.clear()
@@ -953,6 +963,32 @@ def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:
         ranked = body[:body.index("If assigned on")]
         assert "Sell $190 call 16 Oct" not in ranked
         assert "Keep to expiry" in ranked
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_days_column_headlines_one_quantity_in_every_row() -> None:
+    """"26" and "56 added" were not the same measurement, and "56 added" said neither what 56
+    was added TO nor what the run came to. Every headline is now days committed from today; a
+    roll breaks that down underneath, which also shows the figure its rate is scored on."""
+    from wheel_screener.core.exits import ExitOption
+
+    rows = [
+        ExitOption(kind="keep", label="Keep to expiry", credit=1249.0, days=26,
+                   collateral=39000.0, extrinsic=1249.0, total_days=26),
+        ExitOption(kind="roll", label="Roll to 20 Nov", credit=871.0, days=56,
+                   collateral=39000.0, extrinsic=871.0, strike=390.0, total_days=82),
+    ]
+    c, _ = _exits_client(rows=rows)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
+        cells = body[body.index("<tbody>"):body.index("</tbody>")]
+        assert "82" in cells and "26 current" in cells and "56 added" in cells
+        assert "56 added" not in cells.split("Roll to 20 Nov")[0], "the split is on the roll row"
+        # 26 + 56 = 82: the breakdown must actually reconcile with the headline
+        assert "26 current\n                    + 56 added" in cells
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
