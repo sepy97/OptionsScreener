@@ -894,3 +894,27 @@ def test_the_panel_lets_its_prose_wrap() -> None:
     assert ".exits-row > td { white-space: normal; }" in css
     wrap = ".exits table td:first-child, .exits table th:first-child"
     assert wrap + " { white-space: normal; }" in css
+
+
+def test_a_strike_warning_is_said_once_not_on_every_row() -> None:
+    """The warnings describe the STRIKE chosen, not the expiry, so repeating them down a ladder
+    of eight rolls tripled every row's height and buried the numbers."""
+    from wheel_screener.core.exits import ExitOption
+
+    ladder = [
+        ExitOption(kind="roll", label=f"Roll to {d} Sep", credit=100.0 * i, days=7 * i,
+                   collateral=15500.0, extrinsic=100.0 * i, strike=155.0,
+                   collateral_delta=500.0, warnings=("commits $500 more collateral",))
+        for i, d in enumerate(("11", "18", "25"), start=1)
+    ]
+    c, _ = _exits_client(rows=ladder)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "QCOM", "strike": 150.0, "expiry": "2026-09-04",
+            "roll_strike": "155"}).text
+        assert body.count("commits $500 more collateral") == 1
+        assert 'class="exit-warnings"' in body, "said once, above the table it applies to"
+        assert body.count("Roll to") == 3, "and every row is still listed"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)

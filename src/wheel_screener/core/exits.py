@@ -136,7 +136,11 @@ def rolls(
             c.bid * CONTRACT_MULTIPLIER * contracts - intrinsic(target, spot, contracts)
         ) - (cost_to_close - intrinsic(strike, spot, contracts))
         warns: list[str] = []
-        if target > strike:
+        # A HIGHER strike is not the same as an in-the-money one. Rolling $150 -> $155 while the
+        # stock trades at $164 sells no intrinsic whatever — both strikes are out of the money —
+        # and warning about it there teaches the reader to ignore the warning that matters.
+        # Compare the obligations themselves rather than the strikes.
+        if intrinsic(target, spot, contracts) > intrinsic(strike, spot, contracts):
             warns.append("sells intrinsic, not time — the credit is an obligation you expect to "
                          "hand back")
         if collateral > here:

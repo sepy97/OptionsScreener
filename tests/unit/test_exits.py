@@ -199,3 +199,24 @@ def test_the_call_ladder_ignores_strikes_that_are_not_the_position_s() -> None:
     assert [r.strike for r in rows] == [190.0]
     assert rows[0].label == "Assign, sell $190 call 25 Sep"
     assert all(str(int(put_strike)) in r.label for r in rows)
+
+
+def test_a_higher_strike_is_not_the_same_as_an_in_the_money_one() -> None:
+    """QCOM: $150 put, stock at $164. Rolling to $155 sells NO intrinsic — both strikes are out
+    of the money — and warning about it there teaches the reader to ignore the warning that
+    matters. Compare the obligations, not the strikes."""
+    from wheel_screener.core.exits import rolls as _rolls
+
+    spot, exp = 164.06, date(2026, 9, 4)
+    cur = _c(150.0, exp, 0.20, 0.23)
+    later = date(2026, 9, 11)
+
+    otm = _rolls([cur, _c(155.0, later, 1.38, 1.45)], 150.0, exp, 1, spot, TODAY,
+                 roll_strike=155.0)[0]
+    assert not any("intrinsic" in w for w in otm.warnings)
+    assert any("more collateral" in w for w in otm.warnings), "that part is still true"
+    assert otm.extrinsic == otm.credit, "nothing intrinsic changed hands"
+
+    itm = _rolls([cur, _c(170.0, later, 7.00, 7.20)], 150.0, exp, 1, spot, TODAY,
+                 roll_strike=170.0)[0]
+    assert any("intrinsic" in w for w in itm.warnings), "$170 IS in the money at $164"

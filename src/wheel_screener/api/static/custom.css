@@ -368,6 +368,14 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 .exits table td:first-child, .exits table th:first-child { white-space: normal; }
 .exits table td:first-child { min-width: 14rem; }
 .exit-controls input { width: 7.5rem; }
+.exit-warnings {
+  margin: 0 0 0.6rem; padding: 0.5rem 0.75rem 0.5rem 1.9rem; list-style: none;
+  background: var(--warn-soft); border-left: 3px solid var(--warn);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 0.8125rem; color: var(--ink);
+}
+.exit-warnings li { position: relative; }
+.exit-warnings li + li { margin-top: 0.2rem; }
+.exit-warnings li::before { content: "\26A0"; position: absolute; left: -1.15rem; color: var(--warn); }
 .exits-row .exits { width: 0; min-width: 100%; }
 .exits-row figure { margin: 0; }
 .exits { margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
