@@ -919,3 +919,11 @@ def test_a_strike_warning_is_said_once_not_on_every_row() -> None:
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
+
+
+def test_the_exit_table_declares_its_column_widths() -> None:
+    """`table { width: 100% }` is global; under auto layout the surplus goes to the widest
+    column, stranding a short action label at one end of a half-panel-wide cell."""
+    css = pathlib.Path("src/wheel_screener/api/static/custom.css").read_text()
+    assert ".exits table { table-layout: fixed; max-width: 58rem; }" in css
+    assert css.count(".exits table th:nth-child(") == 5, "one declared width per column"

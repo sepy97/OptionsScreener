@@ -366,7 +366,18 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
    Reset it for the panel, then let the inner table's numeric columns take nowrap back. */
 .exits-row > td { white-space: normal; }
 .exits table td:first-child, .exits table th:first-child { white-space: normal; }
-.exits table td:first-child { min-width: 14rem; }
+/* `table { width: 100% }` is global, and under auto layout the surplus width is handed almost
+   entirely to the widest column — here the action names — so a short label like "Roll to 20 Nov"
+   sat alone in a cell half the panel wide, with the figure stranded on the far side. Fixed
+   layout with declared proportions puts the columns where they are wanted, and the cap stops
+   the table sprawling across a wide monitor in the first place. */
+.exits table { table-layout: fixed; max-width: 58rem; }
+.exits table th:nth-child(1), .exits table td:nth-child(1) { width: 32%; }
+.exits table th:nth-child(2), .exits table td:nth-child(2) { width: 16%; }
+.exits table th:nth-child(3), .exits table td:nth-child(3) { width: 14%; }
+.exits table th:nth-child(4), .exits table td:nth-child(4) { width: 20%; }
+.exits table th:nth-child(5), .exits table td:nth-child(5) { width: 18%; }
+.exits .exit-warnings, .exits > p { max-width: 58rem; }
 .exit-controls input { width: 7.5rem; }
 .exit-warnings {
   margin: 0 0 0.6rem; padding: 0.5rem 0.75rem 0.5rem 1.9rem; list-style: none;
