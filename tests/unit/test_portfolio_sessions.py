@@ -721,12 +721,12 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
     ]
     # a continuation, not an alternative — the service returns it as its own list
     default_after = [
-        ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=1150.0,
+        ExitOption(kind="assign_cc", label="28-day $190 call", credit=1150.0,
                    days=28, collateral=37000.0, extrinsic=1150.0, strike=190.0),
     ]
 
     default_after = [
-        ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=1150.0,
+        ExitOption(kind="assign_cc", label="28-day $190 call", credit=1150.0,
                    days=28, collateral=37000.0, extrinsic=1150.0, strike=190.0),
     ]
 
@@ -792,7 +792,7 @@ def test_ways_out_prices_the_position_that_was_clicked() -> None:
         assert svc.seen["symbol"] == "AAPL" and svc.seen["strike"] == 190.0
         assert svc.seen["expiration"] == _date(2026, 9, 18)
         assert "Keep to expiry" in r.text
-        assert "Sell $190 call" in r.text and "If assigned on 18 Sep" in r.text
+        assert "$190 call" in r.text and "If assigned on 18 Sep" in r.text
         assert "$390" not in r.text, "the panel must answer for the position that was clicked"
     finally:
         app.dependency_overrides.clear()
@@ -945,23 +945,20 @@ def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:
     """Assignment happens when the put expires, so writing calls follows keeping rather than
     competing with it. Ranked together, a near-dated call annualised to a huge rate and sat on
     top of the table as the best available action."""
-    from datetime import date as _d
-
     from wheel_screener.core.exits import ExitOption
 
-    after = [ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=900.0,
-                        days=28, collateral=37000.0, extrinsic=900.0, strike=190.0,
-                        expiration=_d(2026, 10, 16))]
+    after = [ExitOption(kind="assign_cc", label="28-day $190 call", credit=900.0,
+                        days=28, collateral=37000.0, extrinsic=900.0, strike=190.0)]
     c, _ = _exits_client(after=after)
     try:
         body = c.get("/portfolio/exits", params={
             "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18", "contracts": 2}).text
-        assert "If assigned on 18 Sep, writing calls would pay" in body
-        assert "Sell $190 call 16 Oct" in body
-        assert "Days held" in body and "Shares worth" in body
+        assert "If assigned on 18 Sep, writing a call would pay" in body
+        assert "28-day $190 call" in body
+        assert "Est. premium" in body and "Days held" in body and "Shares worth" in body
         # the ranked table above it must not have absorbed the row
         ranked = body[:body.index("If assigned on")]
-        assert "Sell $190 call 16 Oct" not in ranked
+        assert "28-day $190 call" not in ranked
         assert "Keep to expiry" in ranked
     finally:
         app.dependency_overrides.clear()

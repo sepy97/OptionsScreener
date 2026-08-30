@@ -107,11 +107,13 @@
          expiring in three days annualised to 293% and sat at the top of the table as the best
          available action — against shares that would not be owned for three more weeks. #}
       {% if after %}
-        <h5 class="exit-after">If assigned on {{ expiry_label }}, writing calls would pay</h5>
+        <h5 class="exit-after">If assigned on {{ expiry_label }}, writing a call would pay
+          about</h5>
         <figure>
         <table>
           <thead><tr>
-            <th>Then</th><th>Premium</th><th>Days held</th><th>Shares worth</th><th>Rate/yr</th>
+            <th>Write</th><th>Est. premium</th><th>Days held</th><th>Shares worth</th>
+            <th>Rate/yr</th>
           </tr></thead>
           <tbody>
             {% for r in after %}
@@ -128,8 +130,10 @@
           </tbody>
         </table>
         </figure>
-        <p class="detail-note">Measured from assignment, not from today &mdash; the shares only
-          start earning once they arrive.</p>
+        <p class="detail-note">Estimated from what each tenor pays in <em>today's</em> market,
+          holding price and volatility fixed. Quoting the contract you would actually sell
+          overstates it badly &mdash; a 47-day call priced today, written with 21 days left, read
+          77%/yr where 51% was real.</p>
       {% endif %}
     {% endif %}
   </article>

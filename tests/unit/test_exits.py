@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from wheel_screener.core.exits import compare, covered_calls, keep, rolls
 from wheel_screener.core.models import OptionContract, OptionType
@@ -86,43 +86,47 @@ def test_a_same_strike_roll_carries_no_warnings() -> None:
     assert rolls([CUR, later], 390.0, EXP, 1, SPOT, TODAY)[0].warnings == ()
 
 
-def test_nothing_can_be_written_before_the_shares_arrive() -> None:
-    """Assignment happens when the put expires. A call expiring first has no stock behind it,
-    and because such a call is nearly worthless in time terms its few dollars over a few days
-    annualised enormously — one sat at the top of the table at 293%/yr, against shares that
-    would not be owned for another three weeks."""
-    early = _c(390.0, date(2026, 9, 2), 8.90, 9.10, kind=OptionType.CALL)
-    same_day = _c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL)
-    after = _c(390.0, LATER, 18.00, 18.30, kind=OptionType.CALL)
+def test_the_call_ladder_prices_tenors_not_future_contracts() -> None:
+    """Quoting the contract you would actually sell is wrong: AVGO's 16 Oct call holds 47 days of
+    life today and would be written with 21 left. Pairing today's price with the post-assignment
+    period read 77%/yr where 51% was real. Each row is a TENOR priced from today's market."""
+    chain = [_c(390.0, TODAY + timedelta(days=d), bid, bid + 0.2, kind=OptionType.CALL)
+             for d, bid in ((19, 10.53), (26, 11.81), (47, 16.48))]
+    rows = covered_calls(chain, 390.0, 1, SPOT, TODAY)
+    assert [r.days for r in rows] == [19, 26, 47], "the tenor is the holding period, and its own"
+    assert [round(r.credit) for r in rows] == [1053, 1181, 1648]
+    assert all(r.expiration is None for r in rows), \
+        "these are tenors, not contracts — a date invites 'sell the 02 Sep call' all over again"
+    assert rows[0].label == "19-day $390 call"
 
-    rows = covered_calls([early, same_day, after], 390.0, 1, SPOT, TODAY, assigned_on=EXP)
-    assert [r.expiration for r in rows] == [LATER], "only expiries strictly after assignment"
 
+def test_the_tenor_proxy_agrees_with_decaying_the_real_contract() -> None:
+    """Two independent estimates of what a 21-day call fetches on 25 Sep. Today's ~21-day quote
+    interpolates to $1,090; decaying the 16 Oct contract's $1,648 by root-time gives $1,102. They
+    agree to about 1%, which is the reason to trust either — and neither is $1,648."""
+    import math
 
-def test_the_holding_period_starts_at_assignment_not_today() -> None:
-    """Counting from today inflates every rate by the weeks still spent holding the put."""
-    after = _c(390.0, LATER, 18.00, 18.30, kind=OptionType.CALL)
-    row = covered_calls([after], 390.0, 1, SPOT, TODAY, assigned_on=EXP)[0]
-    assert row.days == 21, "16 Oct is 21 days after the 25 Sep assignment, not 47 after today"
-    assert row.collateral == 36_875  # the shares are worth spot, not what they cost
-    assert abs(row.rate - (1800.0 / 36_875) * (365 / 21)) < 1e-9
+    proxy = 1053 + (1181 - 1053) * (21 - 19) / (26 - 19)
+    decayed = 1648 * math.sqrt(21 / 47)
+    assert abs(proxy - decayed) / proxy < 0.02
+    assert proxy < 1200, "and both are far below the 1,648 the contract quotes today"
 
 
 def test_covered_calls_are_offered_only_when_assignment_is_the_live_outcome() -> None:
     call = _c(390.0, LATER, 11.81, 12.05, kind=OptionType.CALL)
-    assert covered_calls([call], 390.0, 1, 420.0, TODAY, assigned_on=EXP) == [], "OTM: nothing"
-    assert covered_calls([call], 390.0, 1, None, TODAY, assigned_on=EXP) == [], "no quote"
-    assert covered_calls([call], 390.0, 1, SPOT, TODAY, assigned_on=TODAY)
+    assert covered_calls([call], 390.0, 1, 420.0, TODAY) == [], "OTM: nothing to compare"
+    assert covered_calls([call], 390.0, 1, None, TODAY) == [], "no quote: no claim"
+    assert covered_calls([call], 390.0, 1, SPOT, TODAY)
 
 
 def test_only_an_in_the_money_call_is_flagged() -> None:
     """Same single idea as the roll ladder — flag the sale whose premium is partly intrinsic,
     and stay quiet on the ordinary one."""
     itm = covered_calls([_c(360.0, LATER, 22.0, 22.4, kind=OptionType.CALL)], 390.0, 1, SPOT,
-                        TODAY, assigned_on=EXP, call_strike=360.0)[0]
+                        TODAY, call_strike=360.0)[0]
     assert len(itm.warnings) == 1 and "in the money" in itm.warnings[0]
     otm = covered_calls([_c(390.0, LATER, 11.81, 12.05, kind=OptionType.CALL)], 390.0, 1, SPOT,
-                        TODAY, assigned_on=EXP)[0]
+                        TODAY)[0]
     assert otm.warnings == ()
 
 
@@ -174,18 +178,18 @@ def test_covered_calls_are_one_strike_across_expiries() -> None:
         _c(390.0, date(2026, 10, 2), 12.95, 13.20, kind=OptionType.CALL),
         _c(395.0, date(2026, 10, 2), 11.20, 11.50, kind=OptionType.CALL),
     ]
-    rows = covered_calls(chain, 390.0, 1, SPOT, TODAY, assigned_on=TODAY)
-    assert [r.strike for r in rows] == [390.0, 390.0], "the put's own strike, both expiries"
-    assert [r.expiration for r in rows] == [EXP, date(2026, 10, 2)]
+    rows = covered_calls(chain, 390.0, 1, SPOT, TODAY)
+    assert [r.strike for r in rows] == [390.0, 390.0], "the put's own strike, both tenors"
+    assert [r.days for r in rows] == [26, 33], "one row per tenor, nearest first"
 
 
 def test_the_default_call_strike_is_the_cost_basis_assignment_hands_you() -> None:
     from wheel_screener.core.exits import covered_calls
 
     chain = [_c(k, EXP, 10.0, 10.2, kind=OptionType.CALL) for k in (380.0, 390.0, 400.0)]
-    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, assigned_on=TODAY)[0].strike == 390.0
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY)[0].strike == 390.0
     # and an explicit choice overrides it
-    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, assigned_on=TODAY,
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY,
                          call_strike=400.0)[0].strike == 400.0
 
 
@@ -195,7 +199,7 @@ def test_a_call_strike_the_chain_does_not_list_falls_back_to_the_nearest() -> No
     from wheel_screener.core.exits import covered_calls
 
     chain = [_c(k, EXP, 10.0, 10.2, kind=OptionType.CALL) for k in (385.0, 395.0)]
-    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, assigned_on=TODAY)[0].strike == 385.0
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY)[0].strike == 385.0
 
 
 def test_rolls_show_one_row_per_expiry_even_with_adjusted_contracts() -> None:
@@ -216,9 +220,9 @@ def test_the_call_ladder_ignores_strikes_that_are_not_the_position_s() -> None:
     put_strike = 190.0
     chain = [_c(k, EXP, 8.0, 8.2, kind=OptionType.CALL)
              for k in (180.0, 185.0, 190.0, 195.0, 200.0, 390.0)]
-    rows = covered_calls(chain, put_strike, 2, 185.0, TODAY, assigned_on=TODAY)
+    rows = covered_calls(chain, put_strike, 2, 185.0, TODAY)
     assert [r.strike for r in rows] == [190.0]
-    assert rows[0].label == "Sell $190 call 25 Sep"
+    assert rows[0].label.endswith("$190 call")
     assert all(str(int(put_strike)) in r.label for r in rows)
 
 
