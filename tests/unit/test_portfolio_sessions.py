@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -828,8 +829,10 @@ def test_the_intrinsic_trap_is_shown_on_the_row_that_carries_it() -> None:
             "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
         assert "sells intrinsic, not time" in body
         assert "commits $4,500 more collateral" in body
-        assert "$3,476" in body and "-$1,024" in body, "cash and time value side by side"
-        assert "Time value" in body and "Cash now" in body
+        # one Value column: the earnable figure leads, the cheque is a sub-line only on the
+        # rows where the two differ — which is exactly the rows that need explaining
+        assert "-$1,024" in body and "$3,476.00 cash" in body
+        assert "Cash now" not in body, "the second column was identical on almost every row"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -866,3 +869,25 @@ def test_the_exit_panel_needs_a_session_like_the_rest_of_the_tab() -> None:
         assert r.status_code in (303, 401, 403), "a stranger must not reach live account data"
     finally:
         c.__exit__(None, None, None)
+
+
+def test_the_cash_subline_appears_only_where_it_differs_from_value() -> None:
+    """Keeping, assign-and-write and same-strike rolls all have cheque == earnable. Printing it
+    twice on every one of those rows is what made the second column worth removing."""
+    c, _ = _exits_client()
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
+        assert body.count("cash</span>") == 1, "only the roll that sells intrinsic explains itself"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_panel_lets_its_prose_wrap() -> None:
+    """`th, td { white-space: nowrap }` is global and white-space inherits, so every sentence in
+    the panel ran off the side of the page."""
+    css = (pathlib.Path("src/wheel_screener/api/static/custom.css")).read_text()
+    assert ".exits-row > td { white-space: normal; }" in css
+    wrap = ".exits table td:first-child, .exits table th:first-child"
+    assert wrap + " { white-space: normal; }" in css

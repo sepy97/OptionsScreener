@@ -361,6 +361,13 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
    nothing; min-width:100% then fills the cell once the columns are settled, and the <figure>
    around the inner table scrolls if it genuinely does not fit. */
 .exits-row > td { padding: 0; background: var(--sunken); }
+/* `th, td { white-space: nowrap }` is global and white-space INHERITS, so every sentence inside
+   this cell — the warnings, the explanatory note — ran off the side rather than wrapping.
+   Reset it for the panel, then let the inner table's numeric columns take nowrap back. */
+.exits-row > td { white-space: normal; }
+.exits table td:first-child, .exits table th:first-child { white-space: normal; }
+.exits table td:first-child { min-width: 14rem; }
+.exit-controls input { width: 7.5rem; }
 .exits-row .exits { width: 0; min-width: 100%; }
 .exits-row figure { margin: 0; }
 .exits { margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
