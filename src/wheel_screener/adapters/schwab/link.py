@@ -60,10 +60,18 @@ class SchwabOAuthLink:
 
         self._token_path.parent.mkdir(parents=True, exist_ok=True)
 
-        def write_token(token, *_args):
-            # schwab-py hands us the token dict; it is written here so the file lands where this
-            # deployment wants it, with permissions we control rather than the library's default.
-            payload = {"creation_timestamp": int(datetime.now(tz=UTC).timestamp()), "token": token}
+        def write_token(payload, *_args):
+            # schwab-py has ALREADY wrapped this as {creation_timestamp, token} -- its
+            # TokenMetadata.wrapped_token_write_func does it before calling us. Wrapping it again
+            # produced a file that loaded into authlib as a token whose type was the literal
+            # string 'access_token', so every API call died with `unsupported_token_type` while
+            # status() -- which only reads the OUTER creation_timestamp -- still said "Connected".
+            #
+            # Writing it verbatim also fixes the clock. This function is the update_token hook
+            # too, so it runs on every ~30-minute access-token refresh; stamping our own
+            # timestamp reset the 7-day refresh-token expiry each time, and the tab would have
+            # promised a week of authorisation forever while the real credential died silently.
+            # schwab-py's creation_timestamp is the moment of the GRANT and never moves.
             self._token_path.write_text(json.dumps(payload))
             self._token_path.chmod(0o600)
 
