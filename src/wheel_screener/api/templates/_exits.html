@@ -73,7 +73,13 @@
                   <br><span class="detail-note">{{ r.credit | money }} cash</span>
                 {% endif %}
               </td>
-              <td>{{ r.days }}{{ ' added' if r.kind == 'roll' else '' }}</td>
+              {# Two different quantities share this column — a roll's credit accrues over the
+                 days it ADDS, keeping's over the days that REMAIN — so every cell names which
+                 it is. Labelling only the rolls left the bare numbers looking like the same
+                 measurement with a stray word attached. #}
+              <td>{{ r.days }}
+                <span class="detail-note">{{ 'added' if r.kind == 'roll' else 'left' }}</span>
+              </td>
               {# the figure itself carries the change; the notice above says what it costs #}
               <td>{{ r.collateral | money }}</td>
               <td class="{{ 'y-hi' if r.rate and r.rate >= 0.25 else ('y-mid' if r.rate and r.rate >= 0.15 else 'y-lo') }}">

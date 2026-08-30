@@ -706,13 +706,11 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
 
     # Shaped to the fixture's own AAPL $190 put, 2 contracts, spot $185 — a fake that answers
     # for a different position than the one clicked is a fake that will be believed.
+    # ALTERNATIVES only — keep and rolls. Writing calls is a continuation, so it belongs in the
+    # second list, exactly as the service returns it.
     default = [
         ExitOption(kind="keep", label="Keep to expiry", credit=600.0, days=20,
                    collateral=38000.0, extrinsic=600.0),
-        ExitOption(kind="assign_cc", label="Assign, sell $190 call 18 Sep", credit=580.0,
-                   days=20, collateral=37000.0, extrinsic=580.0, strike=190.0),
-        ExitOption(kind="assign_cc", label="Assign, sell $190 call 16 Oct", credit=1150.0,
-                   days=47, collateral=37000.0, extrinsic=1150.0, strike=190.0),
         ExitOption(kind="roll", label="Roll to 16 Oct", credit=420.0, days=28,
                    collateral=38000.0, extrinsic=420.0, strike=190.0),
         ExitOption(kind="roll", label="Roll to 25 Sep", credit=2300.0, days=7,
@@ -720,6 +718,16 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
                    collateral_delta=2000.0,
                    warnings=("$200 is in the money at $185.00 — part of this credit"
                              " is intrinsic",)),
+    ]
+    # a continuation, not an alternative — the service returns it as its own list
+    default_after = [
+        ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=1150.0,
+                   days=28, collateral=37000.0, extrinsic=1150.0, strike=190.0),
+    ]
+
+    default_after = [
+        ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=1150.0,
+                   days=28, collateral=37000.0, extrinsic=1150.0, strike=190.0),
     ]
 
     class _Svc:
@@ -733,7 +741,8 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
                 raise error
             # (alternatives, after-assignment, spot) — the middle list is not an alternative to
             # anything above it, which is why the service hands it back separately
-            return (default if rows is None else rows), (after or []), spot
+            return (default if rows is None else rows), (
+                default_after if after is None else after), spot
 
     svc = _Svc()
     c = _client()
@@ -782,7 +791,8 @@ def test_ways_out_prices_the_position_that_was_clicked() -> None:
         assert r.status_code == 200
         assert svc.seen["symbol"] == "AAPL" and svc.seen["strike"] == 190.0
         assert svc.seen["expiration"] == _date(2026, 9, 18)
-        assert "Keep to expiry" in r.text and "Assign, sell $190 call" in r.text
+        assert "Keep to expiry" in r.text
+        assert "Sell $190 call" in r.text and "If assigned on 18 Sep" in r.text
         assert "$390" not in r.text, "the panel must answer for the position that was clicked"
     finally:
         app.dependency_overrides.clear()
@@ -953,6 +963,25 @@ def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:
         ranked = body[:body.index("If assigned on")]
         assert "Sell $190 call 16 Oct" not in ranked
         assert "Keep to expiry" in ranked
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_every_days_cell_says_which_measurement_it_is() -> None:
+    """A roll's credit accrues over the days it ADDS; keeping's over the days that REMAIN. Two
+    quantities in one column, with only some rows labelled, read as one measurement with a stray
+    word attached."""
+    c, _ = _exits_client()
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18"}).text
+        rows = body[body.index("<tbody>"):body.index("</tbody>")]
+        # one qualifier per row, none bare
+        assert rows.count(">added</span>") == 2      # the two rolls in the fixture
+        assert rows.count(">left</span>") == 1       # and the single keep
+        assert ">added</span>" not in body[body.index("If assigned on"):], \
+            "the post-assignment table measures one thing, so it needs no qualifier"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
