@@ -145,6 +145,17 @@ class SchwabAccountProvider:
             if not quantity:
                 continue  # a closed row the broker still returns
 
+            # Schwab sends the CUSIP as its own field. When it EQUALS the symbol, the symbol is
+            # a CUSIP — which is how bonds arrive — and the description is the only readable
+            # label the row has. Comparing the two beats guessing from the symbol's shape.
+            cusip = str(instrument.get("cusip") or "").strip()
+            description = str(instrument.get("description") or "").strip() or None
+            common = {
+                "asset_type": asset or None,
+                "description": description,
+                "symbol_is_cusip": bool(cusip and cusip == symbol),
+            }
+
             osi = parse_osi(symbol) if asset == "OPTION" else None
             if osi is not None:
                 if short_qty:
@@ -158,7 +169,7 @@ class SchwabAccountProvider:
                 out.append(Position(
                     symbol=symbol,
                     underlying=str(instrument.get("underlyingSymbol") or osi.underlying),
-                    kind=kind, quantity=quantity,
+                    kind=kind, quantity=quantity, **common,
                     market_value=_num(row, "marketValue"),
                     average_price=_num(row, "averagePrice", "averageShortPrice",
                                        "averageLongPrice"),
@@ -168,10 +179,13 @@ class SchwabAccountProvider:
                 ))
                 continue
 
+            # Everything non-option is a HOLDING, whatever its asset class. Bonds and funds were
+            # previously swept into an "also held" footnote that printed raw CUSIPs, which is
+            # neither an answer to "what do I own" nor recoverable by the reader.
             kind = PositionKind.SHARES if asset in ("EQUITY", "COLLECTIVE_INVESTMENT") \
                 else PositionKind.OTHER
             out.append(Position(
-                symbol=symbol, underlying=symbol, kind=kind, quantity=quantity,
+                symbol=symbol, underlying=symbol, kind=kind, quantity=quantity, **common,
                 market_value=_num(row, "marketValue"),
                 average_price=_num(row, "averagePrice", "averageLongPrice"),
                 unrealized_pl=_num(row, "longOpenProfitLoss", "shortOpenProfitLoss"),

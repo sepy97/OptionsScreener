@@ -209,6 +209,22 @@ class AccountBalances(BaseModel):
     equity: float | None = None
 
 
+# Broker asset classes, in words. Schwab's own strings on the left.
+_ASSET_LABELS = {
+    "EQUITY": "Stock",
+    "COLLECTIVE_INVESTMENT": "ETF",
+    "MUTUAL_FUND": "Mutual fund",
+    "FIXED_INCOME": "Bond",
+    "OPTION": "Option",
+    "INDEX": "Index",
+    "CURRENCY": "Currency",
+}
+
+# Asset classes a covered call can actually be written against. Options exist on stocks and on
+# exchange-traded funds; they do not on a bond or an open-ended mutual fund.
+_OPTIONABLE_ASSETS = frozenset({"EQUITY", "COLLECTIVE_INVESTMENT"})
+
+
 class PositionKind(StrEnum):
     """What a held row IS, from a wheel's point of view rather than the broker's.
 
@@ -237,6 +253,14 @@ class Position(BaseModel):
     underlying: str  # the ticker a human recognises; equals ``symbol`` for shares
     kind: PositionKind
     quantity: float
+    # What the broker called it (EQUITY, FIXED_INCOME, ...), kept raw so an asset class this code
+    # has never seen still renders as itself instead of vanishing into "other".
+    asset_type: str | None = None
+    # The broker's prose name. For a bond the `symbol` IS the CUSIP — "912810FB9" tells a human
+    # nothing — so a description is the only readable label such a row has.
+    description: str | None = None
+    # True when the symbol is the CUSIP rather than a ticker, which is how a bond arrives.
+    symbol_is_cusip: bool = False
     market_value: float | None = None
     average_price: float | None = None
     unrealized_pl: float | None = None
@@ -251,6 +275,37 @@ class Position(BaseModel):
     # Spot at render time, when a quote source is available. Only used to say whether a short put
     # is in the money; None simply hides the assignment column rather than guessing.
     underlying_price: float | None = None
+
+    @property
+    def label(self) -> str:
+        """What to print in the symbol column: a ticker if there is one, else the prose name."""
+        if self.symbol_is_cusip and self.description:
+            return self.description
+        return self.symbol
+
+    @property
+    def asset_label(self) -> str:
+        """The asset class, in words. Unknown classes fall back to the broker's own string
+        rather than a bucket named "other", so a new one is legible the day it appears."""
+        raw = (self.asset_type or "").upper()
+        return _ASSET_LABELS.get(raw, raw.replace("_", " ").title() or "—")
+
+    @property
+    def is_option(self) -> bool:
+        return self.kind in (
+            PositionKind.SHORT_PUT, PositionKind.SHORT_CALL, PositionKind.LONG_OPTION
+        )
+
+    @property
+    def covered_call_lots(self) -> int | None:
+        """How many covered calls this lot could support, or None if the asset has no options.
+
+        Bonds and mutual funds are holdings but not writable, so the answer there is "not
+        applicable" — which is a different statement from "zero".
+        """
+        if (self.asset_type or "").upper() not in _OPTIONABLE_ASSETS:
+            return None
+        return int(self.quantity // 100)
 
     @property
     def in_the_money(self) -> bool | None:
