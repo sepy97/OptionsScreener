@@ -968,20 +968,27 @@ def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:
         c.__exit__(None, None, None)
 
 
-def test_every_days_cell_says_which_measurement_it_is() -> None:
-    """A roll's credit accrues over the days it ADDS; keeping's over the days that REMAIN. Two
-    quantities in one column, with only some rows labelled, read as one measurement with a stray
-    word attached."""
-    c, _ = _exits_client()
+def test_the_days_column_headlines_one_quantity_in_every_row() -> None:
+    """"26" and "56 added" were not the same measurement, and "56 added" said neither what 56
+    was added TO nor what the run came to. Every headline is now days committed from today; a
+    roll breaks that down underneath, which also shows the figure its rate is scored on."""
+    from wheel_screener.core.exits import ExitOption
+
+    rows = [
+        ExitOption(kind="keep", label="Keep to expiry", credit=1249.0, days=26,
+                   collateral=39000.0, extrinsic=1249.0, total_days=26),
+        ExitOption(kind="roll", label="Roll to 20 Nov", credit=871.0, days=56,
+                   collateral=39000.0, extrinsic=871.0, strike=390.0, total_days=82),
+    ]
+    c, _ = _exits_client(rows=rows)
     try:
         body = c.get("/portfolio/exits", params={
-            "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18"}).text
-        rows = body[body.index("<tbody>"):body.index("</tbody>")]
-        # one qualifier per row, none bare
-        assert rows.count(">added</span>") == 2      # the two rolls in the fixture
-        assert rows.count(">left</span>") == 1       # and the single keep
-        assert ">added</span>" not in body[body.index("If assigned on"):], \
-            "the post-assignment table measures one thing, so it needs no qualifier"
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
+        cells = body[body.index("<tbody>"):body.index("</tbody>")]
+        assert "82" in cells and "26 current" in cells and "56 added" in cells
+        assert "56 added" not in cells.split("Roll to 20 Nov")[0], "the split is on the roll row"
+        # 26 + 56 = 82: the breakdown must actually reconcile with the headline
+        assert "26 current\n                    + 56 added" in cells
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
