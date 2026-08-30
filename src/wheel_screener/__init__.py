@@ -2,4 +2,4 @@
 
 # Single source of truth for the version. pyproject.toml derives it (hatchling dynamic version)
 # and the API reads it, so a release is a one-line bump here.
-__version__ = "2.6.2"
+__version__ = "2.6.3"

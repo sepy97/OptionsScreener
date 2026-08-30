@@ -42,6 +42,18 @@
     {% elif not rows %}
       <p class="detail-note">No quotes came back for this contract in that window.</p>
     {% else %}
+      {# Every warning here describes the STRIKE that was chosen, not the individual expiry, so
+         each one was repeating identically down the whole ladder and tripling every row's
+         height. Said once, above the table it applies to. #}
+      {% set notes = [] %}
+      {% for r in rows %}{% for w in r.warnings %}
+        {% if w not in notes %}{% set _ = notes.append(w) %}{% endif %}
+      {% endfor %}{% endfor %}
+      {% if notes %}
+        <ul class="exit-warnings">
+          {% for w in notes %}<li>{{ w }}</li>{% endfor %}
+        </ul>
+      {% endif %}
       <figure>
       <table>
         <thead><tr>
@@ -50,12 +62,7 @@
         <tbody>
           {% for r in rows %}
             <tr{{ ' class="exit-best"'|safe if loop.first }}>
-              <td>
-                <b>{{ r.label }}</b>
-                {% for w in r.warnings %}
-                  <br><span class="detail-note">&#9888; {{ w }}</span>
-                {% endfor %}
-              </td>
+              <td><b>{{ r.label }}</b></td>
               <td>
                 {# The earnable money, which is also what the rate is built from. For keeping,
                    assign-and-write and same-strike rolls it IS the cheque. It differs only when
@@ -67,12 +74,8 @@
                 {% endif %}
               </td>
               <td>{{ r.days }}{{ ' added' if r.kind == 'roll' else '' }}</td>
-              <td>
-                {{ r.collateral | money }}
-                {% if r.collateral_delta %}
-                  <br><span class="detail-note">{{ '+' if r.collateral_delta > 0 }}{{ r.collateral_delta | money }}</span>
-                {% endif %}
-              </td>
+              {# the figure itself carries the change; the notice above says what it costs #}
+              <td>{{ r.collateral | money }}</td>
               <td class="{{ 'y-hi' if r.rate and r.rate >= 0.25 else ('y-mid' if r.rate and r.rate >= 0.15 else 'y-lo') }}">
                 {{ '%.1f%%'|format(r.rate * 100) if r.rate is not none else '—' }}
               </td>

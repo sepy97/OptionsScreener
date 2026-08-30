@@ -64,9 +64,10 @@ def test_rolling_up_is_scored_on_time_value_so_it_cannot_top_the_table() -> None
     assert round(row.credit) == 3476, "the gross credit really is that large"
     assert round(row.extrinsic) == -1024, "and it is entirely intrinsic, then some"
     assert row.rate < 0, "so the honest rate is negative"
-    assert row.collateral_delta == 4500
-    assert any("intrinsic" in w for w in row.warnings)
-    assert any("more collateral" in w for w in row.warnings)
+    assert row.collateral_delta == 4500, "still carried, for the collateral column to show"
+    # ONE warning, and only the thing the numbers cannot show. That collateral grew is already
+    # in its own column; that part of the credit is intrinsic is invisible until expiry.
+    assert len(row.warnings) == 1 and "in the money" in row.warnings[0]
 
 
 def test_the_cash_credit_never_outranks_the_time_value() -> None:
@@ -102,10 +103,15 @@ def test_covered_calls_are_offered_only_when_assignment_is_the_live_outcome() ->
     assert covered_calls([call], 390.0, 1, SPOT, TODAY)
 
 
-def test_a_call_struck_below_the_put_warns_that_it_locks_a_loss() -> None:
-    low = _c(360.0, EXP, 22.0, 22.4, kind=OptionType.CALL)
-    row = covered_calls([low], 390.0, 1, SPOT, TODAY)[0]
-    assert any("locks in a loss" in w for w in row.warnings)
+def test_only_an_in_the_money_call_is_flagged() -> None:
+    """Same single idea as the roll ladder — flag the sale whose premium is partly intrinsic,
+    and stay quiet on the ordinary one."""
+    itm = covered_calls([_c(360.0, EXP, 22.0, 22.4, kind=OptionType.CALL)], 390.0, 1, SPOT,
+                        TODAY, call_strike=360.0)[0]
+    assert len(itm.warnings) == 1 and "in the money" in itm.warnings[0]
+    otm = covered_calls([_c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL)], 390.0, 1, SPOT,
+                        TODAY)[0]
+    assert otm.warnings == ()
 
 
 def test_compare_ranks_by_rate_and_always_includes_keeping() -> None:
@@ -199,3 +205,24 @@ def test_the_call_ladder_ignores_strikes_that_are_not_the_position_s() -> None:
     assert [r.strike for r in rows] == [190.0]
     assert rows[0].label == "Assign, sell $190 call 25 Sep"
     assert all(str(int(put_strike)) in r.label for r in rows)
+
+
+def test_a_higher_strike_is_not_the_same_as_an_in_the_money_one() -> None:
+    """QCOM: $150 put, stock at $164. Rolling to $155 sells NO intrinsic — both strikes are out
+    of the money — and warning about it there teaches the reader to ignore the warning that
+    matters. Compare the obligations, not the strikes."""
+    from wheel_screener.core.exits import rolls as _rolls
+
+    spot, exp = 164.06, date(2026, 9, 4)
+    cur = _c(150.0, exp, 0.20, 0.23)
+    later = date(2026, 9, 11)
+
+    otm = _rolls([cur, _c(155.0, later, 1.38, 1.45)], 150.0, exp, 1, spot, TODAY,
+                 roll_strike=155.0)[0]
+    assert otm.warnings == (), "an ordinary roll up to a still-OTM strike is unremarkable"
+    assert otm.extrinsic == otm.credit, "nothing intrinsic changed hands"
+    assert otm.collateral_delta == 500, "the collateral column still says it grew"
+
+    itm = _rolls([cur, _c(170.0, later, 7.00, 7.20)], 150.0, exp, 1, spot, TODAY,
+                 roll_strike=170.0)[0]
+    assert any("intrinsic" in w for w in itm.warnings), "$170 IS in the money at $164"
