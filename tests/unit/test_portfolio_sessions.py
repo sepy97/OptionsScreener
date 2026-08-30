@@ -524,3 +524,92 @@ def test_the_repaired_token_loads_with_a_usable_token_type(tmp_path) -> None:
     repair_token_file(path)
     client = client_from_token_file(str(path), "key", "secret")
     assert client.session.token["token_type"] == "Bearer"
+
+
+# ── positions on the page ──────────────────────────────────────────────────────────────────
+
+def _account_with_positions():
+    from datetime import date as _date
+
+    from wheel_screener.core.models import (
+        AccountBalances,
+        AccountType,
+        BrokerageAccount,
+        Position,
+        PositionKind,
+    )
+
+    return BrokerageAccount(
+        broker="schwab", account_id="hash", display_name="••••6789",
+        account_type=AccountType.MARGIN,
+        balances=AccountBalances(total_value=150_000.0, cash=100_000.0, invested=50_000.0,
+                                 buying_power=120_000.0),
+        positions=[
+            Position(symbol="AAPL  260918P00190000", underlying="AAPL",
+                     kind=PositionKind.SHORT_PUT, quantity=2, strike=190.0,
+                     expiration=_date(2026, 9, 18), dte=20, collateral=38_000.0,
+                     market_value=-420.0, underlying_price=185.0),   # in the money
+            Position(symbol="MSFT  261016P00400000", underlying="MSFT",
+                     kind=PositionKind.SHORT_PUT, quantity=1, strike=400.0,
+                     expiration=_date(2026, 10, 16), dte=48, collateral=40_000.0,
+                     market_value=-310.0, underlying_price=455.0),   # safe
+            Position(symbol="NVDA  260918P00100000", underlying="NVDA",
+                     kind=PositionKind.SHORT_PUT, quantity=1, strike=100.0,
+                     expiration=_date(2026, 9, 18), dte=20, collateral=10_000.0),  # no quote
+            Position(symbol="TSLA", underlying="TSLA", kind=PositionKind.SHARES,
+                     quantity=250, average_price=210.0, market_value=60_000.0),
+            Position(symbol="F", underlying="F", kind=PositionKind.SHARES,
+                     quantity=40, average_price=11.0, market_value=460.0),
+        ],
+    )
+
+
+def _portfolio_page() -> str:
+    """The Portfolio tab, signed in, with a populated account."""
+    from wheel_screener.api.deps import get_service
+
+    class _Svc:
+        def brokerage_accounts(self):
+            return [_account_with_positions()]
+
+    c = _client()
+    app.dependency_overrides[get_service] = lambda: _Svc()
+    try:
+        _sign_in(c)
+        app.state.balances_cache = None  # the route caches for 30s; this test wants a fresh read
+        return c.get("/portfolio").text
+    finally:
+        app.dependency_overrides.pop(get_service, None)
+        c.__exit__(None, None, None)
+
+
+def test_capacity_is_cash_minus_committed_collateral() -> None:
+    """The wheel question the balance grid cannot answer: how much more can I sell?"""
+    body = _portfolio_page()
+    assert "Capacity" in body
+    assert "$12,000" in body, "100k cash - 88k committed"
+    assert "$88,000" in body and "committed to open puts" in body
+
+
+def test_short_puts_are_listed_soonest_first_with_collateral() -> None:
+    body = _portfolio_page()
+    assert "Open short puts" in body
+    order = [body.index(s) for s in ("AAPL", "NVDA", "MSFT")]
+    assert order == sorted(order), "the near expiry needs the decision, so it goes first"
+    assert "$38,000" in body and "18 Sep" in body
+
+
+def test_the_assignment_watch_distinguishes_itm_safe_and_unknown() -> None:
+    """Three states, and the third must not read like the second: a put with no quote is not a
+    put that is safe."""
+    body = _portfolio_page()
+    assert "in the money" in body      # AAPL: spot 185 < strike 190
+    assert "$455" in body              # MSFT: spot above strike, shown plainly
+    assert "no quote" in body          # NVDA: unknown, and said so
+
+
+def test_share_lots_flag_how_many_calls_they_cover() -> None:
+    body = _portfolio_page()
+    assert "Shares held" in body
+    assert "2 contracts" in body, "250 shares covers two calls, not two and a half"
+    assert "under 100 shares" in body, "40 shares covers nothing, whatever it is worth"

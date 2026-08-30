@@ -1,9 +1,10 @@
 # Portfolio tab — plan
 
 **A living document.** Update it as decisions land and phases complete; the Status section is the
-part that goes stale fastest. Target release: **v2.0.0**.
+part that goes stale fastest. Target release: **v2.0.0** — shipped; positions landed in v2.4.0.
 
-**Status:** planning. Nothing implemented.
+**Status:** live. Sign-in, balances and positions are running in production against a real Schwab
+account. Remaining: P5 (ops) and P6 (cross-links into the screener).
 
 | Decision | State |
 |---|---|
@@ -505,9 +506,20 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
 - [x] **P3 — the tab, balances only.** Total / cash / invested, plus the never-connected and
       expired states. Shippable on its own: a Portfolio tab that shows what the account is worth is
       already useful.
-- [ ] **P4 — positions.** Short puts with assignment watch, share lots, committed collateral and
-      capacity. This is where option normalisation lands, which is why it is not in P1.
-- [ ] **P5 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture.
+- [x] **P4 — positions.** Short puts with assignment watch, share lots, committed collateral and
+      capacity. Option normalisation landed here as planned — `core/osi.py`, parsed from the RIGHT
+      because the OSI root is space-padded to six characters and an adjusted root (`AAPL1`) is
+      ordinary, so a left-anchored parse eats a digit of the expiry and produces a plausible wrong
+      date. Two things learned while building it, both worth keeping:
+      - **Cash-equivalent rows must be dropped.** A swept money-market fund is already inside the
+        cash balance; listing it as a holding double-counts the account on screen.
+      - **Capacity is cash minus committed collateral, never buying power.** A cash-secured put is
+        secured by cash, and showing margin buying power here invites selling puts the account
+        cannot cover.
+- [ ] **P5 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture. Add: a
+      *stale-quote* note for the assignment watch — spot comes from the chain provider on a
+      best-effort basis and an unknown price renders "no quote", which is honest but silent about
+      *why*.
 - [ ] **P6 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
 - [ ] *(later)* **A second broker**, to prove the abstraction is real rather than Schwab wearing a

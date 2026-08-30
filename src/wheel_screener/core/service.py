@@ -25,6 +25,7 @@ from wheel_screener.core.models import (
     FundamentalMetrics,
     FundamentalReport,
     OptionType,
+    PositionKind,
     ScreenCriteria,
     Underlying,
 )
@@ -435,4 +436,33 @@ class ScreenerService:
         """
         if self.accounts is None:
             raise ProviderUnavailableError("no brokerage account is linked to this deployment")
-        return self.accounts.accounts()
+        accounts = self.accounts.accounts()
+        self._price_positions(accounts)
+        return accounts
+
+    def _price_positions(self, accounts: list[BrokerageAccount]) -> None:
+        """Stamp each short put with its underlying's price, for the assignment watch.
+
+        The broker prices the CONTRACT, never the stock behind it, so "is this put in the money"
+        needs a quote from somewhere else. Best-effort by design: a portfolio that renders is
+        worth more than one that 500s because a quote endpoint is briefly unhappy, and an unknown
+        price shows an em dash rather than implying the position is safe.
+        """
+        spot_of = getattr(self.chains, "spot", None)
+        if not callable(spot_of):
+            return
+        wanted = {
+            p.underlying for a in accounts for p in a.positions
+            if p.kind is PositionKind.SHORT_PUT
+        }
+        prices: dict[str, float | None] = {}
+        for symbol in sorted(wanted):
+            try:
+                prices[symbol] = spot_of(symbol)
+            except Exception:  # noqa: BLE001 - a quote is never worth failing the whole page
+                logger.debug("no spot for %s; assignment watch will show unknown", symbol)
+                prices[symbol] = None
+        for account in accounts:
+            for p in account.positions:
+                if p.kind is PositionKind.SHORT_PUT:
+                    p.underlying_price = prices.get(p.underlying)
