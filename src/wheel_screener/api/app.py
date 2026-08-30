@@ -772,6 +772,55 @@ def _link_for(request: Request, broker: str):
     return link
 
 
+@app.get("/portfolio/exits")
+def portfolio_exits(
+    request: Request,
+    symbol: str,
+    strike: float,
+    expiry: str,
+    contracts: float = 1.0,
+    roll_strike: str = "",
+    min_dte: int = 1,
+    max_dte: int = 120,
+    service: ScreenerService = Depends(get_service),
+):
+    """Priced ways out of one open short put.
+
+    No session dependency here on purpose: /portfolio/* is gated by the middleware for every
+    path except the OAuth entry points, so adding a second check would be a second thing to
+    keep in step with it.
+    """
+    try:
+        expiration = date.fromisoformat(expiry)
+    except ValueError:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "invalid expiry"}, status_code=422
+        )
+    if max_dte < min_dte:
+        min_dte, max_dte = max_dte, min_dte
+    try:
+        rows, spot = service.exit_options(
+            symbol, strike, expiration, contracts, date.today(),
+            min_dte=max(1, min_dte), max_dte=min(400, max_dte),
+            roll_strike=_opt_float(roll_strike),
+        )
+    except ProviderError as e:
+        # a quote failure is a message inside the panel, never a dead tab
+        return templates.TemplateResponse(
+            request, "_exits.html",
+            {"symbol": symbol, "strike": strike, "expiry": expiry, "contracts": contracts,
+             "rows": [], "spot": None, "error": str(e),
+             "min_dte": min_dte, "max_dte": max_dte, "roll_strike": roll_strike},
+        )
+    return templates.TemplateResponse(
+        request, "_exits.html",
+        {"symbol": symbol, "strike": strike, "expiry": expiry, "contracts": contracts,
+         "rows": rows, "spot": spot, "error": None,
+         "min_dte": min_dte, "max_dte": max_dte, "roll_strike": roll_strike,
+         "strikes": sorted({r.strike for r in rows if r.kind == "roll" and r.strike})},
+    )
+
+
 @app.get("/portfolio")
 def portfolio_page(
     request: Request,

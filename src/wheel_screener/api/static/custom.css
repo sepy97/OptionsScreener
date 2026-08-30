@@ -345,3 +345,20 @@ tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); 
 .dte-boxes input:focus { outline: none; box-shadow: none; }
 /* the DTE block is much taller than the segmented control beside it */
 .grid-top { align-items: start; }
+
+/* ── exit comparison ─────────────────────────────────────────────────────────────────── */
+.link-btn {
+  background: none; border: 0; padding: 0 0 0 0.4rem; margin: 0; width: auto;
+  color: var(--wheel-accent); font-size: 0.8125rem; font-weight: 600; cursor: pointer;
+  text-decoration: underline;
+}
+.link-btn:hover { color: var(--wheel-accent-strong); background: none; }
+.exits { margin: 1rem 0; border: 1px solid var(--border); }
+.exit-controls {
+  display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; margin-bottom: 0.5rem;
+}
+.exit-controls label { font-size: 0.75rem; margin: 0; }
+.exit-controls input { margin: 0; }
+.exit-controls button { width: auto; margin: 0; }
+.exit-best td { background: var(--wheel-accent-soft); }
+.exit-best td:first-child { box-shadow: inset 3px 0 0 var(--wheel-accent); }

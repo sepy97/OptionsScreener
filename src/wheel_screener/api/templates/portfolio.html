@@ -94,6 +94,11 @@
                         <span class="detail-note">no quote</span>
                       {% elif p.in_the_money %}
                         <span class="badge badge--neg">in the money &middot; {{ p.underlying_price | money }}</span>
+                        <button class="link-btn" hx-get="/portfolio/exits"
+                                hx-vals='{"symbol": "{{ p.underlying }}", "strike": "{{ p.strike }}",
+                                          "expiry": "{{ p.expiration }}", "contracts": "{{ p.quantity }}"}'
+                                hx-target="#exits-slot" hx-swap="innerHTML"
+                                hx-indicator="#exits-slot">ways out</button>
                       {% else %}
                         <span class="badge badge--ok">{{ p.underlying_price | money }}</span>
                       {% endif %}
@@ -118,6 +123,9 @@
             </table>
             </figure>
           {% endif %}
+
+          {# Filled by the "ways out" button on an in-the-money row. #}
+          <div id="exits-slot"></div>
 
           {# Everything that is not an option, whatever its asset class. Bonds and funds used to
              be a footnote of raw CUSIPs, which answers nothing. #}

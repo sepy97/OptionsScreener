@@ -694,3 +694,140 @@ def test_no_html_entity_is_double_escaped_on_the_page() -> None:
     only in the markup around it."""
     body = _portfolio_page()
     assert "&amp;mdash;" not in body and "&amp;middot;" not in body
+
+
+# ── exit comparison ────────────────────────────────────────────────────────────────────────
+
+def _exits_client(rows=None, spot=368.75, error=None):
+    from wheel_screener.api.deps import get_service
+    from wheel_screener.core.exits import ExitOption
+
+    default = [
+        ExitOption(kind="keep", label="Keep to expiry", credit=1249.0, days=26,
+                   collateral=39000.0, extrinsic=1249.0),
+        ExitOption(kind="assign_cc", label="Assign, sell $390 call 25 Sep", credit=1181.0,
+                   days=26, collateral=36875.0, extrinsic=1181.0, strike=390.0),
+        ExitOption(kind="roll", label="Roll to 02 Oct", credit=3476.0, days=7,
+                   collateral=43500.0, extrinsic=-1024.0, strike=435.0,
+                   collateral_delta=4500.0,
+                   warnings=("sells intrinsic, not time", "commits $4,500 more collateral")),
+    ]
+
+    class _Svc:
+        def brokerage_accounts(self):
+            return [_account_with_positions()]
+
+        def exit_options(self, symbol, strike, expiration, contracts, today, **kw):
+            self.seen = dict(symbol=symbol, strike=strike, expiration=expiration,
+                             contracts=contracts, **kw)
+            if error:
+                raise error
+            return (default if rows is None else rows), spot
+
+    svc = _Svc()
+    c = _client()
+    app.dependency_overrides[get_service] = lambda: svc
+    _sign_in(c)
+    return c, svc
+
+
+def test_ways_out_prices_the_position_that_was_clicked() -> None:
+    from datetime import date as _date
+
+    c, svc = _exits_client()
+    try:
+        r = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25", "contracts": 1})
+        assert r.status_code == 200
+        assert svc.seen["symbol"] == "AVGO" and svc.seen["strike"] == 390.0
+        assert svc.seen["expiration"] == _date(2026, 9, 25)
+        assert "Keep to expiry" in r.text and "Assign, sell $390 call" in r.text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_strike_and_dte_range_reach_the_service() -> None:
+    """The controls are the point: same strike is only the DEFAULT."""
+    c, svc = _exits_client()
+    try:
+        c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25", "contracts": 1,
+            "roll_strike": "380", "min_dte": 20, "max_dte": 60})
+        assert svc.seen["roll_strike"] == 380.0
+        assert svc.seen["min_dte"] == 20 and svc.seen["max_dte"] == 60
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_a_blank_roll_strike_means_the_positions_own_strike() -> None:
+    c, svc = _exits_client()
+    try:
+        c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25", "roll_strike": ""})
+        assert svc.seen["roll_strike"] is None, "None lets the domain default to the held strike"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_an_inverted_dte_range_is_swapped_not_rejected() -> None:
+    c, svc = _exits_client()
+    try:
+        c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25",
+            "min_dte": 90, "max_dte": 10})
+        assert svc.seen["min_dte"] == 10 and svc.seen["max_dte"] == 90
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_intrinsic_trap_is_shown_on_the_row_that_carries_it() -> None:
+    """A roll up pays the biggest credit and is usually the worst action. It must not be able to
+    sit at the top of the table looking like free money."""
+    c, _ = _exits_client()
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
+        assert "sells intrinsic, not time" in body
+        assert "commits $4,500 more collateral" in body
+        assert "$3,476" in body and "-$1,024" in body, "cash and time value side by side"
+        assert "Time value" in body and "Cash now" in body
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_a_bad_expiry_is_a_422_not_a_traceback() -> None:
+    c, _ = _exits_client()
+    try:
+        r = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "not-a-date"})
+        assert r.status_code == 422
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_a_quote_failure_degrades_inside_the_panel() -> None:
+    c, _ = _exits_client(error=AuthExpiredError("provider auth failed"))
+    try:
+        r = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"})
+        assert r.status_code == 200 and "provider auth failed" in r.text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_exit_panel_needs_a_session_like_the_rest_of_the_tab() -> None:
+    c = _client()
+    try:
+        r = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"},
+            follow_redirects=False)
+        assert r.status_code in (303, 401, 403), "a stranger must not reach live account data"
+    finally:
+        c.__exit__(None, None, None)
