@@ -402,3 +402,4 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
   margin: 1.25rem 0 0.4rem; font-size: 0.8125rem; font-weight: 600; color: var(--pico-muted-color);
   text-transform: uppercase; letter-spacing: 0.03em;
 }
+.exit-controls--after { margin: 0.4rem 0 0.6rem; }

@@ -540,6 +540,13 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
         credit — 417%/yr on gross cash, straight to the top of the table. Net of the intrinsic it
         sells it is *minus* $1,024 and commits $4,500 more collateral. Ranking on cash recommends
         the worst action hardest exactly when it is worst.
+      - **A trade you will make in a month cannot be quoted at today's price.** The obvious
+        implementation prices the contract you would actually sell; AVGO's 16 Oct call holds 47
+        days of life today and would be written with 21 left, so pairing its price with the
+        post-assignment period read 77%/yr where 51% was real. Rows are TENORS priced from
+        today's market instead — what a 21-day call fetches today is the honest estimate of what
+        a 21-day call fetches in three weeks. Cross-checked against root-time decay of the real
+        contract: $1,090 against $1,102, agreeing to 1%.
       - **Writing calls is not an alternative to keeping the put — it follows it.** Assignment
         happens when the put expires, so nothing can be written against those shares beforehand.
         Ranked together, a call expiring in three days annualised to 293%/yr and sat at the top

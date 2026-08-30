@@ -721,12 +721,12 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
     ]
     # a continuation, not an alternative — the service returns it as its own list
     default_after = [
-        ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=1150.0,
+        ExitOption(kind="assign_cc", label="28-day $190 call", credit=1150.0,
                    days=28, collateral=37000.0, extrinsic=1150.0, strike=190.0),
     ]
 
     default_after = [
-        ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=1150.0,
+        ExitOption(kind="assign_cc", label="28-day $190 call", credit=1150.0,
                    days=28, collateral=37000.0, extrinsic=1150.0, strike=190.0),
     ]
 
@@ -792,7 +792,7 @@ def test_ways_out_prices_the_position_that_was_clicked() -> None:
         assert svc.seen["symbol"] == "AAPL" and svc.seen["strike"] == 190.0
         assert svc.seen["expiration"] == _date(2026, 9, 18)
         assert "Keep to expiry" in r.text
-        assert "Sell $190 call" in r.text and "If assigned on 18 Sep" in r.text
+        assert "$190 call" in r.text and "If assigned on 18 Sep" in r.text
         assert "$390" not in r.text, "the panel must answer for the position that was clicked"
     finally:
         app.dependency_overrides.clear()
@@ -945,23 +945,20 @@ def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:
     """Assignment happens when the put expires, so writing calls follows keeping rather than
     competing with it. Ranked together, a near-dated call annualised to a huge rate and sat on
     top of the table as the best available action."""
-    from datetime import date as _d
-
     from wheel_screener.core.exits import ExitOption
 
-    after = [ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=900.0,
-                        days=28, collateral=37000.0, extrinsic=900.0, strike=190.0,
-                        expiration=_d(2026, 10, 16))]
+    after = [ExitOption(kind="assign_cc", label="28-day $190 call", credit=900.0,
+                        days=28, collateral=37000.0, extrinsic=900.0, strike=190.0)]
     c, _ = _exits_client(after=after)
     try:
         body = c.get("/portfolio/exits", params={
             "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18", "contracts": 2}).text
-        assert "If assigned on 18 Sep, writing calls would pay" in body
-        assert "Sell $190 call 16 Oct" in body
-        assert "Days held" in body and "Shares worth" in body
+        assert "If assigned on 18 Sep, writing a call would pay" in body
+        assert "28-day $190 call" in body
+        assert "Est. premium" in body and "Days held" in body and "Shares worth" in body
         # the ranked table above it must not have absorbed the row
         ranked = body[:body.index("If assigned on")]
-        assert "Sell $190 call 16 Oct" not in ranked
+        assert "28-day $190 call" not in ranked
         assert "Keep to expiry" in ranked
     finally:
         app.dependency_overrides.clear()
@@ -989,6 +986,42 @@ def test_the_days_column_headlines_one_quantity_in_every_row() -> None:
         assert "56 added" not in cells.split("Roll to 20 Nov")[0], "the split is on the roll row"
         # 26 + 56 = 82: the breakdown must actually reconcile with the headline
         assert "26 current\n                    + 56 added" in cells
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_call_strike_control_sits_on_the_table_it_governs() -> None:
+    """It changes the post-assignment rows and nothing else. Placed above the roll ladder it read
+    as inert — change it, press Reprice, and the rows it does not touch stay put."""
+    from wheel_screener.core.exits import ExitOption
+
+    after = [ExitOption(kind="assign_cc", label="26-day $195 call", credit=900.0, days=26,
+                        collateral=37000.0, extrinsic=900.0, strike=195.0)]
+    c, _ = _exits_client(after=after)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18",
+            "call_strike": "195"}).text
+        assert body.index('name="call_strike"') > body.index("If assigned on"), \
+            "the control belongs below the heading of the table it drives"
+        assert 'form="exits-form"' in body, "and still submits with the rest of the panel"
+        assert 'value="195"' in body, "the chosen strike is echoed back, not reset"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_no_call_strike_control_when_there_is_nothing_for_it_to_do() -> None:
+    """An out-of-the-money put has no post-assignment table, so the control would govern
+    nothing at all."""
+    c, _ = _exits_client(after=[])
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "QCOM", "strike": 150.0, "expiry": "2026-09-04"}).text
+        assert "If assigned on" not in body
+        assert 'name="call_strike"' not in body
+        assert 'name="roll_strike"' in body, "the roll controls still apply"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)

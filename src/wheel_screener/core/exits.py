@@ -166,66 +166,64 @@ def rolls(
 
 def covered_calls(
     calls: list[OptionContract], strike: float, contracts: float,
-    spot: float | None, today: date, *, assigned_on: date, call_strike: float | None = None,
+    spot: float | None, today: date, *, call_strike: float | None = None,
 ) -> list[ExitOption]:
-    """What writing calls would pay AFTER assignment — not an alternative to keeping the put.
+    """What writing calls would pay after assignment — estimated by TENOR, not by contract.
 
-    Assignment happens when the put expires, so nothing can be written against those shares
-    before ``assigned_on``. Offering a call that expires first was nonsense: it sold something
-    against stock that would not be owned yet, and because such a call is nearly worthless in
-    time terms its handful of dollars over three days annualised to 293%, which put it at the
-    top of the table as the best available action.
+    The obvious implementation quotes the contract you would actually sell, and is wrong. A call
+    expiring 16 Oct is worth $1,648 today with 47 days of life in it, but it would be written on
+    25 Sep with only 21 days left, by which time it is worth about $1,090. Pairing today's price
+    with the post-assignment holding period inflated every rate by half — 77%/yr where 51% was
+    real. You cannot quote a trade you will make in a month.
 
-    Two consequences follow, and both are the point:
+    So each row is a WRITING TENOR priced from today's market: what a 21-day call fetches today
+    is the honest estimate of what a 21-day call fetches in three weeks, holding price and
+    volatility fixed. It uses only quoted bids — no decay model — and it keeps moneyness fixed,
+    since the same strike against the same spot is the same distance out.
 
-    * only expiries strictly AFTER the put's are listed — a call expiring the same day is
-      already done by the time the shares arrive;
-    * the period is measured from assignment, not from today, because that is when the shares
-      start earning. Counting from today inflates every rate by the weeks spent still holding
-      the put.
-    
+    Cross-checked against the alternative: decaying the 16 Oct contract's extrinsic by root-time
+    gives $1,102 against the tenor proxy's $1,090, a 1.1% disagreement. Two independent methods
+    agreeing is the reason to trust either.
 
-    ONE strike across many expiries, mirroring the roll ladder — the question being asked is
-    "how long should I write for", and answering it with every strike at every expiry turns a
-    decision into a spreadsheet. The default is the put's own strike, which is the cost basis
-    assignment hands you, so writing there is the break-even line. A different strike is a
-    separate decision and gets its own control.
+    ``expiration`` is deliberately left unset. These are tenors, not tradeable contracts, and
+    printing a date invites exactly the reading — "sell the 02 Sep call" — that started this.
 
-    Only meaningful once the put is in the money — otherwise assignment is not the likely
-    outcome and this compares against a position the holder would not have. Collateral becomes
-    the shares' market value, which is what the capital is now worth rather than what it cost.
+    The same logic mirrors for a short call that gets assigned: the shares go, and the put you
+    would write afterwards is estimated the same way.
     """
     if spot is None or spot <= 0 or spot >= strike:
         return []
-    listed = {c.strike for c in calls if c.expiration > assigned_on}
-    target = call_strike if call_strike is not None else (
-        strike if strike in listed
-        else min(listed, key=lambda k: abs(k - strike)) if listed else None
-    )
-    if target is None:
+    # Default to the put's own strike — the cost basis assignment hands you, so writing there is
+    # the break-even line. An explicit choice is honoured, and either way a strike the chain does
+    # not list snaps to the nearest one: emptying the table over a strike that simply is not
+    # traded looks exactly like the control doing nothing.
+    listed = {c.strike for c in calls}
+    if not listed:
         return []
+    wanted = call_strike if call_strike is not None else strike
+    target = wanted if wanted in listed else min(listed, key=lambda k: abs(k - wanted))
+
     shares_value = spot * CONTRACT_MULTIPLIER * contracts
     here = strike * CONTRACT_MULTIPLIER * contracts
     out: list[ExitOption] = []
-    for c in sorted(calls, key=lambda c: c.expiration):
-        if c.strike != target or c.bid is None or c.bid <= 0:
+    seen: set[int] = set()
+    for c in sorted(calls, key=lambda c: c.dte):
+        if c.strike != target or c.bid is None or c.bid <= 0 or c.dte <= 0:
             continue
-        held_days = (c.expiration - assigned_on).days
-        if held_days <= 0:
-            continue  # expires on or before the day the shares would arrive
+        if c.dte in seen:
+            continue
+        seen.add(c.dte)
         premium = c.bid * CONTRACT_MULTIPLIER * contracts
-        # Same single idea as the roll ladder: flag only an in-the-money sale, where the premium
-        # is partly intrinsic and the shares are already spoken for.
         warns: list[str] = []
-        if c.strike < spot:
+        if target < spot:
             warns.append(
-                f"${c.strike:g} is in the money at ${spot:,.2f} — part of this premium is "
+                f"${target:g} is in the money at ${spot:,.2f} — part of this premium is "
                 "intrinsic, and the shares would be called away"
             )
         out.append(ExitOption(
-            kind="assign_cc", label=f"Sell ${c.strike:g} call {c.expiration:%d %b}",
-            credit=round(premium, 2), days=held_days, collateral=shares_value,
-            extrinsic=round(premium, 2), strike=c.strike, expiration=c.expiration,
+            kind="assign_cc", label=f"{c.dte}-day ${target:g} call",
+            credit=round(premium, 2), days=c.dte, collateral=shares_value,
+            extrinsic=round(premium, 2), strike=target,
             collateral_delta=round(shares_value - here, 2), warnings=tuple(warns),
         ))
     return out
@@ -252,11 +250,10 @@ def compare(
         rows.append(base)
     rows.extend(rolls(puts, strike, expiration, contracts, spot, today,
                       roll_strike=roll_strike))
-    later = covered_calls(calls, strike, contracts, spot, today,
-                          assigned_on=expiration, call_strike=call_strike)
+    later = covered_calls(calls, strike, contracts, spot, today, call_strike=call_strike)
     return (
         sorted(rows, key=lambda r: (r.rate is None, -(r.rate or 0.0))),
-        sorted(later, key=lambda r: r.expiration or date.max),
+        sorted(later, key=lambda r: r.days),
     )
 
 
