@@ -24,7 +24,11 @@
         <input type="text" name="roll_strike" value="{{ roll_strike }}" inputmode="decimal"
                placeholder="same (${{ '%g'|format(strike) }})">
       </label>
-      <label>Min DTE
+      <label>Call strike
+      <input type="text" name="call_strike" value="{{ call_strike }}" inputmode="decimal"
+             placeholder="same (${{ '%g'|format(strike) }})">
+    </label>
+    <label>Min DTE
         <input type="number" name="min_dte" value="{{ min_dte }}" min="1" max="400">
       </label>
       <label>Max DTE
@@ -41,8 +45,7 @@
       <figure>
       <table>
         <thead><tr>
-          <th>Action</th><th>Cash now</th><th>Time value</th><th>Days</th>
-          <th>Collateral</th><th>Rate/yr</th>
+          <th>Action</th><th>Value</th><th>Days</th><th>Collateral</th><th>Rate/yr</th>
         </tr></thead>
         <tbody>
           {% for r in rows %}
@@ -53,10 +56,16 @@
                   <br><span class="detail-note">&#9888; {{ w }}</span>
                 {% endfor %}
               </td>
-              <td>{{ r.credit | money }}</td>
-              {# For a same-strike roll these two are equal. When they diverge, the gap IS the
-                 intrinsic being sold — money collected now against an obligation later. #}
-              <td>{{ r.extrinsic | money }}</td>
+              <td>
+                {# The earnable money, which is also what the rate is built from. For keeping,
+                   assign-and-write and same-strike rolls it IS the cheque. It differs only when
+                   a roll sells intrinsic, and then the cheque is shown underneath rather than
+                   given a column of its own that is identical on almost every row. #}
+                {{ r.extrinsic | money }}
+                {% if r.extrinsic is not none and r.credit != r.extrinsic %}
+                  <br><span class="detail-note">{{ r.credit | money }} cash</span>
+                {% endif %}
+              </td>
               <td>{{ r.days }}{{ ' added' if r.kind == 'roll' else '' }}</td>
               <td>
                 {{ r.collateral | money }}
@@ -72,11 +81,11 @@
         </tbody>
       </table>
       </figure>
-      <p class="detail-note">Rate is <strong>time value</strong> over the collateral it commits,
-        annualised &mdash; the same unit for every row, so the top one wins. Cash now is what hits
-        the account; the two differ only when a roll sells intrinsic, and that difference is money
-        handed back at expiry rather than earned. A roll is scored over the days it <em>adds</em>,
-        since the days before your current expiry are yours either way.</p>
+      <p class="detail-note">Value is the money actually earnable, and the rate is that over the
+        collateral it commits, annualised &mdash; the same unit for every row, so the top one
+        wins. Where a row also shows a cash figure, the gap is intrinsic being sold: money that
+        arrives now and is handed back at expiry. A roll is scored over the days it
+        <em>adds</em>, since the days before your current expiry are yours either way.</p>
     {% endif %}
   </article>
  </td>

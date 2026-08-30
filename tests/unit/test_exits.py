@@ -140,3 +140,62 @@ def test_expiries_on_or_before_the_current_one_are_not_rolls() -> None:
     same = _c(390.0, EXP, 33.40, 33.74)
     earlier = _c(390.0, date(2026, 9, 18), 30.0, 30.4)
     assert rolls([CUR, same, earlier], 390.0, EXP, 1, SPOT, TODAY) == []
+
+
+def test_covered_calls_are_one_strike_across_expiries() -> None:
+    """A ladder, not a grid. The question is how long to write for; answering with every strike
+    at every expiry turns a decision into a spreadsheet."""
+    from wheel_screener.core.exits import covered_calls
+
+    chain = [
+        _c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL),
+        _c(395.0, EXP, 9.60, 9.90, kind=OptionType.CALL),
+        _c(400.0, EXP, 8.14, 8.40, kind=OptionType.CALL),
+        _c(390.0, date(2026, 10, 2), 12.95, 13.20, kind=OptionType.CALL),
+        _c(395.0, date(2026, 10, 2), 11.20, 11.50, kind=OptionType.CALL),
+    ]
+    rows = covered_calls(chain, 390.0, 1, SPOT, TODAY)
+    assert [r.strike for r in rows] == [390.0, 390.0], "the put's own strike, both expiries"
+    assert [r.expiration for r in rows] == [EXP, date(2026, 10, 2)]
+
+
+def test_the_default_call_strike_is_the_cost_basis_assignment_hands_you() -> None:
+    from wheel_screener.core.exits import covered_calls
+
+    chain = [_c(k, EXP, 10.0, 10.2, kind=OptionType.CALL) for k in (380.0, 390.0, 400.0)]
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY)[0].strike == 390.0
+    # and an explicit choice overrides it
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, call_strike=400.0)[0].strike == 400.0
+
+
+def test_a_call_strike_the_chain_does_not_list_falls_back_to_the_nearest() -> None:
+    """Assignment gives you shares whatever the chain lists; refusing to show any call because
+    the exact strike is missing would answer a real position with a blank."""
+    from wheel_screener.core.exits import covered_calls
+
+    chain = [_c(k, EXP, 10.0, 10.2, kind=OptionType.CALL) for k in (385.0, 395.0)]
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY)[0].strike == 385.0
+
+
+def test_rolls_show_one_row_per_expiry_even_with_adjusted_contracts() -> None:
+    """An adjusted contract shares its strike and expiry with the standard one, so the ladder
+    would list the same expiry twice at different prices."""
+    later = date(2026, 11, 20)
+    standard = _c(390.0, later, 42.45, 42.80)
+    adjusted = _c(390.0, later, 41.10, 42.00)
+    rows = rolls([CUR, standard, adjusted], 390.0, EXP, 1, SPOT, TODAY)
+    assert len(rows) == 1 and rows[0].expiration == later
+
+
+def test_the_call_ladder_ignores_strikes_that_are_not_the_position_s() -> None:
+    """A chain carries every strike the market lists. Offering a $390 call against a $190 put is
+    not a rounding error — it is an answer to somebody else's position."""
+    from wheel_screener.core.exits import covered_calls
+
+    put_strike = 190.0
+    chain = [_c(k, EXP, 8.0, 8.2, kind=OptionType.CALL)
+             for k in (180.0, 185.0, 190.0, 195.0, 200.0, 390.0)]
+    rows = covered_calls(chain, put_strike, 2, 185.0, TODAY)
+    assert [r.strike for r in rows] == [190.0]
+    assert rows[0].label == "Assign, sell $190 call 25 Sep"
+    assert all(str(int(put_strike)) in r.label for r in rows)

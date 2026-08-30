@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -644,9 +645,10 @@ def test_the_assignment_watch_distinguishes_itm_safe_and_unknown() -> None:
     """Three states, and the third must not read like the second: a put with no quote is not a
     put that is safe."""
     body = _portfolio_page()
-    assert "in the money" in body      # AAPL: spot 185 < strike 190
-    assert "$455" in body              # MSFT: spot above strike, shown plainly
-    assert "no quote" in body          # NVDA: unknown, and said so
+    assert "ITM &middot; $185.00" in body   # AAPL: spot 185 < strike 190
+    assert "OTM &middot; $455.00" in body   # MSFT: above the strike, and labelled as such
+    assert "no quote" in body               # NVDA: unknown, and said so
+    assert "in the money" not in body, "the long form was noise in a narrow column"
 
 
 def test_holdings_list_every_asset_class_not_just_stocks() -> None:
@@ -698,19 +700,25 @@ def test_no_html_entity_is_double_escaped_on_the_page() -> None:
 
 # ── exit comparison ────────────────────────────────────────────────────────────────────────
 
-def _exits_client(rows=None, spot=368.75, error=None):
+def _exits_client(rows=None, spot=185.0, error=None):
     from wheel_screener.api.deps import get_service
     from wheel_screener.core.exits import ExitOption
 
+    # Shaped to the fixture's own AAPL $190 put, 2 contracts, spot $185 — a fake that answers
+    # for a different position than the one clicked is a fake that will be believed.
     default = [
-        ExitOption(kind="keep", label="Keep to expiry", credit=1249.0, days=26,
-                   collateral=39000.0, extrinsic=1249.0),
-        ExitOption(kind="assign_cc", label="Assign, sell $390 call 25 Sep", credit=1181.0,
-                   days=26, collateral=36875.0, extrinsic=1181.0, strike=390.0),
-        ExitOption(kind="roll", label="Roll to 02 Oct", credit=3476.0, days=7,
-                   collateral=43500.0, extrinsic=-1024.0, strike=435.0,
-                   collateral_delta=4500.0,
-                   warnings=("sells intrinsic, not time", "commits $4,500 more collateral")),
+        ExitOption(kind="keep", label="Keep to expiry", credit=600.0, days=20,
+                   collateral=38000.0, extrinsic=600.0),
+        ExitOption(kind="assign_cc", label="Assign, sell $190 call 18 Sep", credit=580.0,
+                   days=20, collateral=37000.0, extrinsic=580.0, strike=190.0),
+        ExitOption(kind="assign_cc", label="Assign, sell $190 call 16 Oct", credit=1150.0,
+                   days=47, collateral=37000.0, extrinsic=1150.0, strike=190.0),
+        ExitOption(kind="roll", label="Roll to 16 Oct", credit=420.0, days=28,
+                   collateral=38000.0, extrinsic=420.0, strike=190.0),
+        ExitOption(kind="roll", label="Roll to 25 Sep", credit=2300.0, days=7,
+                   collateral=40000.0, extrinsic=-600.0, strike=200.0,
+                   collateral_delta=2000.0,
+                   warnings=("sells intrinsic, not time", "commits $2,000 more collateral")),
     ]
 
     class _Svc:
@@ -767,11 +775,12 @@ def test_ways_out_prices_the_position_that_was_clicked() -> None:
     c, svc = _exits_client()
     try:
         r = c.get("/portfolio/exits", params={
-            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25", "contracts": 1})
+            "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18", "contracts": 2})
         assert r.status_code == 200
-        assert svc.seen["symbol"] == "AVGO" and svc.seen["strike"] == 390.0
-        assert svc.seen["expiration"] == _date(2026, 9, 25)
-        assert "Keep to expiry" in r.text and "Assign, sell $390 call" in r.text
+        assert svc.seen["symbol"] == "AAPL" and svc.seen["strike"] == 190.0
+        assert svc.seen["expiration"] == _date(2026, 9, 18)
+        assert "Keep to expiry" in r.text and "Assign, sell $190 call" in r.text
+        assert "$390" not in r.text, "the panel must answer for the position that was clicked"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -822,9 +831,11 @@ def test_the_intrinsic_trap_is_shown_on_the_row_that_carries_it() -> None:
         body = c.get("/portfolio/exits", params={
             "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
         assert "sells intrinsic, not time" in body
-        assert "commits $4,500 more collateral" in body
-        assert "$3,476" in body and "-$1,024" in body, "cash and time value side by side"
-        assert "Time value" in body and "Cash now" in body
+        assert "commits $2,000 more collateral" in body
+        # one Value column: the earnable figure leads, the cheque is a sub-line only on the
+        # rows where the two differ — which is exactly the rows that need explaining
+        assert "-$600" in body and "$2,300.00 cash" in body
+        assert "Cash now" not in body, "the second column was identical on almost every row"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -861,3 +872,25 @@ def test_the_exit_panel_needs_a_session_like_the_rest_of_the_tab() -> None:
         assert r.status_code in (303, 401, 403), "a stranger must not reach live account data"
     finally:
         c.__exit__(None, None, None)
+
+
+def test_the_cash_subline_appears_only_where_it_differs_from_value() -> None:
+    """Keeping, assign-and-write and same-strike rolls all have cheque == earnable. Printing it
+    twice on every one of those rows is what made the second column worth removing."""
+    c, _ = _exits_client()
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
+        assert body.count("cash</span>") == 1, "only the roll that sells intrinsic explains itself"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_panel_lets_its_prose_wrap() -> None:
+    """`th, td { white-space: nowrap }` is global and white-space inherits, so every sentence in
+    the panel ran off the side of the page."""
+    css = (pathlib.Path("src/wheel_screener/api/static/custom.css")).read_text()
+    assert ".exits-row > td { white-space: normal; }" in css
+    wrap = ".exits table td:first-child, .exits table th:first-child"
+    assert wrap + " { white-space: normal; }" in css

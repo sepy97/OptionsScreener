@@ -122,9 +122,13 @@ def rolls(
     here = strike * CONTRACT_MULTIPLIER * contracts
 
     out: list[ExitOption] = []
-    for c in puts:
+    seen: set[date] = set()
+    for c in sorted(puts, key=lambda c: (c.expiration, -(c.bid or 0.0))):
         if c.strike != target or c.expiration <= expiration or c.bid is None or c.bid <= 0:
             continue
+        if c.expiration in seen:
+            continue  # an adjusted contract shares strike and expiry with the standard one
+        seen.add(c.expiration)
         added = (c.expiration - expiration).days
         collateral = target * CONTRACT_MULTIPLIER * contracts
         credit = c.bid * CONTRACT_MULTIPLIER * contracts - cost_to_close
@@ -148,9 +152,15 @@ def rolls(
 
 def covered_calls(
     calls: list[OptionContract], strike: float, contracts: float,
-    spot: float | None, today: date,
+    spot: float | None, today: date, *, call_strike: float | None = None,
 ) -> list[ExitOption]:
     """Take assignment, then sell a call against the shares.
+
+    ONE strike across many expiries, mirroring the roll ladder — the question being asked is
+    "how long should I write for", and answering it with every strike at every expiry turns a
+    decision into a spreadsheet. The default is the put's own strike, which is the cost basis
+    assignment hands you, so writing there is the break-even line. A different strike is a
+    separate decision and gets its own control.
 
     Only meaningful once the put is in the money — otherwise assignment is not the likely
     outcome and this compares against a position the holder would not have. Collateral becomes
@@ -158,11 +168,18 @@ def covered_calls(
     """
     if spot is None or spot <= 0 or spot >= strike:
         return []
+    listed = {c.strike for c in calls}
+    target = call_strike if call_strike is not None else (
+        strike if strike in listed
+        else min(listed, key=lambda k: abs(k - strike)) if listed else None
+    )
+    if target is None:
+        return []
     shares_value = spot * CONTRACT_MULTIPLIER * contracts
     here = strike * CONTRACT_MULTIPLIER * contracts
     out: list[ExitOption] = []
-    for c in calls:
-        if c.bid is None or c.bid <= 0 or c.dte <= 0:
+    for c in sorted(calls, key=lambda c: c.expiration):
+        if c.strike != target or c.bid is None or c.bid <= 0 or c.dte <= 0:
             continue
         premium = c.bid * CONTRACT_MULTIPLIER * contracts
         warns: list[str] = []
@@ -190,10 +207,7 @@ def compare(
         rows.append(base)
     rows.extend(rolls(puts, strike, expiration, contracts, spot, today,
                       roll_strike=roll_strike))
-    cc = covered_calls(calls, strike, contracts, spot, today)
-    if call_strike is not None:
-        cc = [r for r in cc if r.strike == call_strike]
-    rows.extend(cc)
+    rows.extend(covered_calls(calls, strike, contracts, spot, today, call_strike=call_strike))
     return sorted(rows, key=lambda r: (r.rate is None, -(r.rate or 0.0)))
 
 
