@@ -200,6 +200,8 @@ class SchwabAccountProvider:
 
         total = _num(current, "liquidationValue")
         cash = _cash(current)
+        # Not displayed — see AccountBalances.invested. Still computed, because the sanity check
+        # below is the only thing that catches a broker's cash buckets double-counting.
         # DERIVED, not summed from asset buckets: on the account this was written against
         # `longMarketValue` was zero while bonds and short options were not, so summing buckets
         # under-reports whenever a broker uses one we didn't enumerate.
