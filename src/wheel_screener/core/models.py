@@ -209,6 +209,57 @@ class AccountBalances(BaseModel):
     equity: float | None = None
 
 
+class PositionKind(StrEnum):
+    """What a held row IS, from a wheel's point of view rather than the broker's.
+
+    A broker reports assetType (EQUITY / OPTION / ...) and a signed quantity. Those two together
+    mean different things to this strategy: a SHORT PUT is an obligation with cash committed
+    against it, a SHORT CALL is usually covered by shares you hold, and 100+ shares are a
+    covered-call candidate. Naming the wheel meaning here keeps that judgement in one place
+    instead of re-deriving it in every template.
+    """
+
+    SHORT_PUT = "short_put"
+    SHORT_CALL = "short_call"
+    LONG_OPTION = "long_option"
+    SHARES = "shares"
+    OTHER = "other"
+
+
+class Position(BaseModel):
+    """One holding, normalised across brokers.
+
+    ``quantity`` is a positive magnitude; direction lives in ``kind``, because a signed quantity
+    invites arithmetic that silently flips a short obligation into a long asset.
+    """
+
+    symbol: str  # the broker's own string, kept verbatim so a row is always traceable
+    underlying: str  # the ticker a human recognises; equals ``symbol`` for shares
+    kind: PositionKind
+    quantity: float
+    market_value: float | None = None
+    average_price: float | None = None
+    unrealized_pl: float | None = None
+    # option rows only
+    strike: float | None = None
+    expiration: date | None = None
+    dte: int | None = None
+    # Cash a short put has spoken for: strike x 100 x contracts. Not reported by the broker as a
+    # per-position figure, so it is derived — and it is the number that answers "how much more
+    # can I sell?", which is the whole point of the capacity line.
+    collateral: float | None = None
+    # Spot at render time, when a quote source is available. Only used to say whether a short put
+    # is in the money; None simply hides the assignment column rather than guessing.
+    underlying_price: float | None = None
+
+    @property
+    def in_the_money(self) -> bool | None:
+        """For a short put: is spot below the strike? None when spot is unknown."""
+        if self.kind is not PositionKind.SHORT_PUT or self.underlying_price is None:
+            return None
+        return self.underlying_price < (self.strike or 0.0)
+
+
 class BrokerageAccount(BaseModel):
     """One account at one broker. ``account_id`` is the broker's opaque handle for API calls and
     is never displayed; ``display_name`` is the masked number a human recognises."""
@@ -218,6 +269,23 @@ class BrokerageAccount(BaseModel):
     display_name: str
     account_type: AccountType | None = None
     balances: AccountBalances = Field(default_factory=AccountBalances)
+    positions: list[Position] = Field(default_factory=list)
+
+    @property
+    def committed_collateral(self) -> float:
+        """Cash already spoken for by open short puts."""
+        return sum(p.collateral or 0.0 for p in self.positions
+                   if p.kind is PositionKind.SHORT_PUT)
+
+    @property
+    def capacity(self) -> float | None:
+        """What is left to sell against: the cash pool minus collateral already committed.
+
+        Cash rather than buying power on purpose — a cash-secured put is secured by CASH, and
+        showing margin buying power here would invite selling puts this account cannot cover.
+        """
+        cash = self.balances.cash
+        return None if cash is None else cash - self.committed_collateral
 
 
 class BrokerLinkStatus(BaseModel):

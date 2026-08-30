@@ -12,7 +12,7 @@ import pytest
 from wheel_screener.adapters.schwab.account import SchwabAccountProvider
 from wheel_screener.config import SchwabSettings
 from wheel_screener.core.errors import AuthExpiredError, ProviderUnavailableError
-from wheel_screener.core.models import AccountType
+from wheel_screener.core.models import AccountType, Position
 
 
 class _Response:
@@ -32,7 +32,8 @@ class _Client:
     def get_account_numbers(self):
         return _Response(self._numbers, self._status)
 
-    def get_accounts(self):
+    def get_accounts(self, *, fields=None):
+        self.fields = fields  # positions are opt-in; assert we actually ask for them
         return _Response(self._accounts, self._status)
 
 
@@ -146,3 +147,133 @@ def test_service_distinguishes_no_broker_from_no_holdings() -> None:
     svc = ScreenerService(fundamentals=object(), chains=object())
     with pytest.raises(ProviderUnavailableError, match="no brokerage account is linked"):
         svc.brokerage_accounts()
+
+
+# ── positions ──────────────────────────────────────────────────────────────────────────────
+
+def _pos(symbol, asset, *, long=0.0, short=0.0, **kw) -> dict:
+    row = {"instrument": {"symbol": symbol, "assetType": asset, **kw.pop("instrument", {})},
+           "longQuantity": long, "shortQuantity": short}
+    row.update(kw)
+    return row
+
+
+def _acct_with(*positions, cash=100_000.0) -> list:
+    return [{"securitiesAccount": {
+        "accountNumber": "12345678", "type": "MARGIN",
+        "currentBalances": {"liquidationValue": 150_000.0, "cashBalance": cash},
+        "positions": list(positions)}}]
+
+
+def test_positions_are_requested_not_assumed() -> None:
+    """Balances come back by default; positions only if asked for. A silent omission here would
+    render an empty, entirely believable "no open positions"."""
+    from schwab.client import Client
+
+    client = _Client([], _acct_with())
+    SchwabAccountProvider(
+        SchwabSettings(client_id="k", client_secret="s"),
+        client_factory=lambda _s: client,
+    ).accounts()
+    assert client.fields is Client.Account.Fields.POSITIONS
+
+
+def test_a_short_put_is_recognised_and_its_collateral_derived() -> None:
+    from wheel_screener.core.models import PositionKind
+
+    acct = _provider([], _acct_with(_pos(
+        "AAPL  260918P00190000", "OPTION", short=2.0, marketValue=-420.0,
+        averagePrice=3.10, instrument={"underlyingSymbol": "AAPL"},
+    ))).accounts()[0]
+    p = acct.positions[0]
+    assert p.kind is PositionKind.SHORT_PUT and p.underlying == "AAPL"
+    assert p.strike == 190.0 and p.quantity == 2.0
+    assert p.collateral == 38_000.0, "strike x 100 x contracts — a CASH-secured view"
+    assert acct.committed_collateral == 38_000.0
+    assert acct.capacity == 100_000.0 - 38_000.0
+
+
+def test_capacity_uses_cash_not_margin_buying_power() -> None:
+    """A cash-secured put is secured by cash. Showing margin buying power here would invite
+    selling puts the account cannot actually cover."""
+    acct = _provider([], _acct_with(
+        _pos("AAPL  260918P00190000", "OPTION", short=1.0), cash=25_000.0)).accounts()[0]
+    assert acct.capacity == 25_000.0 - 19_000.0
+
+
+def test_short_calls_and_shares_are_told_apart() -> None:
+    from wheel_screener.core.models import PositionKind
+
+    acct = _provider([], _acct_with(
+        _pos("AAPL  260918C00250000", "OPTION", short=1.0,
+             instrument={"underlyingSymbol": "AAPL"}),
+        _pos("AAPL", "EQUITY", long=300.0, marketValue=60_000.0, averagePrice=180.0),
+    )).accounts()[0]
+    kinds = {p.kind for p in acct.positions}
+    assert kinds == {PositionKind.SHORT_CALL, PositionKind.SHARES}
+    # a short CALL commits shares, not cash — it must not eat the collateral pool
+    assert acct.committed_collateral == 0.0
+    shares = next(p for p in acct.positions if p.kind is PositionKind.SHARES)
+    assert shares.quantity == 300.0 and shares.average_price == 180.0
+
+
+def test_a_long_option_is_not_mistaken_for_an_obligation() -> None:
+    from wheel_screener.core.models import PositionKind
+
+    acct = _provider([], _acct_with(_pos(
+        "AAPL  260918P00190000", "OPTION", long=1.0))).accounts()[0]
+    assert acct.positions[0].kind is PositionKind.LONG_OPTION
+    assert acct.positions[0].collateral is None and acct.committed_collateral == 0.0
+
+
+def test_a_swept_cash_fund_is_not_listed_as_a_holding() -> None:
+    """The sweep is already inside the cash balance. Listing it again double-counts the account
+    on screen and makes 'shares held' nonsense."""
+    acct = _provider([], _acct_with(
+        _pos("MMDA1", "CASH_EQUIVALENT", long=50_000.0),
+        _pos("SWVXX", "MONEY_MARKET_FUND", long=10_000.0),
+        _pos("AAPL", "EQUITY", long=100.0),
+    )).accounts()[0]
+    assert [p.symbol for p in acct.positions] == ["AAPL"]
+
+
+def test_closed_and_unreadable_rows_are_skipped_not_rendered() -> None:
+    acct = _provider([], _acct_with(
+        _pos("AAPL", "EQUITY", long=0.0, short=0.0),   # closed, still returned
+        {"instrument": {"symbol": "", "assetType": "EQUITY"}, "longQuantity": 5},
+        "not a dict",
+        _pos("MSFT", "EQUITY", long=10.0),
+    )).accounts()[0]
+    assert [p.symbol for p in acct.positions] == ["MSFT"]
+
+
+def test_an_option_row_whose_symbol_will_not_parse_is_still_shown() -> None:
+    """Better a row with unknown strike than a silently dropped obligation."""
+    from wheel_screener.core.models import PositionKind
+
+    acct = _provider([], _acct_with(
+        _pos("WEIRD-SYMBOL", "OPTION", short=1.0, marketValue=-100.0))).accounts()[0]
+    p = acct.positions[0]
+    assert p.kind is PositionKind.OTHER and p.strike is None and p.market_value == -100.0
+
+
+def test_missing_position_fields_read_as_unknown_not_zero() -> None:
+    acct = _provider([], _acct_with(_pos("AAPL", "EQUITY", long=100.0))).accounts()[0]
+    p = acct.positions[0]
+    assert p.market_value is None and p.average_price is None and p.unrealized_pl is None
+
+
+def test_assignment_watch_needs_a_price_and_says_nothing_without_one() -> None:
+    from wheel_screener.core.models import PositionKind
+
+    acct = _provider([], _acct_with(_pos(
+        "AAPL  260918P00190000", "OPTION", short=1.0))).accounts()[0]
+    p = acct.positions[0]
+    assert p.in_the_money is None, "no quote yet — must not claim safe or assigned"
+    p.underlying_price = 185.0
+    assert p.in_the_money is True
+    p.underlying_price = 195.0
+    assert p.in_the_money is False
+    shares = Position(symbol="AAPL", underlying="AAPL", kind=PositionKind.SHARES, quantity=1,
+                      underlying_price=10.0)
+    assert shares.in_the_money is None, "only meaningful for a short put"

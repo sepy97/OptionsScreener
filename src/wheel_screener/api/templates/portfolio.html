@@ -50,7 +50,89 @@
             <div class="balance">
               <dt>Buying power</dt><dd>{{ b.buying_power | money }}</dd>
             </div>
+            {# The wheel question the other four cannot answer: how much more can I sell?
+               Cash minus collateral already committed -- cash, not buying power, because a
+               cash-secured put is secured by cash. #}
+            <div class="balance headline">
+              <dt>Capacity</dt><dd>{{ a.capacity | money }}</dd>
+              <p class="detail-note">cash free after {{ a.committed_collateral | money }}
+                committed to open puts</p>
+            </div>
           </dl>
+
+          {% set puts = a.positions | selectattr('kind', 'equalto', 'short_put') | list %}
+          {% if puts %}
+            <h4>Open short puts</h4>
+            <figure>
+            <table>
+              <thead><tr>
+                <th>Symbol</th><th>Strike</th><th>Expiry</th><th>DTE</th>
+                <th>Contracts</th><th>Collateral</th>
+                <th>Value</th><th>Assignment</th>
+              </tr></thead>
+              <tbody>
+                {# soonest first: the near expiry is the one that needs a decision #}
+                {% for p in puts | sort(attribute='dte') %}
+                  <tr>
+                    <td><b>{{ p.underlying }}</b></td>
+                    <td>{{ p.strike | money }}</td>
+                    <td>{{ p.expiration.strftime('%d %b') if p.expiration else '&mdash;' }}</td>
+                    <td>{{ p.dte if p.dte is not none else '&mdash;' }}</td>
+                    <td>{{ p.quantity | int }}</td>
+                    <td>{{ p.collateral | money }}</td>
+                    <td>{{ p.market_value | money }}</td>
+                    <td>
+                      {% if p.in_the_money is none %}
+                        <span class="detail-note">no quote</span>
+                      {% elif p.in_the_money %}
+                        <span class="badge badge--neg">in the money &middot; {{ p.underlying_price | money }}</span>
+                      {% else %}
+                        <span class="badge badge--ok">{{ p.underlying_price | money }}</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            </figure>
+          {% endif %}
+
+          {% set lots = a.positions | selectattr('kind', 'equalto', 'shares') | list %}
+          {% if lots %}
+            <h4>Shares held</h4>
+            <figure>
+            <table>
+              <thead><tr>
+                <th>Symbol</th><th>Shares</th><th>Avg cost</th>
+                <th>Value</th><th>Covered calls</th>
+              </tr></thead>
+              <tbody>
+                {% for p in lots | sort(attribute='market_value', reverse=true) %}
+                  <tr>
+                    <td><b>{{ p.symbol }}</b></td>
+                    <td>{{ p.quantity | int }}</td>
+                    <td>{{ p.average_price | money }}</td>
+                    <td>{{ p.market_value | money }}</td>
+                    <td>
+                      {# one contract covers exactly 100 shares; below that there is nothing
+                         to sell against, however large the position's value #}
+                      {% if p.quantity >= 100 %}
+                        <span class="badge badge--ok">{{ (p.quantity // 100) | int }} contract{{ 's' if p.quantity >= 200 else '' }}</span>
+                      {% else %}
+                        <span class="detail-note">under 100 shares</span>
+                      {% endif %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            </figure>
+          {% endif %}
+
+          {% set other = a.positions | rejectattr('kind', 'in', ['short_put', 'shares']) | list %}
+          {% if other %}
+            <p class="detail-note">Also held: {{ other | map(attribute='symbol') | join(', ') }}</p>
+          {% endif %}
         </section>
       {% else %}
         {% if not balances_error %}

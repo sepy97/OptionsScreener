@@ -1,9 +1,9 @@
 """Read-only account balances from Schwab.
 
 One provider, two calls: ``get_account_numbers()`` maps an account number to the opaque hash the
-rest of the API wants, and ``get_accounts()`` returns balances. Positions are deliberately NOT
-requested — they are an opt-in ``fields`` parameter, and this milestone is about proving the
-credentials, the account lookup and the mapping before any option symbol needs normalising.
+rest of the API wants, and ``get_accounts()`` returns balances. Positions ride along on that same
+call via the opt-in ``fields`` parameter, requested now that the credential and balance mapping
+are proven against a live account.
 
 Field names and their meanings were read from a live margin account rather than inferred; the
 mapping notes below record what that showed, including two things the documentation does not.
@@ -12,6 +12,7 @@ mapping notes below record what that showed, including two things the documentat
 from __future__ import annotations
 
 import logging
+from datetime import date
 
 import httpx
 
@@ -19,7 +20,15 @@ from wheel_screener.adapters.errors import SCHWAB, map_http_error
 from wheel_screener.adapters.schwab.auth import load_client
 from wheel_screener.config import SchwabSettings
 from wheel_screener.core.errors import ProviderDataError, ProviderError, ProviderUnavailableError
-from wheel_screener.core.models import AccountBalances, AccountType, BrokerageAccount
+from wheel_screener.core.models import (
+    AccountBalances,
+    AccountType,
+    BrokerageAccount,
+    OptionType,
+    Position,
+    PositionKind,
+)
+from wheel_screener.core.osi import parse_osi
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +89,13 @@ class SchwabAccountProvider:
     def accounts(self) -> list[BrokerageAccount]:
         try:
             client = self._client()
+            from schwab.client import Client as _SchwabClient
+
             numbers = self._json(client.get_account_numbers())
-            payload = self._json(client.get_accounts())
+            # schwab-py enforces enums, so this must be the enum member rather than "positions"
+            payload = self._json(
+                client.get_accounts(fields=_SchwabClient.Account.Fields.POSITIONS)
+            )
         except ProviderError:
             raise  # already typed (auth/rate/outage) — never mask it
         except (httpx.HTTPStatusError, httpx.TransportError) as e:
@@ -100,6 +114,69 @@ class SchwabAccountProvider:
             for entry in (payload or [])
             if isinstance(entry, dict) and isinstance(entry.get("securitiesAccount"), dict)
         ]
+
+    # Rows that are cash by another name. A sweep fund is already counted in the cash balance,
+    # so listing it as a holding would double-count it on screen and make "shares held" nonsense.
+    _CASH_EQUIVALENT = ("MONEY_MARKET_FUND", "CASH_EQUIVALENT")
+
+    def _to_positions(self, acct: dict, today: date) -> list[Position]:
+        """Normalise the broker's rows into wheel-shaped holdings.
+
+        Every field is read defensively. Schwab populates a different subset for equities,
+        options, funds and sweeps, and the failure mode that matters is not a crash — it is a
+        confidently wrong number on a page about someone's money. A field we cannot read stays
+        None, and the template renders an em dash.
+        """
+        out: list[Position] = []
+        for row in acct.get("positions") or []:
+            if not isinstance(row, dict):
+                continue
+            instrument = row.get("instrument") or {}
+            symbol = str(instrument.get("symbol") or "").strip()
+            if not symbol:
+                continue
+            asset = str(instrument.get("assetType") or "").upper()
+            if asset in self._CASH_EQUIVALENT:
+                continue  # already inside the cash balance; showing it twice is a lie
+
+            long_qty = _num(row, "longQuantity") or 0.0
+            short_qty = _num(row, "shortQuantity") or 0.0
+            quantity = long_qty or short_qty
+            if not quantity:
+                continue  # a closed row the broker still returns
+
+            osi = parse_osi(symbol) if asset == "OPTION" else None
+            if osi is not None:
+                if short_qty:
+                    kind = (PositionKind.SHORT_PUT if osi.option_type is OptionType.PUT
+                            else PositionKind.SHORT_CALL)
+                else:
+                    kind = PositionKind.LONG_OPTION
+                # A short put commits strike x 100 per contract, whatever the broker's margin
+                # requirement says. This is a CASH-secured view on purpose.
+                collateral = (osi.strike * 100 * short_qty) if short_qty else None
+                out.append(Position(
+                    symbol=symbol,
+                    underlying=str(instrument.get("underlyingSymbol") or osi.underlying),
+                    kind=kind, quantity=quantity,
+                    market_value=_num(row, "marketValue"),
+                    average_price=_num(row, "averagePrice", "averageShortPrice",
+                                       "averageLongPrice"),
+                    unrealized_pl=_num(row, "longOpenProfitLoss", "shortOpenProfitLoss"),
+                    strike=osi.strike, expiration=osi.expiration, dte=osi.dte(today),
+                    collateral=collateral,
+                ))
+                continue
+
+            kind = PositionKind.SHARES if asset in ("EQUITY", "COLLECTIVE_INVESTMENT") \
+                else PositionKind.OTHER
+            out.append(Position(
+                symbol=symbol, underlying=symbol, kind=kind, quantity=quantity,
+                market_value=_num(row, "marketValue"),
+                average_price=_num(row, "averagePrice", "averageLongPrice"),
+                unrealized_pl=_num(row, "longOpenProfitLoss", "shortOpenProfitLoss"),
+            ))
+        return out
 
     def _to_account(self, acct: dict, hashes: dict) -> BrokerageAccount:
         number = str(acct.get("accountNumber") or "")
@@ -129,6 +206,7 @@ class SchwabAccountProvider:
             display_name=f"••••{number[-4:]}" if len(number) >= 4 else (number or "account"),
             account_type=AccountType.MARGIN if raw_type == "MARGIN"
             else AccountType.CASH if raw_type == "CASH" else None,
+            positions=self._to_positions(acct, date.today()),
             balances=AccountBalances(
                 total_value=total,
                 cash=cash,
