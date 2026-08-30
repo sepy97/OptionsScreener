@@ -529,6 +529,20 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
       - **Capacity is cash minus committed collateral, never buying power.** A cash-secured put is
         secured by cash, and showing margin buying power here invites selling puts the account
         cannot cover.
+- [x] **P4a — exit comparison.** Every way out of an ITM short put — keep, roll (any expiry,
+      strike adjustable), assign-and-write — priced from the chain provider and scored in one
+      unit: annualised return on the collateral it commits. Three findings are baked into
+      `core/exits.py` and its tests, each of which was wrong first:
+      - **A roll earns over the days it ADDS**, not its whole life. The days before the current
+        expiry belong to the holder either way; scoring a 7-day extension across its full 33-day
+        span made it read four times better than it was.
+      - **Rank on TIME VALUE, never on cash received.** Rolling AVGO $390 → $435 pays a $3,476
+        credit — 417%/yr on gross cash, straight to the top of the table. Net of the intrinsic it
+        sells it is *minus* $1,024 and commits $4,500 more collateral. Ranking on cash recommends
+        the worst action hardest exactly when it is worst.
+      - **Keep and assign-then-write score identically on an ITM put**, by put-call parity. That
+        is a property of the maths, so it is asserted: if the two ever drift apart, the pricing
+        is wrong somewhere.
 - [ ] **P5 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture. Add: a
       *stale-quote* note for the assignment watch — spot comes from the chain provider on a
       best-effort basis and an unknown price renders "no quote", which is honest but silent about

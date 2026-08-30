@@ -1,0 +1,83 @@
+{# Inserted directly beneath the position row it belongs to, so it reads as that row opening
+     rather than as a panel that appeared somewhere else on the page. #}
+<tr class="detail exits-row">
+ <td colspan="9">
+  <article class="exits">
+    <header class="results-head">
+      <strong>{{ symbol }} ${{ '%g'|format(strike) }} put &middot; ways out</strong>
+      <span class="result-stats">
+        {% if spot %}<span>Spot <b>{{ spot | money }}</b></span>{% endif %}
+        <span>{{ contracts | int }} contract{{ 's' if contracts != 1 else '' }}</span>
+      </span>
+    </header>
+
+    {# Same strike is the default because it is the only roll that is purely an extension of
+       time. A different strike is offered — traders do it — and annotated rather than hidden. #}
+    {# Repricing replaces this whole detail row with the next one, keeping the table valid. #}
+    <form hx-get="/portfolio/exits" hx-target="closest tr" hx-swap="outerHTML"
+          class="exit-controls">
+      <input type="hidden" name="symbol" value="{{ symbol }}">
+      <input type="hidden" name="strike" value="{{ strike }}">
+      <input type="hidden" name="expiry" value="{{ expiry }}">
+      <input type="hidden" name="contracts" value="{{ contracts }}">
+      <label>Roll strike
+        <input type="text" name="roll_strike" value="{{ roll_strike }}" inputmode="decimal"
+               placeholder="same (${{ '%g'|format(strike) }})">
+      </label>
+      <label>Min DTE
+        <input type="number" name="min_dte" value="{{ min_dte }}" min="1" max="400">
+      </label>
+      <label>Max DTE
+        <input type="number" name="max_dte" value="{{ max_dte }}" min="1" max="400">
+      </label>
+      <button type="submit" class="secondary outline">Reprice</button>
+    </form>
+
+    {% if error %}
+      <article role="alert"><strong>{{ error }}</strong></article>
+    {% elif not rows %}
+      <p class="detail-note">No quotes came back for this contract in that window.</p>
+    {% else %}
+      <figure>
+      <table>
+        <thead><tr>
+          <th>Action</th><th>Cash now</th><th>Time value</th><th>Days</th>
+          <th>Collateral</th><th>Rate/yr</th>
+        </tr></thead>
+        <tbody>
+          {% for r in rows %}
+            <tr{{ ' class="exit-best"'|safe if loop.first }}>
+              <td>
+                <b>{{ r.label }}</b>
+                {% for w in r.warnings %}
+                  <br><span class="detail-note">&#9888; {{ w }}</span>
+                {% endfor %}
+              </td>
+              <td>{{ r.credit | money }}</td>
+              {# For a same-strike roll these two are equal. When they diverge, the gap IS the
+                 intrinsic being sold — money collected now against an obligation later. #}
+              <td>{{ r.extrinsic | money }}</td>
+              <td>{{ r.days }}{{ ' added' if r.kind == 'roll' else '' }}</td>
+              <td>
+                {{ r.collateral | money }}
+                {% if r.collateral_delta %}
+                  <br><span class="detail-note">{{ '+' if r.collateral_delta > 0 }}{{ r.collateral_delta | money }}</span>
+                {% endif %}
+              </td>
+              <td class="{{ 'y-hi' if r.rate and r.rate >= 0.25 else ('y-mid' if r.rate and r.rate >= 0.15 else 'y-lo') }}">
+                {{ '%.1f%%'|format(r.rate * 100) if r.rate is not none else '—' }}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      </figure>
+      <p class="detail-note">Rate is <strong>time value</strong> over the collateral it commits,
+        annualised &mdash; the same unit for every row, so the top one wins. Cash now is what hits
+        the account; the two differ only when a roll sells intrinsic, and that difference is money
+        handed back at expiry rather than earned. A roll is scored over the days it <em>adds</em>,
+        since the days before your current expiry are yours either way.</p>
+    {% endif %}
+  </article>
+ </td>
+</tr>

@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
+from wheel_screener.core import exits
 from wheel_screener.core.earnings import EarningsGuard
 from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
 from wheel_screener.core.fundamentals import (
@@ -287,6 +288,61 @@ class ScreenerService:
             yield_satisfactory=criteria.yield_satisfactory,
             min_score=criteria.min_score,
         )
+
+    def exit_options(
+        self,
+        symbol: str,
+        strike: float,
+        expiration: date,
+        contracts: float,
+        today: date,
+        *,
+        min_dte: int = 1,
+        max_dte: int = 120,
+        roll_strike: float | None = None,
+    ):
+        """Every way out of one open short put, priced and ranked.
+
+        Returns ``(rows, spot)``. The requested DTE window is always widened to contain the
+        position's own expiry — without that contract there is no cost to close, so the baseline
+        "keep" row cannot be formed and the whole table is a list of alternatives to nothing.
+
+        Calls are only fetched when the put is in the money. Out of the money, assignment is not
+        the live outcome, so offering an assign-and-write row would compare against a position
+        the holder would not end up in.
+        """
+        symbol = symbol.strip().upper()
+        held_dte = (expiration - today).days
+        lo = max(1, min(min_dte, held_dte))
+        hi = max(max_dte, held_dte)
+
+        put_filt = ChainFilter(
+            option_type=OptionType.PUT, min_dte=lo, max_dte=hi, min_open_interest=0
+        )
+        put_chain = self.chains.get_chain(symbol, put_filt)
+        spot = put_chain.underlying_price
+        if not spot or spot <= 0:
+            quote = getattr(self.chains, "spot", None)
+            spot = quote(symbol) if callable(quote) else None
+
+        calls: list = []
+        if exits.is_in_the_money(strike, spot):
+            call_chain = self.chains.get_chain(
+                symbol,
+                ChainFilter(option_type=OptionType.CALL, min_dte=lo, max_dte=hi,
+                            min_open_interest=0),
+            )
+            calls = call_chain.contracts
+
+        rows = exits.compare(
+            put_chain.contracts, calls, strike=strike, expiration=expiration,
+            contracts=contracts, spot=spot, today=today, roll_strike=roll_strike,
+        )
+        logger.info(
+            "exits: %s $%g %s -> %d option(s) priced (spot %s)",
+            symbol, strike, expiration, len(rows), f"{spot:.2f}" if spot else "unknown",
+        )
+        return rows, spot
 
     def search_ticker(
         self,

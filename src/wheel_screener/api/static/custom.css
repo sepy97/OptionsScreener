@@ -345,3 +345,23 @@ tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); 
 .dte-boxes input:focus { outline: none; box-shadow: none; }
 /* the DTE block is much taller than the segmented control beside it */
 .grid-top { align-items: start; }
+
+/* ── exit comparison ─────────────────────────────────────────────────────────────────── */
+/* A short put row opens its own comparison, so it has to look pressable. */
+tbody tr.row-open { cursor: pointer; }
+tbody tr.row-open td:first-child { position: relative; padding-left: 1.1rem; }
+tbody tr.row-open td:first-child::before {
+  content: "\25B8"; position: absolute; left: 0.3rem; color: var(--wheel-accent);
+  transition: transform 0.12s ease; display: inline-block;
+}
+tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90deg); }
+.exits-row > td { padding: 0; background: var(--sunken); }
+.exits { margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
+.exit-controls {
+  display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; margin-bottom: 0.5rem;
+}
+.exit-controls label { font-size: 0.75rem; margin: 0; }
+.exit-controls input { margin: 0; }
+.exit-controls button { width: auto; margin: 0; }
+.exit-best td { background: var(--wheel-accent-soft); }
+.exit-best td:first-child { box-shadow: inset 3px 0 0 var(--wheel-accent); }

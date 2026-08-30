@@ -76,7 +76,17 @@
               <tbody>
                 {# soonest first: the near expiry is the one that needs a decision #}
                 {% for p in open_options | sort(attribute='dte') %}
-                  <tr>
+                  {# A short put row IS the control: clicking it opens the priced ways out,
+                     clicking again closes them. Only short puts — the comparison is written for
+                     an obligation with collateral behind it, and a long option has neither. #}
+                  <tr{% if p.kind == 'short_put' %} class="row-open"
+                      hx-get="/portfolio/exits" hx-sync="this:drop"
+                      hx-vals='{"symbol": "{{ p.underlying }}", "strike": "{{ p.strike }}",
+                                "expiry": "{{ p.expiration }}", "contracts": "{{ p.quantity }}"}'
+                      hx-target="this" hx-swap="afterend"
+                      hx-on::before-request="let d=this.nextElementSibling;
+                        if(d&&d.classList.contains('detail')){d.remove();event.preventDefault();}"
+                    {% endif %}>
                     <td><b>{{ p.underlying }}</b></td>
                     <td>{{ p.position_label }}</td>
                     <td>{{ p.strike | money }}</td>
