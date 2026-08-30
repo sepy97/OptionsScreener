@@ -62,29 +62,35 @@
             </div>
           </dl>
 
-          {% set puts = a.positions | selectattr('kind', 'equalto', 'short_put') | list %}
-          {% if puts %}
-            <h4>Open short puts</h4>
+          {# One table for everything open. Splitting puts from "other options" meant the
+             page had two lists and no single answer to "what am I in right now". #}
+          {% set open_options = a.positions | selectattr('is_option') | list %}
+          {% if open_options %}
+            <h4>Open options</h4>
             <figure>
             <table>
               <thead><tr>
-                <th>Symbol</th><th>Strike</th><th>Expiry</th><th>DTE</th>
-                <th>Contracts</th><th>Collateral</th>
-                <th>Value</th><th>Assignment</th>
+                <th>Symbol</th><th>Position</th><th>Strike</th><th>Expiry</th><th>DTE</th>
+                <th>Contracts</th><th>Collateral</th><th>Value</th><th>Assignment</th>
               </tr></thead>
               <tbody>
                 {# soonest first: the near expiry is the one that needs a decision #}
-                {% for p in puts | sort(attribute='dte') %}
+                {% for p in open_options | sort(attribute='dte') %}
                   <tr>
                     <td><b>{{ p.underlying }}</b></td>
+                    <td>{{ p.position_label }}</td>
                     <td>{{ p.strike | money }}</td>
-                    <td>{{ p.expiration.strftime('%d %b') if p.expiration else '&mdash;' }}</td>
-                    <td>{{ p.dte if p.dte is not none else '&mdash;' }}</td>
+                    <td>{{ p.expiration.strftime('%d %b') if p.expiration else '—' }}</td>
+                    <td>{{ p.dte if p.dte is not none else '—' }}</td>
                     <td>{{ p.quantity | int }}</td>
                     <td>{{ p.collateral | money }}</td>
                     <td>{{ p.market_value | money }}</td>
                     <td>
-                      {% if p.in_the_money is none %}
+                      {% if p.kind != 'short_put' %}
+                        {# assignment risk is only a cash question for a short put; a short call
+                           is answered by the shares, and a long option cannot be assigned #}
+                        <span class="detail-note">&mdash;</span>
+                      {% elif p.in_the_money is none %}
                         <span class="detail-note">no quote</span>
                       {% elif p.in_the_money %}
                         <span class="badge badge--neg">in the money &middot; {{ p.underlying_price | money }}</span>
@@ -95,33 +101,20 @@
                   </tr>
                 {% endfor %}
               </tbody>
-            </table>
-            </figure>
-          {% endif %}
-
-          {% set others = a.positions | selectattr('is_option')
-                                      | rejectattr('kind', 'equalto', 'short_put') | list %}
-          {% if others %}
-            <h4>Other options</h4>
-            <figure>
-            <table>
-              <thead><tr>
-                <th>Symbol</th><th>Strike</th><th>Expiry</th><th>DTE</th>
-                <th>Position</th><th>Contracts</th><th>Value</th>
-              </tr></thead>
-              <tbody>
-                {% for p in others | sort(attribute='dte') %}
-                  <tr>
-                    <td><b>{{ p.underlying }}</b></td>
-                    <td>{{ p.strike | money }}</td>
-                    <td>{{ p.expiration.strftime('%d %b') if p.expiration else '&mdash;' }}</td>
-                    <td>{{ p.dte if p.dte is not none else '&mdash;' }}</td>
-                    <td>{{ 'short call' if p.kind == 'short_call' else 'long' }}</td>
-                    <td>{{ p.quantity | int }}</td>
-                    <td>{{ p.market_value | money }}</td>
-                  </tr>
-                {% endfor %}
-              </tbody>
+              <tfoot>
+                <tr>
+                  {# Taken from the account, not summed over the rows, so this total and the
+                     Capacity cell above can never disagree on screen. #}
+                  <th colspan="6">Total collateral committed</th>
+                  <th>{{ a.committed_collateral | money }}</th>
+                  {# A sum that quietly skips the rows it could not price is a WRONG number, not
+                     an approximate one — it reads as the whole book. Withheld unless every open
+                     contract has a mark. #}
+                  {% set marks = open_options | map(attribute='market_value') | list %}
+                  <th>{{ (marks | sum) | money if none not in marks else '—' }}</th>
+                  <th></th>
+                </tr>
+              </tfoot>
             </table>
             </figure>
           {% endif %}

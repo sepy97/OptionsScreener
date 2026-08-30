@@ -550,15 +550,15 @@ def _account_with_positions():
                                  buying_power=120_000.0),
         positions=[
             Position(symbol="AAPL  260918P00190000", underlying="AAPL",
-                     kind=PositionKind.SHORT_PUT, quantity=2, strike=190.0,
+                     kind=PositionKind.SHORT_PUT, option_type="put", quantity=2, strike=190.0,
                      expiration=_date(2026, 9, 18), dte=20, collateral=38_000.0,
                      market_value=-420.0, underlying_price=185.0),   # in the money
             Position(symbol="MSFT  261016P00400000", underlying="MSFT",
-                     kind=PositionKind.SHORT_PUT, quantity=1, strike=400.0,
+                     kind=PositionKind.SHORT_PUT, option_type="put", quantity=1, strike=400.0,
                      expiration=_date(2026, 10, 16), dte=48, collateral=40_000.0,
                      market_value=-310.0, underlying_price=455.0),   # safe
             Position(symbol="NVDA  260918P00100000", underlying="NVDA",
-                     kind=PositionKind.SHORT_PUT, quantity=1, strike=100.0,
+                     kind=PositionKind.SHORT_PUT, option_type="put", quantity=1, strike=100.0,
                      expiration=_date(2026, 9, 18), dte=20, collateral=10_000.0),  # no quote
             Position(symbol="TSLA", underlying="TSLA", kind=PositionKind.SHARES,
                      asset_type="EQUITY", quantity=250, average_price=210.0,
@@ -574,7 +574,8 @@ def _account_with_positions():
                      description="US TREASURY BOND 4.5% 2044", quantity=7,
                      market_value=7_104.03),
             Position(symbol="AAPL  261016C00300000", underlying="AAPL",
-                     kind=PositionKind.SHORT_CALL, asset_type="OPTION", quantity=1,
+                     kind=PositionKind.SHORT_CALL, asset_type="OPTION", option_type="call",
+                     quantity=1,
                      strike=300.0, expiration=_date(2026, 10, 16), dte=48,
                      market_value=-150.0),
         ],
@@ -608,12 +609,35 @@ def test_capacity_is_cash_minus_committed_collateral() -> None:
     assert "$88,000" in body and "committed to open puts" in body
 
 
-def test_short_puts_are_listed_soonest_first_with_collateral() -> None:
+def test_open_options_is_one_table_covering_every_contract() -> None:
+    """Puts and "other options" used to be two lists, so there was no single answer to "what am
+    I in right now"."""
     body = _portfolio_page()
-    assert "Open short puts" in body
+    assert "Open options" in body
+    assert "Open short puts" not in body and "Other options" not in body
+    assert "short put" in body and "short call" in body  # direction and side are on each row
     order = [body.index(s) for s in ("AAPL", "NVDA", "MSFT")]
     assert order == sorted(order), "the near expiry needs the decision, so it goes first"
     assert "$38,000" in body and "18 Sep" in body
+
+
+def test_the_collateral_total_agrees_with_capacity() -> None:
+    """The total is read from the account rather than summed over the rendered rows, so this
+    figure and the Capacity cell can never disagree on screen."""
+    body = _portfolio_page()
+    assert "Total collateral committed" in body
+    assert body.count("$88,000") >= 2, "the footer total and the capacity note are one number"
+    assert "$12,000" in body  # 100k cash - 88k committed
+
+
+def test_assignment_is_blank_for_anything_but_a_short_put() -> None:
+    """A short call is answered by the shares behind it and a long option cannot be assigned, so
+    neither gets a watch — and neither should borrow the reassuring green of a safe put."""
+    from wheel_screener.core.models import PositionKind
+
+    account = _account_with_positions()
+    calls = [p for p in account.positions if p.kind is PositionKind.SHORT_CALL]
+    assert calls and all(p.in_the_money is None for p in calls)
 
 
 def test_the_assignment_watch_distinguishes_itm_safe_and_unknown() -> None:
@@ -653,4 +677,20 @@ def test_no_position_is_invisible() -> None:
     for p in account.positions:
         needle = p.description if p.symbol_is_cusip else p.underlying
         assert needle in body, f"{p.symbol} is not rendered anywhere"
-    assert "Other options" in body and "short call" in body
+    assert "Open options" in body and "short call" in body
+
+
+def test_the_value_total_is_withheld_rather_than_understated() -> None:
+    """One unpriced contract makes a sum of the rest a wrong number, not an approximate one: it
+    reads as the whole book. The collateral total is unaffected — it is derived, not quoted."""
+    body = _portfolio_page()          # the fixture has one option with no mark
+    assert "Total collateral committed" in body and "$88,000" in body
+    assert "-$880" not in body, "a partial value total must not be presented as the total"
+
+
+def test_no_html_entity_is_double_escaped_on_the_page() -> None:
+    """An entity written inside a {{ }} expression is escaped a second time and reaches the
+    reader as the literal text "&mdash;". The character belongs in the expression; the entity
+    only in the markup around it."""
+    body = _portfolio_page()
+    assert "&amp;mdash;" not in body and "&amp;middot;" not in body

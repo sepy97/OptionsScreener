@@ -169,7 +169,7 @@ class SchwabAccountProvider:
                 out.append(Position(
                     symbol=symbol,
                     underlying=str(instrument.get("underlyingSymbol") or osi.underlying),
-                    kind=kind, quantity=quantity, **common,
+                    kind=kind, quantity=quantity, option_type=osi.option_type, **common,
                     market_value=_num(row, "marketValue"),
                     average_price=_num(row, "averagePrice", "averageShortPrice",
                                        "averageLongPrice"),
