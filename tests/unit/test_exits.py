@@ -185,3 +185,17 @@ def test_rolls_show_one_row_per_expiry_even_with_adjusted_contracts() -> None:
     adjusted = _c(390.0, later, 41.10, 42.00)
     rows = rolls([CUR, standard, adjusted], 390.0, EXP, 1, SPOT, TODAY)
     assert len(rows) == 1 and rows[0].expiration == later
+
+
+def test_the_call_ladder_ignores_strikes_that_are_not_the_position_s() -> None:
+    """A chain carries every strike the market lists. Offering a $390 call against a $190 put is
+    not a rounding error — it is an answer to somebody else's position."""
+    from wheel_screener.core.exits import covered_calls
+
+    put_strike = 190.0
+    chain = [_c(k, EXP, 8.0, 8.2, kind=OptionType.CALL)
+             for k in (180.0, 185.0, 190.0, 195.0, 200.0, 390.0)]
+    rows = covered_calls(chain, put_strike, 2, 185.0, TODAY)
+    assert [r.strike for r in rows] == [190.0]
+    assert rows[0].label == "Assign, sell $190 call 25 Sep"
+    assert all(str(int(put_strike)) in r.label for r in rows)

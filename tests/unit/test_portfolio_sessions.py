@@ -700,23 +700,25 @@ def test_no_html_entity_is_double_escaped_on_the_page() -> None:
 
 # ── exit comparison ────────────────────────────────────────────────────────────────────────
 
-def _exits_client(rows=None, spot=368.75, error=None):
+def _exits_client(rows=None, spot=185.0, error=None):
     from wheel_screener.api.deps import get_service
     from wheel_screener.core.exits import ExitOption
 
+    # Shaped to the fixture's own AAPL $190 put, 2 contracts, spot $185 — a fake that answers
+    # for a different position than the one clicked is a fake that will be believed.
     default = [
-        ExitOption(kind="keep", label="Keep to expiry", credit=1249.0, days=26,
-                   collateral=39000.0, extrinsic=1249.0),
-        ExitOption(kind="assign_cc", label="Assign, sell $390 call 25 Sep", credit=1181.0,
-                   days=26, collateral=36875.0, extrinsic=1181.0, strike=390.0),
-        ExitOption(kind="assign_cc", label="Assign, sell $390 call 02 Oct", credit=1295.0,
-                   days=33, collateral=36875.0, extrinsic=1295.0, strike=390.0),
-        ExitOption(kind="roll", label="Roll to 20 Nov", credit=871.0, days=56,
-                   collateral=39000.0, extrinsic=871.0, strike=390.0),
-        ExitOption(kind="roll", label="Roll to 02 Oct", credit=3476.0, days=7,
-                   collateral=43500.0, extrinsic=-1024.0, strike=435.0,
-                   collateral_delta=4500.0,
-                   warnings=("sells intrinsic, not time", "commits $4,500 more collateral")),
+        ExitOption(kind="keep", label="Keep to expiry", credit=600.0, days=20,
+                   collateral=38000.0, extrinsic=600.0),
+        ExitOption(kind="assign_cc", label="Assign, sell $190 call 18 Sep", credit=580.0,
+                   days=20, collateral=37000.0, extrinsic=580.0, strike=190.0),
+        ExitOption(kind="assign_cc", label="Assign, sell $190 call 16 Oct", credit=1150.0,
+                   days=47, collateral=37000.0, extrinsic=1150.0, strike=190.0),
+        ExitOption(kind="roll", label="Roll to 16 Oct", credit=420.0, days=28,
+                   collateral=38000.0, extrinsic=420.0, strike=190.0),
+        ExitOption(kind="roll", label="Roll to 25 Sep", credit=2300.0, days=7,
+                   collateral=40000.0, extrinsic=-600.0, strike=200.0,
+                   collateral_delta=2000.0,
+                   warnings=("sells intrinsic, not time", "commits $2,000 more collateral")),
     ]
 
     class _Svc:
@@ -773,11 +775,12 @@ def test_ways_out_prices_the_position_that_was_clicked() -> None:
     c, svc = _exits_client()
     try:
         r = c.get("/portfolio/exits", params={
-            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25", "contracts": 1})
+            "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18", "contracts": 2})
         assert r.status_code == 200
-        assert svc.seen["symbol"] == "AVGO" and svc.seen["strike"] == 390.0
-        assert svc.seen["expiration"] == _date(2026, 9, 25)
-        assert "Keep to expiry" in r.text and "Assign, sell $390 call" in r.text
+        assert svc.seen["symbol"] == "AAPL" and svc.seen["strike"] == 190.0
+        assert svc.seen["expiration"] == _date(2026, 9, 18)
+        assert "Keep to expiry" in r.text and "Assign, sell $190 call" in r.text
+        assert "$390" not in r.text, "the panel must answer for the position that was clicked"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -828,10 +831,10 @@ def test_the_intrinsic_trap_is_shown_on_the_row_that_carries_it() -> None:
         body = c.get("/portfolio/exits", params={
             "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
         assert "sells intrinsic, not time" in body
-        assert "commits $4,500 more collateral" in body
+        assert "commits $2,000 more collateral" in body
         # one Value column: the earnable figure leads, the cheque is a sub-line only on the
         # rows where the two differ — which is exactly the rows that need explaining
-        assert "-$1,024" in body and "$3,476.00 cash" in body
+        assert "-$600" in body and "$2,300.00 cash" in body
         assert "Cash now" not in body, "the second column was identical on almost every row"
     finally:
         app.dependency_overrides.clear()
