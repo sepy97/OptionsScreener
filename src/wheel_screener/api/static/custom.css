@@ -347,13 +347,16 @@ tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); 
 .grid-top { align-items: start; }
 
 /* ── exit comparison ─────────────────────────────────────────────────────────────────── */
-.link-btn {
-  background: none; border: 0; padding: 0 0 0 0.4rem; margin: 0; width: auto;
-  color: var(--wheel-accent); font-size: 0.8125rem; font-weight: 600; cursor: pointer;
-  text-decoration: underline;
+/* A short put row opens its own comparison, so it has to look pressable. */
+tbody tr.row-open { cursor: pointer; }
+tbody tr.row-open td:first-child { position: relative; padding-left: 1.1rem; }
+tbody tr.row-open td:first-child::before {
+  content: "\25B8"; position: absolute; left: 0.3rem; color: var(--wheel-accent);
+  transition: transform 0.12s ease; display: inline-block;
 }
-.link-btn:hover { color: var(--wheel-accent-strong); background: none; }
-.exits { margin: 1rem 0; border: 1px solid var(--border); }
+tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90deg); }
+.exits-row > td { padding: 0; background: var(--sunken); }
+.exits { margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
 .exit-controls {
   display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; margin-bottom: 0.5rem;
 }

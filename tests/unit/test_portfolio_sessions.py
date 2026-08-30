@@ -731,6 +731,36 @@ def _exits_client(rows=None, spot=368.75, error=None):
     return c, svc
 
 
+def test_a_short_put_row_is_itself_the_control() -> None:
+    """The row is the affordance — no separate button to find. Only short puts open: the
+    comparison is written for an obligation with collateral behind it, which a long option and a
+    covered call do not have."""
+    c, _ = _exits_client()
+    try:
+        body = c.get("/portfolio").text
+        assert 'class="row-open"' in body and "/portfolio/exits" in body
+        assert 'hx-swap="afterend"' in body, "the panel opens under the row it belongs to"
+        assert "ways out</button>" not in body, "the button it replaced is gone"
+        # three short puts in the fixture, and only those
+        assert body.count('class="row-open"') == 3
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_panel_is_a_table_row_so_the_table_stays_valid() -> None:
+    c, _ = _exits_client()
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
+        assert body.lstrip().startswith("{#") or body.lstrip().startswith("<tr")
+        assert '<tr class="detail exits-row">' in body and "colspan=" in body
+        assert 'hx-target="closest tr"' in body, "repricing replaces the row, not a stray div"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
 def test_ways_out_prices_the_position_that_was_clicked() -> None:
     from datetime import date as _date
 
