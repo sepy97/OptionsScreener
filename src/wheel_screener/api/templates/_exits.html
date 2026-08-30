@@ -11,15 +11,20 @@
       </span>
     </header>
 
-    {# Same strike is the default because it is the only roll that is purely an extension of
-       time. A different strike is offered — traders do it — and annotated rather than hidden. #}
+    {# ONE form around the whole panel, so every control is a real descendant of it. The call
+       strike previously sat outside and claimed membership with form="exits-form" — an id the
+       form never had, because the edit that was supposed to add it failed silently. The input
+       therefore belonged to no form, and its value was never sent. Containment cannot go wrong
+       that way; an attribute pointing at an id can. #}
     {# Repricing replaces this whole detail row with the next one, keeping the table valid. #}
-    <form hx-get="/portfolio/exits" hx-target="closest tr" hx-swap="outerHTML"
-          class="exit-controls">
+    <form hx-get="/portfolio/exits" hx-target="closest tr" hx-swap="outerHTML">
       <input type="hidden" name="symbol" value="{{ symbol }}">
       <input type="hidden" name="strike" value="{{ strike }}">
       <input type="hidden" name="expiry" value="{{ expiry }}">
       <input type="hidden" name="contracts" value="{{ contracts }}">
+      <div class="exit-controls">
+      {# Same strike is the default because it is the only roll that is purely an extension of
+         time. A different strike is offered — traders do it — and annotated rather than hidden. #}
       <label>Roll strike
         <input type="text" name="roll_strike" value="{{ roll_strike }}" inputmode="decimal"
                placeholder="same (${{ '%g'|format(strike) }})">
@@ -31,7 +36,7 @@
         <input type="number" name="max_dte" value="{{ max_dte }}" min="1" max="400">
       </label>
       <button type="submit" class="secondary outline">Reprice</button>
-    </form>
+      </div>
 
     {% if error %}
       <article role="alert"><strong>{{ error }}</strong></article>
@@ -112,9 +117,9 @@
         <div class="exit-controls exit-controls--after">
           <label>Call strike
             <input type="text" name="call_strike" value="{{ call_strike }}" inputmode="decimal"
-                   form="exits-form" placeholder="same (${{ '%g'|format(strike) }})">
+                   placeholder="same (${{ '%g'|format(strike) }})">
           </label>
-          <button type="submit" form="exits-form" class="secondary outline">Reprice</button>
+          <button type="submit" class="secondary outline">Reprice</button>
         </div>
         <figure>
         <table>
@@ -143,6 +148,7 @@
           77%/yr where 51% was real.</p>
       {% endif %}
     {% endif %}
+    </form>
   </article>
  </td>
 </tr>

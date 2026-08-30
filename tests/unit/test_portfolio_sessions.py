@@ -1005,8 +1005,13 @@ def test_the_call_strike_control_sits_on_the_table_it_governs() -> None:
             "call_strike": "195"}).text
         assert body.index('name="call_strike"') > body.index("If assigned on"), \
             "the control belongs below the heading of the table it drives"
-        assert 'form="exits-form"' in body, "and still submits with the rest of the panel"
         assert 'value="195"' in body, "the chosen strike is echoed back, not reset"
+        # CONTAINMENT, not a reference. It previously claimed membership with form="exits-form",
+        # an id the form never had — so the browser associated it with no form and never sent it.
+        # Asserting the attribute was present passed happily while the control did nothing.
+        opened, closed = body.index("<form"), body.index("</form>")
+        assert opened < body.index('name="call_strike"') < closed
+        assert "form=" not in body, "no control may depend on an id resolving"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -1022,6 +1027,24 @@ def test_no_call_strike_control_when_there_is_nothing_for_it_to_do() -> None:
         assert "If assigned on" not in body
         assert 'name="call_strike"' not in body
         assert 'name="roll_strike"' in body, "the roll controls still apply"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_every_control_in_the_panel_is_inside_its_form() -> None:
+    """The whole class of bug in one assertion: a control outside the form, or pointing at one by
+    id, is a control whose value never reaches the server. Containment cannot silently fail."""
+    import re
+
+    c, _ = _exits_client()
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18"}).text
+        assert body.count("<form") == 1 and body.count("</form>") == 1
+        opened, closed = body.index("<form"), body.index("</form>")
+        for m in re.finditer(r'<(?:input|button|select|textarea)\b', body):
+            assert opened < m.start() < closed, f"control at {m.start()} is outside the form"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
