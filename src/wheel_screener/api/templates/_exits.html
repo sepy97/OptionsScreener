@@ -89,6 +89,36 @@
         wins. Where a row also shows a cash figure, the gap is intrinsic being sold: money that
         arrives now and is handed back at expiry. A roll is scored over the days it
         <em>adds</em>, since the days before your current expiry are yours either way.</p>
+
+      {# NOT an alternative to the rows above. Assignment happens when the put expires, so this
+         is what the capital earns AFTER keeping it, not instead of. Ranked together, a call
+         expiring in three days annualised to 293% and sat at the top of the table as the best
+         available action — against shares that would not be owned for three more weeks. #}
+      {% if after %}
+        <h5 class="exit-after">If assigned on {{ expiry_label }}, writing calls would pay</h5>
+        <figure>
+        <table>
+          <thead><tr>
+            <th>Then</th><th>Premium</th><th>Days held</th><th>Shares worth</th><th>Rate/yr</th>
+          </tr></thead>
+          <tbody>
+            {% for r in after %}
+              <tr>
+                <td><b>{{ r.label }}</b></td>
+                <td>{{ r.credit | money }}</td>
+                <td>{{ r.days }}</td>
+                <td>{{ r.collateral | money }}</td>
+                <td class="{{ 'y-hi' if r.rate and r.rate >= 0.25 else ('y-mid' if r.rate and r.rate >= 0.15 else 'y-lo') }}">
+                  {{ '%.1f%%'|format(r.rate * 100) if r.rate is not none else '—' }}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </figure>
+        <p class="detail-note">Measured from assignment, not from today &mdash; the shares only
+          start earning once they arrive.</p>
+      {% endif %}
     {% endif %}
   </article>
  </td>

@@ -800,7 +800,7 @@ def portfolio_exits(
     if max_dte < min_dte:
         min_dte, max_dte = max_dte, min_dte
     try:
-        rows, spot = service.exit_options(
+        rows, after, spot = service.exit_options(
             symbol, strike, expiration, contracts, date.today(),
             min_dte=max(1, min_dte), max_dte=min(400, max_dte),
             roll_strike=_opt_float(roll_strike), call_strike=_opt_float(call_strike),
@@ -810,14 +810,17 @@ def portfolio_exits(
         return templates.TemplateResponse(
             request, "_exits.html",
             {"symbol": symbol, "strike": strike, "expiry": expiry, "contracts": contracts,
-             "rows": [], "spot": None, "error": str(e), "min_dte": min_dte,
-             "max_dte": max_dte, "roll_strike": roll_strike, "call_strike": call_strike},
+             "rows": [], "after": [], "spot": None, "error": str(e), "min_dte": min_dte,
+             "max_dte": max_dte, "roll_strike": roll_strike, "call_strike": call_strike,
+             "expiry_label": expiry},
         )
     return templates.TemplateResponse(
         request, "_exits.html",
         {"symbol": symbol, "strike": strike, "expiry": expiry, "contracts": contracts,
-         "rows": rows, "spot": spot, "error": None, "min_dte": min_dte, "max_dte": max_dte,
-         "roll_strike": roll_strike, "call_strike": call_strike},
+         "rows": rows, "after": after, "spot": spot, "error": None,
+         "min_dte": min_dte, "max_dte": max_dte,
+         "roll_strike": roll_strike, "call_strike": call_strike,
+         "expiry_label": expiration.strftime('%d %b')},
     )
 
 

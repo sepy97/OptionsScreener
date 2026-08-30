@@ -7,6 +7,7 @@ from wheel_screener.core.models import OptionContract, OptionType
 
 TODAY = date(2026, 8, 30)
 EXP = date(2026, 9, 25)          # the position's own expiry, 26 days out
+LATER = date(2026, 10, 16)       # after assignment, so a call can be written
 
 
 def _c(strike, exp, bid, ask, kind=OptionType.PUT):
@@ -73,9 +74,9 @@ def test_rolling_up_is_scored_on_time_value_so_it_cannot_top_the_table() -> None
 def test_the_cash_credit_never_outranks_the_time_value() -> None:
     """End to end: the biggest cheque on the table must sort last when it is the worst trade."""
     up = _c(435.0, date(2026, 10, 2), 68.50, 68.90)
-    rows = compare([CUR, up], [_c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL)],
-                   strike=390.0, expiration=EXP, contracts=1, spot=SPOT, today=TODAY,
-                   roll_strike=435.0)
+    rows, _after = compare([CUR, up], [_c(390.0, LATER, 11.81, 12.05, kind=OptionType.CALL)],
+                           strike=390.0, expiration=EXP, contracts=1, spot=SPOT, today=TODAY,
+                           roll_strike=435.0)
     biggest_cheque = max(rows, key=lambda r: r.credit)
     assert biggest_cheque.credit > 3000 and rows[-1] is biggest_cheque
 
@@ -85,46 +86,59 @@ def test_a_same_strike_roll_carries_no_warnings() -> None:
     assert rolls([CUR, later], 390.0, EXP, 1, SPOT, TODAY)[0].warnings == ()
 
 
-def test_keeping_and_assign_plus_covered_call_score_the_same() -> None:
-    """Put-call parity, not a coincidence: the put's extrinsic over the strike equals the call's
-    premium over the share value. For an ITM short put those two paths ARE the same trade, and
-    if this ever drifts apart the pricing maths is wrong somewhere."""
-    call = _c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL)
-    held = keep([CUR], 390.0, EXP, 1, SPOT, TODAY)
-    assigned = covered_calls([call], 390.0, 1, SPOT, TODAY)[0]
-    assert abs(held.rate - assigned.rate) < 0.005
-    assert assigned.collateral == 36_875  # the shares are worth spot, not what they cost
+def test_nothing_can_be_written_before_the_shares_arrive() -> None:
+    """Assignment happens when the put expires. A call expiring first has no stock behind it,
+    and because such a call is nearly worthless in time terms its few dollars over a few days
+    annualised enormously — one sat at the top of the table at 293%/yr, against shares that
+    would not be owned for another three weeks."""
+    early = _c(390.0, date(2026, 9, 2), 8.90, 9.10, kind=OptionType.CALL)
+    same_day = _c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL)
+    after = _c(390.0, LATER, 18.00, 18.30, kind=OptionType.CALL)
+
+    rows = covered_calls([early, same_day, after], 390.0, 1, SPOT, TODAY, assigned_on=EXP)
+    assert [r.expiration for r in rows] == [LATER], "only expiries strictly after assignment"
+
+
+def test_the_holding_period_starts_at_assignment_not_today() -> None:
+    """Counting from today inflates every rate by the weeks still spent holding the put."""
+    after = _c(390.0, LATER, 18.00, 18.30, kind=OptionType.CALL)
+    row = covered_calls([after], 390.0, 1, SPOT, TODAY, assigned_on=EXP)[0]
+    assert row.days == 21, "16 Oct is 21 days after the 25 Sep assignment, not 47 after today"
+    assert row.collateral == 36_875  # the shares are worth spot, not what they cost
+    assert abs(row.rate - (1800.0 / 36_875) * (365 / 21)) < 1e-9
 
 
 def test_covered_calls_are_offered_only_when_assignment_is_the_live_outcome() -> None:
-    call = _c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL)
-    assert covered_calls([call], 390.0, 1, 420.0, TODAY) == [], "OTM: no assignment to compare"
-    assert covered_calls([call], 390.0, 1, None, TODAY) == [], "no quote: no claim"
-    assert covered_calls([call], 390.0, 1, SPOT, TODAY)
+    call = _c(390.0, LATER, 11.81, 12.05, kind=OptionType.CALL)
+    assert covered_calls([call], 390.0, 1, 420.0, TODAY, assigned_on=EXP) == [], "OTM: nothing"
+    assert covered_calls([call], 390.0, 1, None, TODAY, assigned_on=EXP) == [], "no quote"
+    assert covered_calls([call], 390.0, 1, SPOT, TODAY, assigned_on=TODAY)
 
 
 def test_only_an_in_the_money_call_is_flagged() -> None:
     """Same single idea as the roll ladder — flag the sale whose premium is partly intrinsic,
     and stay quiet on the ordinary one."""
-    itm = covered_calls([_c(360.0, EXP, 22.0, 22.4, kind=OptionType.CALL)], 390.0, 1, SPOT,
-                        TODAY, call_strike=360.0)[0]
+    itm = covered_calls([_c(360.0, LATER, 22.0, 22.4, kind=OptionType.CALL)], 390.0, 1, SPOT,
+                        TODAY, assigned_on=EXP, call_strike=360.0)[0]
     assert len(itm.warnings) == 1 and "in the money" in itm.warnings[0]
-    otm = covered_calls([_c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL)], 390.0, 1, SPOT,
-                        TODAY)[0]
+    otm = covered_calls([_c(390.0, LATER, 11.81, 12.05, kind=OptionType.CALL)], 390.0, 1, SPOT,
+                        TODAY, assigned_on=EXP)[0]
     assert otm.warnings == ()
 
 
 def test_compare_ranks_by_rate_and_always_includes_keeping() -> None:
-    rows = compare(
+    rows, after = compare(
         [CUR, _c(390.0, date(2026, 11, 20), 42.45, 42.80),
          _c(390.0, date(2026, 10, 2), 32.99, 33.30)],
-        [_c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL)],
+        [_c(390.0, LATER, 18.00, 18.30, kind=OptionType.CALL)],
         strike=390.0, expiration=EXP, contracts=1, spot=SPOT, today=TODAY,
     )
     assert any(r.kind == "keep" for r in rows), "the baseline is always on the table"
     rates = [r.rate for r in rows]
     assert rates == sorted(rates, reverse=True)
-    assert rows[0].kind in ("keep", "assign_cc"), "on this position, doing nothing wins"
+    assert rows[0].kind == "keep", "on this position, doing nothing wins"
+    assert all(r.kind != "assign_cc" for r in rows), "not an alternative, so not in the ranking"
+    assert [r.kind for r in after] == ["assign_cc"]
 
 
 def test_multiple_contracts_scale_every_leg_together() -> None:
@@ -160,7 +174,7 @@ def test_covered_calls_are_one_strike_across_expiries() -> None:
         _c(390.0, date(2026, 10, 2), 12.95, 13.20, kind=OptionType.CALL),
         _c(395.0, date(2026, 10, 2), 11.20, 11.50, kind=OptionType.CALL),
     ]
-    rows = covered_calls(chain, 390.0, 1, SPOT, TODAY)
+    rows = covered_calls(chain, 390.0, 1, SPOT, TODAY, assigned_on=TODAY)
     assert [r.strike for r in rows] == [390.0, 390.0], "the put's own strike, both expiries"
     assert [r.expiration for r in rows] == [EXP, date(2026, 10, 2)]
 
@@ -169,9 +183,10 @@ def test_the_default_call_strike_is_the_cost_basis_assignment_hands_you() -> Non
     from wheel_screener.core.exits import covered_calls
 
     chain = [_c(k, EXP, 10.0, 10.2, kind=OptionType.CALL) for k in (380.0, 390.0, 400.0)]
-    assert covered_calls(chain, 390.0, 1, SPOT, TODAY)[0].strike == 390.0
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, assigned_on=TODAY)[0].strike == 390.0
     # and an explicit choice overrides it
-    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, call_strike=400.0)[0].strike == 400.0
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, assigned_on=TODAY,
+                         call_strike=400.0)[0].strike == 400.0
 
 
 def test_a_call_strike_the_chain_does_not_list_falls_back_to_the_nearest() -> None:
@@ -180,7 +195,7 @@ def test_a_call_strike_the_chain_does_not_list_falls_back_to_the_nearest() -> No
     from wheel_screener.core.exits import covered_calls
 
     chain = [_c(k, EXP, 10.0, 10.2, kind=OptionType.CALL) for k in (385.0, 395.0)]
-    assert covered_calls(chain, 390.0, 1, SPOT, TODAY)[0].strike == 385.0
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, assigned_on=TODAY)[0].strike == 385.0
 
 
 def test_rolls_show_one_row_per_expiry_even_with_adjusted_contracts() -> None:
@@ -201,9 +216,9 @@ def test_the_call_ladder_ignores_strikes_that_are_not_the_position_s() -> None:
     put_strike = 190.0
     chain = [_c(k, EXP, 8.0, 8.2, kind=OptionType.CALL)
              for k in (180.0, 185.0, 190.0, 195.0, 200.0, 390.0)]
-    rows = covered_calls(chain, put_strike, 2, 185.0, TODAY)
+    rows = covered_calls(chain, put_strike, 2, 185.0, TODAY, assigned_on=TODAY)
     assert [r.strike for r in rows] == [190.0]
-    assert rows[0].label == "Assign, sell $190 call 25 Sep"
+    assert rows[0].label == "Sell $190 call 25 Sep"
     assert all(str(int(put_strike)) in r.label for r in rows)
 
 

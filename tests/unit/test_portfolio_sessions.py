@@ -700,7 +700,7 @@ def test_no_html_entity_is_double_escaped_on_the_page() -> None:
 
 # ── exit comparison ────────────────────────────────────────────────────────────────────────
 
-def _exits_client(rows=None, spot=185.0, error=None):
+def _exits_client(rows=None, spot=185.0, error=None, after=None):
     from wheel_screener.api.deps import get_service
     from wheel_screener.core.exits import ExitOption
 
@@ -731,7 +731,9 @@ def _exits_client(rows=None, spot=185.0, error=None):
                              contracts=contracts, **kw)
             if error:
                 raise error
-            return (default if rows is None else rows), spot
+            # (alternatives, after-assignment, spot) — the middle list is not an alternative to
+            # anything above it, which is why the service hands it back separately
+            return (default if rows is None else rows), (after or []), spot
 
     svc = _Svc()
     c = _client()
@@ -927,3 +929,30 @@ def test_the_exit_table_declares_its_column_widths() -> None:
     css = pathlib.Path("src/wheel_screener/api/static/custom.css").read_text()
     assert ".exits table { table-layout: fixed; max-width: 58rem; }" in css
     assert css.count(".exits table th:nth-child(") == 5, "one declared width per column"
+
+
+def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:
+    """Assignment happens when the put expires, so writing calls follows keeping rather than
+    competing with it. Ranked together, a near-dated call annualised to a huge rate and sat on
+    top of the table as the best available action."""
+    from datetime import date as _d
+
+    from wheel_screener.core.exits import ExitOption
+
+    after = [ExitOption(kind="assign_cc", label="Sell $190 call 16 Oct", credit=900.0,
+                        days=28, collateral=37000.0, extrinsic=900.0, strike=190.0,
+                        expiration=_d(2026, 10, 16))]
+    c, _ = _exits_client(after=after)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18", "contracts": 2}).text
+        assert "If assigned on 18 Sep, writing calls would pay" in body
+        assert "Sell $190 call 16 Oct" in body
+        assert "Days held" in body and "Shares worth" in body
+        # the ranked table above it must not have absorbed the row
+        ranked = body[:body.index("If assigned on")]
+        assert "Sell $190 call 16 Oct" not in ranked
+        assert "Keep to expiry" in ranked
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)

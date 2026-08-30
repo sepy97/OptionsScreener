@@ -160,9 +160,24 @@ def rolls(
 
 def covered_calls(
     calls: list[OptionContract], strike: float, contracts: float,
-    spot: float | None, today: date, *, call_strike: float | None = None,
+    spot: float | None, today: date, *, assigned_on: date, call_strike: float | None = None,
 ) -> list[ExitOption]:
-    """Take assignment, then sell a call against the shares.
+    """What writing calls would pay AFTER assignment — not an alternative to keeping the put.
+
+    Assignment happens when the put expires, so nothing can be written against those shares
+    before ``assigned_on``. Offering a call that expires first was nonsense: it sold something
+    against stock that would not be owned yet, and because such a call is nearly worthless in
+    time terms its handful of dollars over three days annualised to 293%, which put it at the
+    top of the table as the best available action.
+
+    Two consequences follow, and both are the point:
+
+    * only expiries strictly AFTER the put's are listed — a call expiring the same day is
+      already done by the time the shares arrive;
+    * the period is measured from assignment, not from today, because that is when the shares
+      start earning. Counting from today inflates every rate by the weeks spent still holding
+      the put.
+    
 
     ONE strike across many expiries, mirroring the roll ladder — the question being asked is
     "how long should I write for", and answering it with every strike at every expiry turns a
@@ -176,7 +191,7 @@ def covered_calls(
     """
     if spot is None or spot <= 0 or spot >= strike:
         return []
-    listed = {c.strike for c in calls}
+    listed = {c.strike for c in calls if c.expiration > assigned_on}
     target = call_strike if call_strike is not None else (
         strike if strike in listed
         else min(listed, key=lambda k: abs(k - strike)) if listed else None
@@ -187,8 +202,11 @@ def covered_calls(
     here = strike * CONTRACT_MULTIPLIER * contracts
     out: list[ExitOption] = []
     for c in sorted(calls, key=lambda c: c.expiration):
-        if c.strike != target or c.bid is None or c.bid <= 0 or c.dte <= 0:
+        if c.strike != target or c.bid is None or c.bid <= 0:
             continue
+        held_days = (c.expiration - assigned_on).days
+        if held_days <= 0:
+            continue  # expires on or before the day the shares would arrive
         premium = c.bid * CONTRACT_MULTIPLIER * contracts
         # Same single idea as the roll ladder: flag only an in-the-money sale, where the premium
         # is partly intrinsic and the shares are already spoken for.
@@ -199,8 +217,8 @@ def covered_calls(
                 "intrinsic, and the shares would be called away"
             )
         out.append(ExitOption(
-            kind="assign_cc", label=f"Assign, sell ${c.strike:g} call {c.expiration:%d %b}",
-            credit=round(premium, 2), days=c.dte, collateral=shares_value,
+            kind="assign_cc", label=f"Sell ${c.strike:g} call {c.expiration:%d %b}",
+            credit=round(premium, 2), days=held_days, collateral=shares_value,
             extrinsic=round(premium, 2), strike=c.strike, expiration=c.expiration,
             collateral_delta=round(shares_value - here, 2), warnings=tuple(warns),
         ))
@@ -211,16 +229,29 @@ def compare(
     puts: list[OptionContract], calls: list[OptionContract], *,
     strike: float, expiration: date, contracts: float, spot: float | None, today: date,
     roll_strike: float | None = None, call_strike: float | None = None,
-) -> list[ExitOption]:
-    """Every action, best rate first. ``keep`` is always included as the baseline to beat."""
+) -> tuple[list[ExitOption], list[ExitOption]]:
+    """``(alternatives, after_assignment)`` — two lists, because they are two questions.
+
+    The alternatives are mutually exclusive things that can be done TODAY: keep, or roll. They
+    are ranked against each other, best rate first, with keep as the baseline to beat.
+
+    The after-assignment ladder is not an alternative to any of them. It is what the capital
+    would earn once the put expires and the shares arrive, so it follows keeping rather than
+    competing with it. Ranking the two together put "sell a call three days out" above "keep
+    the position" as though a choice existed between them.
+    """
     rows: list[ExitOption] = []
     base = keep(puts, strike, expiration, contracts, spot, today)
     if base is not None:
         rows.append(base)
     rows.extend(rolls(puts, strike, expiration, contracts, spot, today,
                       roll_strike=roll_strike))
-    rows.extend(covered_calls(calls, strike, contracts, spot, today, call_strike=call_strike))
-    return sorted(rows, key=lambda r: (r.rate is None, -(r.rate or 0.0)))
+    later = covered_calls(calls, strike, contracts, spot, today,
+                          assigned_on=expiration, call_strike=call_strike)
+    return (
+        sorted(rows, key=lambda r: (r.rate is None, -(r.rate or 0.0))),
+        sorted(later, key=lambda r: r.expiration or date.max),
+    )
 
 
 def is_in_the_money(strike: float, spot: float | None) -> bool:
