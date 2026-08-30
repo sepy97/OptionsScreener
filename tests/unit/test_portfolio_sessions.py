@@ -644,9 +644,10 @@ def test_the_assignment_watch_distinguishes_itm_safe_and_unknown() -> None:
     """Three states, and the third must not read like the second: a put with no quote is not a
     put that is safe."""
     body = _portfolio_page()
-    assert "in the money" in body      # AAPL: spot 185 < strike 190
-    assert "$455" in body              # MSFT: spot above strike, shown plainly
-    assert "no quote" in body          # NVDA: unknown, and said so
+    assert "ITM &middot; $185.00" in body   # AAPL: spot 185 < strike 190
+    assert "OTM &middot; $455.00" in body   # MSFT: above the strike, and labelled as such
+    assert "no quote" in body               # NVDA: unknown, and said so
+    assert "in the money" not in body, "the long form was noise in a narrow column"
 
 
 def test_holdings_list_every_asset_class_not_just_stocks() -> None:
@@ -707,6 +708,10 @@ def _exits_client(rows=None, spot=368.75, error=None):
                    collateral=39000.0, extrinsic=1249.0),
         ExitOption(kind="assign_cc", label="Assign, sell $390 call 25 Sep", credit=1181.0,
                    days=26, collateral=36875.0, extrinsic=1181.0, strike=390.0),
+        ExitOption(kind="assign_cc", label="Assign, sell $390 call 02 Oct", credit=1295.0,
+                   days=33, collateral=36875.0, extrinsic=1295.0, strike=390.0),
+        ExitOption(kind="roll", label="Roll to 20 Nov", credit=871.0, days=56,
+                   collateral=39000.0, extrinsic=871.0, strike=390.0),
         ExitOption(kind="roll", label="Roll to 02 Oct", credit=3476.0, days=7,
                    collateral=43500.0, extrinsic=-1024.0, strike=435.0,
                    collateral_delta=4500.0,

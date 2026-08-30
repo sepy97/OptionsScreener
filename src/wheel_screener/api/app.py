@@ -780,6 +780,7 @@ def portfolio_exits(
     expiry: str,
     contracts: float = 1.0,
     roll_strike: str = "",
+    call_strike: str = "",
     min_dte: int = 1,
     max_dte: int = 120,
     service: ScreenerService = Depends(get_service),
@@ -802,22 +803,21 @@ def portfolio_exits(
         rows, spot = service.exit_options(
             symbol, strike, expiration, contracts, date.today(),
             min_dte=max(1, min_dte), max_dte=min(400, max_dte),
-            roll_strike=_opt_float(roll_strike),
+            roll_strike=_opt_float(roll_strike), call_strike=_opt_float(call_strike),
         )
     except ProviderError as e:
         # a quote failure is a message inside the panel, never a dead tab
         return templates.TemplateResponse(
             request, "_exits.html",
             {"symbol": symbol, "strike": strike, "expiry": expiry, "contracts": contracts,
-             "rows": [], "spot": None, "error": str(e),
-             "min_dte": min_dte, "max_dte": max_dte, "roll_strike": roll_strike},
+             "rows": [], "spot": None, "error": str(e), "min_dte": min_dte,
+             "max_dte": max_dte, "roll_strike": roll_strike, "call_strike": call_strike},
         )
     return templates.TemplateResponse(
         request, "_exits.html",
         {"symbol": symbol, "strike": strike, "expiry": expiry, "contracts": contracts,
-         "rows": rows, "spot": spot, "error": None,
-         "min_dte": min_dte, "max_dte": max_dte, "roll_strike": roll_strike,
-         "strikes": sorted({r.strike for r in rows if r.kind == "roll" and r.strike})},
+         "rows": rows, "spot": spot, "error": None, "min_dte": min_dte, "max_dte": max_dte,
+         "roll_strike": roll_strike, "call_strike": call_strike},
     )
 
 

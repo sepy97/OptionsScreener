@@ -24,7 +24,11 @@
         <input type="text" name="roll_strike" value="{{ roll_strike }}" inputmode="decimal"
                placeholder="same (${{ '%g'|format(strike) }})">
       </label>
-      <label>Min DTE
+      <label>Call strike
+      <input type="text" name="call_strike" value="{{ call_strike }}" inputmode="decimal"
+             placeholder="same (${{ '%g'|format(strike) }})">
+    </label>
+    <label>Min DTE
         <input type="number" name="min_dte" value="{{ min_dte }}" min="1" max="400">
       </label>
       <label>Max DTE

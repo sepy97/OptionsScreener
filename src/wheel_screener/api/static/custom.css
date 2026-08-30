@@ -355,7 +355,14 @@ tbody tr.row-open td:first-child::before {
   transition: transform 0.12s ease; display: inline-block;
 }
 tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90deg); }
+/* A colspan cell contributes its content's min-content width to EVERY column it spans, so a
+   nested table inside one silently widens the table above it — clicking a row made the whole
+   Open options table jump wider. Pinning the wrapper to width:0 drops that contribution to
+   nothing; min-width:100% then fills the cell once the columns are settled, and the <figure>
+   around the inner table scrolls if it genuinely does not fit. */
 .exits-row > td { padding: 0; background: var(--sunken); }
+.exits-row .exits { width: 0; min-width: 100%; }
+.exits-row figure { margin: 0; }
 .exits { margin: 0; border: 0; border-radius: 0; background: none; box-shadow: none; }
 .exit-controls {
   display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; margin-bottom: 0.5rem;

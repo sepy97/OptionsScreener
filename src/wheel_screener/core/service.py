@@ -300,6 +300,7 @@ class ScreenerService:
         min_dte: int = 1,
         max_dte: int = 120,
         roll_strike: float | None = None,
+        call_strike: float | None = None,
     ):
         """Every way out of one open short put, priced and ranked.
 
@@ -337,6 +338,7 @@ class ScreenerService:
         rows = exits.compare(
             put_chain.contracts, calls, strike=strike, expiration=expiration,
             contracts=contracts, spot=spot, today=today, roll_strike=roll_strike,
+            call_strike=call_strike,
         )
         logger.info(
             "exits: %s $%g %s -> %d option(s) priced (spot %s)",

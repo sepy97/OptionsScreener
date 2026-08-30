@@ -103,9 +103,9 @@
                       {% elif p.in_the_money is none %}
                         <span class="detail-note">no quote</span>
                       {% elif p.in_the_money %}
-                        <span class="badge badge--neg">in the money &middot; {{ p.underlying_price | money }}</span>
+                        <span class="badge badge--neg">ITM &middot; {{ p.underlying_price | money }}</span>
                       {% else %}
-                        <span class="badge badge--ok">{{ p.underlying_price | money }}</span>
+                        <span class="badge badge--ok">OTM &middot; {{ p.underlying_price | money }}</span>
                       {% endif %}
                     </td>
                   </tr>
