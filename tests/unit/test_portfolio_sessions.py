@@ -718,7 +718,8 @@ def _exits_client(rows=None, spot=185.0, error=None):
         ExitOption(kind="roll", label="Roll to 25 Sep", credit=2300.0, days=7,
                    collateral=40000.0, extrinsic=-600.0, strike=200.0,
                    collateral_delta=2000.0,
-                   warnings=("sells intrinsic, not time", "commits $2,000 more collateral")),
+                   warnings=("$200 is in the money at $185.00 — part of this credit"
+                             " is intrinsic",)),
     ]
 
     class _Svc:
@@ -830,8 +831,8 @@ def test_the_intrinsic_trap_is_shown_on_the_row_that_carries_it() -> None:
     try:
         body = c.get("/portfolio/exits", params={
             "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
-        assert "sells intrinsic, not time" in body
-        assert "commits $2,000 more collateral" in body
+        assert "part of this credit is intrinsic" in body
+        assert "$200 is in the money at $185.00" in body
         # one Value column: the earnable figure leads, the cheque is a sub-line only on the
         # rows where the two differ — which is exactly the rows that need explaining
         assert "-$600" in body and "$2,300.00 cash" in body
@@ -904,7 +905,7 @@ def test_a_strike_warning_is_said_once_not_on_every_row() -> None:
     ladder = [
         ExitOption(kind="roll", label=f"Roll to {d} Sep", credit=100.0 * i, days=7 * i,
                    collateral=15500.0, extrinsic=100.0 * i, strike=155.0,
-                   collateral_delta=500.0, warnings=("commits $500 more collateral",))
+                   collateral_delta=500.0, warnings=("$155 is in the money at $150.00",))
         for i, d in enumerate(("11", "18", "25"), start=1)
     ]
     c, _ = _exits_client(rows=ladder)
@@ -912,7 +913,7 @@ def test_a_strike_warning_is_said_once_not_on_every_row() -> None:
         body = c.get("/portfolio/exits", params={
             "symbol": "QCOM", "strike": 150.0, "expiry": "2026-09-04",
             "roll_strike": "155"}).text
-        assert body.count("commits $500 more collateral") == 1
+        assert body.count("$155 is in the money") == 1
         assert 'class="exit-warnings"' in body, "said once, above the table it applies to"
         assert body.count("Roll to") == 3, "and every row is still listed"
     finally:

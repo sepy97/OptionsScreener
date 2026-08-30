@@ -135,16 +135,20 @@ def rolls(
         time_value = (
             c.bid * CONTRACT_MULTIPLIER * contracts - intrinsic(target, spot, contracts)
         ) - (cost_to_close - intrinsic(strike, spot, contracts))
-        warns: list[str] = []
+        # ONE warning, and only the one the numbers cannot show. That the collateral grew is
+        # already in the collateral column; saying it again in prose on every row of a ladder
+        # buried the figures. That part of the credit is intrinsic is the thing a reader cannot
+        # see, because it looks exactly like income until expiry.
+        #
         # A HIGHER strike is not the same as an in-the-money one. Rolling $150 -> $155 while the
-        # stock trades at $164 sells no intrinsic whatever — both strikes are out of the money —
-        # and warning about it there teaches the reader to ignore the warning that matters.
-        # Compare the obligations themselves rather than the strikes.
+        # stock trades at $164 sells no intrinsic whatever, and warning there teaches the reader
+        # to ignore the warning that matters. Compare the obligations, not the strikes.
+        warns: list[str] = []
         if intrinsic(target, spot, contracts) > intrinsic(strike, spot, contracts):
-            warns.append("sells intrinsic, not time — the credit is an obligation you expect to "
-                         "hand back")
-        if collateral > here:
-            warns.append(f"commits ${collateral - here:,.0f} more collateral")
+            warns.append(
+                f"${target:g} is in the money at ${spot:,.2f} — part of this credit is intrinsic, "
+                "money that arrives now and is handed back at expiry"
+            )
         out.append(ExitOption(
             kind="roll", label=f"Roll to {c.expiration:%d %b}",
             credit=round(credit, 2), days=added, collateral=collateral,
@@ -186,10 +190,14 @@ def covered_calls(
         if c.strike != target or c.bid is None or c.bid <= 0 or c.dte <= 0:
             continue
         premium = c.bid * CONTRACT_MULTIPLIER * contracts
+        # Same single idea as the roll ladder: flag only an in-the-money sale, where the premium
+        # is partly intrinsic and the shares are already spoken for.
         warns: list[str] = []
-        if c.strike < strike:
-            warns.append("strike below your cost — being called away locks in a loss on the "
-                         "shares")
+        if c.strike < spot:
+            warns.append(
+                f"${c.strike:g} is in the money at ${spot:,.2f} — part of this premium is "
+                "intrinsic, and the shares would be called away"
+            )
         out.append(ExitOption(
             kind="assign_cc", label=f"Assign, sell ${c.strike:g} call {c.expiration:%d %b}",
             credit=round(premium, 2), days=c.dte, collateral=shares_value,
