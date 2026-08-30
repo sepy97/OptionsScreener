@@ -270,6 +270,7 @@ class Position(BaseModel):
     average_price: float | None = None
     unrealized_pl: float | None = None
     # option rows only
+    option_type: OptionType | None = None
     strike: float | None = None
     expiration: date | None = None
     dte: int | None = None
@@ -294,6 +295,22 @@ class Position(BaseModel):
         rather than a bucket named "other", so a new one is legible the day it appears."""
         raw = (self.asset_type or "").upper()
         return _ASSET_LABELS.get(raw, raw.replace("_", " ").title() or "—")
+
+    @property
+    def position_label(self) -> str:
+        """"short put", "long call", ... — direction and side in the words a trader uses.
+
+        Direction lives in ``kind`` and side in ``option_type`` because they answer different
+        questions: only a SHORT position is an obligation, and only a PUT commits cash. Joining
+        them for display keeps that distinction intact in the model.
+        """
+        if not self.is_option:
+            return ""
+        side = self.option_type.value if self.option_type else "option"
+        direction = "short" if self.kind in (
+            PositionKind.SHORT_PUT, PositionKind.SHORT_CALL
+        ) else "long"
+        return f"{direction} {side}"
 
     @property
     def is_option(self) -> bool:
