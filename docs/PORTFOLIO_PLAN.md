@@ -540,6 +540,13 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
         credit — 417%/yr on gross cash, straight to the top of the table. Net of the intrinsic it
         sells it is *minus* $1,024 and commits $4,500 more collateral. Ranking on cash recommends
         the worst action hardest exactly when it is worst.
+      - **Every option gets the panel, and only the SIGN of the answer differs.** Short or long,
+        put or call, all four face the same question — what does this capital earn from here? A
+        short is paid to wait and a long pays to wait, so the identical extrinsic is income in
+        one case and cost in the other. Two things must be right or no two rows compare: that
+        sign, and the capital committed — a short put reserves the strike in cash, a short call
+        encumbers shares at their CURRENT value (a covered call on stock bought at $200 and now
+        worth $400 ties up $400), and a long ties up only what selling it would return.
       - **A trade you will make in a month cannot be quoted at today's price.** The obvious
         implementation prices the contract you would actually sell; AVGO's 16 Oct call holds 47
         days of life today and would be written with 21 left, so pairing its price with the

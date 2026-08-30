@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
-from wheel_screener.core.exits import compare, covered_calls, keep, rolls
+from wheel_screener.core.exits import (
+    compare,
+    keep,
+    rolls,
+)
+from wheel_screener.core.exits import (
+    write_after_assignment as covered_calls,
+)
 from wheel_screener.core.models import OptionContract, OptionType
 
 TODAY = date(2026, 8, 30)
@@ -114,16 +121,24 @@ def test_the_tenor_proxy_agrees_with_decaying_the_real_contract() -> None:
 
 def test_covered_calls_are_offered_only_when_assignment_is_the_live_outcome() -> None:
     call = _c(390.0, LATER, 11.81, 12.05, kind=OptionType.CALL)
-    assert covered_calls([call], 390.0, 1, 420.0, TODAY) == [], "OTM: nothing to compare"
-    assert covered_calls([call], 390.0, 1, None, TODAY) == [], "no quote: no claim"
-    assert covered_calls([call], 390.0, 1, SPOT, TODAY)
+    # The in-the-money guard lives in compare(), which is the layer that knows whether the
+    # position is even short — a long option is exercised by choice, not assigned to you.
+    _, otm = compare([CUR], [call], strike=390.0, expiration=EXP, contracts=1,
+                     spot=420.0, today=TODAY)
+    _, long_itm = compare([CUR], [call], strike=390.0, expiration=EXP, contracts=1,
+                          spot=SPOT, today=TODAY, is_short=False)
+    _, short_itm = compare([CUR], [call], strike=390.0, expiration=EXP, contracts=1,
+                           spot=SPOT, today=TODAY)
+    assert otm == [], "out of the money: no assignment to plan past"
+    assert long_itm == [], "a long option is exercised by choice, never assigned"
+    assert short_itm, "a short position in the money is the case that has one"
 
 
 def test_only_an_in_the_money_call_is_flagged() -> None:
     """Same single idea as the roll ladder — flag the sale whose premium is partly intrinsic,
     and stay quiet on the ordinary one."""
     itm = covered_calls([_c(360.0, LATER, 22.0, 22.4, kind=OptionType.CALL)], 390.0, 1, SPOT,
-                        TODAY, call_strike=360.0)[0]
+                        TODAY, write_strike=360.0)[0]
     assert len(itm.warnings) == 1 and "in the money" in itm.warnings[0]
     otm = covered_calls([_c(390.0, LATER, 11.81, 12.05, kind=OptionType.CALL)], 390.0, 1, SPOT,
                         TODAY)[0]
@@ -169,8 +184,6 @@ def test_expiries_on_or_before_the_current_one_are_not_rolls() -> None:
 def test_covered_calls_are_one_strike_across_expiries() -> None:
     """A ladder, not a grid. The question is how long to write for; answering with every strike
     at every expiry turns a decision into a spreadsheet."""
-    from wheel_screener.core.exits import covered_calls
-
     chain = [
         _c(390.0, EXP, 11.81, 12.05, kind=OptionType.CALL),
         _c(395.0, EXP, 9.60, 9.90, kind=OptionType.CALL),
@@ -184,20 +197,16 @@ def test_covered_calls_are_one_strike_across_expiries() -> None:
 
 
 def test_the_default_call_strike_is_the_cost_basis_assignment_hands_you() -> None:
-    from wheel_screener.core.exits import covered_calls
-
     chain = [_c(k, EXP, 10.0, 10.2, kind=OptionType.CALL) for k in (380.0, 390.0, 400.0)]
     assert covered_calls(chain, 390.0, 1, SPOT, TODAY)[0].strike == 390.0
     # and an explicit choice overrides it
     assert covered_calls(chain, 390.0, 1, SPOT, TODAY,
-                         call_strike=400.0)[0].strike == 400.0
+                         write_strike=400.0)[0].strike == 400.0
 
 
 def test_a_call_strike_the_chain_does_not_list_falls_back_to_the_nearest() -> None:
     """Assignment gives you shares whatever the chain lists; refusing to show any call because
     the exact strike is missing would answer a real position with a blank."""
-    from wheel_screener.core.exits import covered_calls
-
     chain = [_c(k, EXP, 10.0, 10.2, kind=OptionType.CALL) for k in (385.0, 395.0)]
     assert covered_calls(chain, 390.0, 1, SPOT, TODAY)[0].strike == 385.0
 
@@ -215,8 +224,6 @@ def test_rolls_show_one_row_per_expiry_even_with_adjusted_contracts() -> None:
 def test_the_call_ladder_ignores_strikes_that_are_not_the_position_s() -> None:
     """A chain carries every strike the market lists. Offering a $390 call against a $190 put is
     not a rounding error — it is an answer to somebody else's position."""
-    from wheel_screener.core.exits import covered_calls
-
     put_strike = 190.0
     chain = [_c(k, EXP, 8.0, 8.2, kind=OptionType.CALL)
              for k in (180.0, 185.0, 190.0, 195.0, 200.0, 390.0)]
@@ -250,11 +257,75 @@ def test_a_higher_strike_is_not_the_same_as_an_in_the_money_one() -> None:
 def test_an_unlisted_call_strike_snaps_to_the_nearest_rather_than_emptying_the_table() -> None:
     """Emptying the table over a strike that simply is not traded looks exactly like the control
     doing nothing — which is how the bug was reported."""
-    from wheel_screener.core.exits import covered_calls as _cc
-
     chain = [_c(k, TODAY + timedelta(days=26), 8.0, 8.2, kind=OptionType.CALL)
              for k in (385.0, 390.0, 400.0)]
-    assert _cc(chain, 390.0, 1, SPOT, TODAY, call_strike=402.0)[0].strike == 400.0
-    assert _cc(chain, 390.0, 1, SPOT, TODAY, call_strike=1_000.0)[0].strike == 400.0
-    assert _cc(chain, 390.0, 1, SPOT, TODAY, call_strike=400.0)[0].strike == 400.0
-    assert _cc([], 390.0, 1, SPOT, TODAY, call_strike=400.0) == [], "no chain, no claim"
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, write_strike=402.0)[0].strike == 400.0
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, write_strike=1_000.0)[0].strike == 400.0
+    assert covered_calls(chain, 390.0, 1, SPOT, TODAY, write_strike=400.0)[0].strike == 400.0
+    assert covered_calls([], 390.0, 1, SPOT, TODAY, write_strike=400.0) == [], "no chain, no claim"
+
+
+# ── all four kinds of option ───────────────────────────────────────────────────────────────
+
+def _chain(kind, *rows):
+    return [_c(k, TODAY + timedelta(days=d), bid, ask, kind=kind) for k, d, bid, ask in rows]
+
+
+_PUT_CHAIN = _chain(OptionType.PUT, (390.0, 26, 33.40, 33.74), (390.0, 82, 42.45, 42.80))
+_CALL_CHAIN = _chain(OptionType.CALL, (390.0, 19, 10.53, 10.80), (390.0, 26, 11.81, 12.05),
+                     (390.0, 82, 24.13, 24.50))
+_HELD = TODAY + timedelta(days=26)
+
+
+def test_a_long_position_pays_to_wait_where_a_short_is_paid() -> None:
+    """The same extrinsic, opposite signs. Reporting both as positive would stand a bleeding
+    long call beside a working short put as though they were the same thing."""
+    short = keep(_PUT_CHAIN, 390.0, _HELD, 1, SPOT, TODAY, is_short=True)
+    long_ = keep(_PUT_CHAIN, 390.0, _HELD, 1, SPOT, TODAY, is_short=False)
+    assert short.credit > 0 and long_.credit < 0
+    assert short.rate > 0 > long_.rate
+
+
+def test_capital_committed_differs_by_kind_and_that_is_the_denominator() -> None:
+    """Get this wrong and no two rows are comparable. A short put reserves the strike in cash; a
+    short call encumbers shares at their CURRENT value; a long ties up only what it would fetch."""
+    sp = keep(_PUT_CHAIN, 390.0, _HELD, 1, SPOT, TODAY)
+    sc = keep(_CALL_CHAIN, 390.0, _HELD, 1, SPOT, TODAY, option_type=OptionType.CALL)
+    lp = keep(_PUT_CHAIN, 390.0, _HELD, 1, SPOT, TODAY, is_short=False)
+    assert sp.collateral == 39_000, "the strike, because that is what assignment costs"
+    assert sc.collateral == 36_875, "the shares at market, not what they cost"
+    assert lp.collateral == 3_340, "only what selling it would return"
+
+
+def test_an_out_of_the_money_long_reads_as_a_total_loss_of_its_own_value() -> None:
+    """It expires worthless if nothing moves, and the rate says so rather than hiding it."""
+    row = keep(_CALL_CHAIN, 390.0, _HELD, 1, SPOT, TODAY,
+               option_type=OptionType.CALL, is_short=False)
+    assert row.credit == -row.collateral, "all of it is time value, and all of it goes"
+
+
+def test_rolling_a_long_is_a_debit_not_a_credit() -> None:
+    row = rolls(_PUT_CHAIN, 390.0, _HELD, 1, SPOT, TODAY, is_short=False)[0]
+    assert row.credit < 0 and row.rate < 0, "you pay for more time; you are not paid for it"
+
+
+def test_an_assigned_short_call_frees_cash_to_write_puts_with() -> None:
+    """The wheel's other half, and the exact mirror: a short put assigned leaves shares to write
+    calls against, a short call assigned leaves cash to write puts with."""
+    above = 420.0  # the $390 call is in the money here
+    _, after = compare(_CALL_CHAIN, _PUT_CHAIN, strike=390.0, expiration=_HELD, contracts=1,
+                       spot=above, today=TODAY, option_type=OptionType.CALL)
+    assert after and all("put" in r.label for r in after), "puts, not calls"
+    assert after[0].collateral == 39_000, "the cash the sale hands you, not the shares' value"
+
+
+def test_the_continuation_is_offered_only_where_assignment_can_happen_to_you() -> None:
+    for label, kw, expected in (
+        ("short put ITM", {}, True),
+        ("long put ITM", {"is_short": False}, False),
+        ("short put OTM", {"spot": 420.0}, False),
+    ):
+        spot = kw.pop("spot", SPOT)
+        _, after = compare(_PUT_CHAIN, _CALL_CHAIN, strike=390.0, expiration=_HELD, contracts=1,
+                           spot=spot, today=TODAY, **kw)
+        assert bool(after) is expected, label
