@@ -1102,3 +1102,43 @@ def test_the_roll_grid_is_read_not_clicked() -> None:
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
+
+
+def test_roll_cells_are_coloured_by_sign_and_gaps_are_left_blank() -> None:
+    """A roll that pays and one that costs are opposite decisions; tinting every cell the same
+    green said neither. A dash is a strike the exchange does not list for that expiry — the
+    absence of a result rather than a result, so it carries no tint at all."""
+    from datetime import date as _d
+    from datetime import timedelta as _td
+
+    from wheel_screener.core import rollgrid
+    from wheel_screener.core.models import OptionContract, OptionType
+
+    today, exp = _d.today(), _d.today() + _td(days=26)
+    # $400 pays to roll into, $380 costs; $385 simply is not listed at 40 days
+    chain = [
+        OptionContract(underlying_symbol="AVGO", option_symbol=f"A{k}{d}",
+                       option_type=OptionType.PUT, expiration=today + _td(days=d), strike=k,
+                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800)
+        for k, base in ((390.0, 33.4), (385.0, 30.3), (380.0, 27.4), (400.0, 40.5))
+        for d, b in ((26, base), (40, base + 2.9))
+        if not (k == 385.0 and d == 40)
+    ]
+    grid = rollgrid.build(chain, strike=390.0, expiration=exp, contracts=1, spot=368.75,
+                          today=today, collected=36.10)
+    c, _ = _exits_client(grid=grid)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": exp.isoformat()}).text
+        assert "rg-pos" in body and "rg-neg" in body
+        assert "rg-empty" in body, "an unlisted strike is a gap, not a zero"
+        assert "does not list for that expiry" in body, "and the note says so"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_roll_grid_is_laid_out_to_fit_rather_than_to_scroll() -> None:
+    css = pathlib.Path("src/wheel_screener/api/static/custom.css").read_text()
+    assert ".roll-grid { table-layout: fixed; width: 100%;" in css
+    assert ".roll-grid td.rg-empty { color: var(--pico-muted-color); background: none; }" in css
