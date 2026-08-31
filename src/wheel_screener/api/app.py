@@ -37,7 +37,6 @@ from wheel_screener.api.schemas import ScreenRequest
 from wheel_screener.api.sessions import SessionStore
 from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
-from wheel_screener.core import rollgrid
 from wheel_screener.core.errors import (
     AuthExpiredError,
     ProviderDataError,
@@ -831,29 +830,11 @@ def _link_for(request: Request, broker: str):
     return link
 
 
-def _grid_cell(grid, strike: str, expiry: str):
-    """The cell the reader clicked, or the current position's own as the opening state."""
-    if grid is None:
-        return None
-    # No default. Pre-selecting the position's own cell renders "roll $390 to $390", whose net
-    # is the spread crossed twice — a real number describing a trade nobody would make.
-    if not (strike and expiry):
-        return None
-    try:
-        return grid.cell(float(strike), date.fromisoformat(expiry))
-    except ValueError:
-        return None
-
-
 def _opt_date(raw: str):
     try:
         return date.fromisoformat(raw) if raw else None
     except ValueError:
         return None
-
-
-def _grid_detail(grid, cell):
-    return None if grid is None or cell is None else rollgrid.detail(grid, cell)
 
 
 @app.get("/portfolio/exits")
@@ -867,8 +848,6 @@ def portfolio_exits(
     is_short: bool = True,
     collected: str = "",
     opened: str = "",
-    cell_strike: str = "",
-    cell_expiry: str = "",
     roll_strike: str = "",
     call_strike: str = "",
     min_dte: int = 1,
@@ -906,7 +885,7 @@ def portfolio_exits(
              "rows": [], "after": [], "spot": None, "error": str(e), "min_dte": min_dte,
              "max_dte": max_dte, "roll_strike": roll_strike, "call_strike": call_strike,
              "option_type": option_type, "is_short": is_short, "expiry_label": expiry,
-             "grid": None, "selected": None, "detail": None, "collected": collected,
+             "grid": None, "collected": collected,
              "opened": opened},
         )
     return templates.TemplateResponse(
@@ -917,9 +896,7 @@ def portfolio_exits(
          "roll_strike": roll_strike, "call_strike": call_strike,
          "option_type": option_type, "is_short": is_short, "collected": collected,
          "opened": opened,
-         "grid": grid, "selected": _grid_cell(grid, cell_strike, cell_expiry),
-         "detail": _grid_detail(grid, _grid_cell(grid, cell_strike, cell_expiry)),
-         "today": date.today(),
+         "grid": grid, "today": date.today(),
          "expiry_label": expiration.strftime('%d %b')},
     )
 
@@ -1129,9 +1106,12 @@ def run_candidate(
         return templates.TemplateResponse(
             request, "_error.html", {"message": "unknown candidate"}, status_code=404
         )
+    # WHEN the screen ran, so "spot when screened" names a moment rather than gesturing at
+    # one. A stored run is read hours later and the stock moves under it.
+    age, _stale = _humanize_age(job.get("created_at") or "")
     return templates.TemplateResponse(
         request, "_candidate.html",
-        {"c": cand, "profile": service.company_profile(symbol)},
+        {"c": cand, "profile": service.company_profile(symbol), "run_age": age},
     )
 
 

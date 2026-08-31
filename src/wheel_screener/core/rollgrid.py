@@ -119,46 +119,6 @@ class RollGrid:
         return (self.collected - self.close_cost) * CONTRACT_MULTIPLIER * self.contracts
 
 
-@dataclass(frozen=True)
-class CellDetail:
-    """One candidate, set against the position it would replace — before and after."""
-
-    cell: GridCell
-    from_strike: float
-    from_expiry: date
-    from_odds: float | None
-    from_breakeven: float | None
-    to_breakeven: float | None
-    buyback: float          # cash out to close the current leg, total
-    opens: float            # cash in from the new leg, total
-    net: float              # the two combined — what actually books
-
-
-def detail(grid: RollGrid, cell: GridCell) -> CellDetail | None:
-    """Price one cell against the current position.
-
-    Breakeven is where the wheel actually settles: strike minus every premium collected on the
-    name so far. A roll that books a credit lowers it, which is the case for rolling down even
-    when the cash figure is negative — you pay to shrink the obligation and the breakeven
-    improves twice over.
-    """
-    if cell.net_credit is None:
-        return None
-    here = grid.cell(grid.current_strike, grid.current_expiry)
-    total_collected = None if grid.collected is None else grid.collected + cell.net_credit
-    return CellDetail(
-        cell=cell,
-        from_strike=grid.current_strike,
-        from_expiry=grid.current_expiry,
-        from_odds=(here.assignment_odds if here else None),
-        from_breakeven=(None if grid.collected is None else grid.current_strike - grid.collected),
-        to_breakeven=(None if total_collected is None else cell.strike - total_collected),
-        buyback=round(-grid.close_cost * CONTRACT_MULTIPLIER * grid.contracts, 2),
-        opens=round((cell.net_credit + grid.close_cost) * CONTRACT_MULTIPLIER * grid.contracts, 2),
-        net=round(cell.net_credit * CONTRACT_MULTIPLIER * grid.contracts, 2),
-    )
-
-
 def _pick_strikes(listed: set[float], around: float, spot: float | None, span: int) -> list[float]:
     """``span`` strikes either side of the position's own, ordered high to low.
 

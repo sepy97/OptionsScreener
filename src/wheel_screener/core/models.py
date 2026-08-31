@@ -575,6 +575,11 @@ class CandidateResult(BaseModel):
     fundamental_score: float | None = None  # absolute financial strength 0..1 (primary rating)
     peer_percentile: float | None = None  # percentile vs the screened field 0..1 (secondary)
     annualized_yield: float | None = None
+    # The share price AT THE MOMENT OF THE SCREEN. A stored run is read hours later and the
+    # stock moves under it — a strike that was 7% out when the screen ran can be at the money by
+    # the time anyone looks, which is exactly how a 0.28-delta pick reads as 0.41 afterwards.
+    # Recording what it was judged against makes that visible instead of puzzling.
+    underlying_price: float | None = None
     premium: float | None = None  # conservative credit (the bid)
     collateral: float | None = None
     next_earnings: date | None = None

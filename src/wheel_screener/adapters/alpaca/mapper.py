@@ -90,15 +90,19 @@ def _contract(
 
 
 def build_chain(
-    underlying: str, snapshots: dict | None, oi_by_symbol: dict | None, today: date
+    underlying: str, snapshots: dict | None, oi_by_symbol: dict | None, today: date,
+    spot: float | None = None,
 ) -> ChainSnapshot:
-    # underlying_price stays None: Alpaca's option snapshot is option-only (no spot), and the field
-    # is informational — unused by the select/yield/rank pipeline — so we don't pay an extra
-    # stock-quote call per underlying just to fill it. (Schwab returns it in-band, hence the gap.)
+    # Alpaca's option snapshot is option-only, so spot has to be passed in. The BATCHED fetch
+    # already reads it to decide which strikes are worth quoting, so filling this costs nothing
+    # there; the per-name path leaves it None rather than paying a stock quote per underlying.
+    # (Schwab returns it in-band, hence the asymmetry.)
     oi = oi_by_symbol or {}
     contracts = [
         c
         for occ, snap in (snapshots or {}).items()
         if (c := _contract(occ, snap or {}, oi, underlying, today)) is not None
     ]
-    return ChainSnapshot(underlying_symbol=underlying, contracts=contracts)
+    return ChainSnapshot(
+        underlying_symbol=underlying, underlying_price=spot, contracts=contracts
+    )

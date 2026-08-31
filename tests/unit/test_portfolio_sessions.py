@@ -1070,3 +1070,35 @@ def test_a_broker_that_cannot_be_read_does_not_break_health() -> None:
     body = _health_with(_Angry())
     assert body["status"] == _health_with(_Link(hours=100))["status"]
     assert next(b for b in body["brokers"] if b["broker"] == "schwab")["error"]
+
+
+def test_the_roll_grid_is_read_not_clicked() -> None:
+    """Moving assignment odds into the row labels left the click-through with nothing the grid
+    did not already show, so it was a round trip to the chain provider for a redraw."""
+    from datetime import date as _d
+    from datetime import timedelta as _td
+
+    from wheel_screener.core import rollgrid
+    from wheel_screener.core.models import OptionContract, OptionType
+
+    today, exp = _d.today(), _d.today() + _td(days=26)
+    chain = [
+        OptionContract(underlying_symbol="AVGO", option_symbol=f"A{k}{d}",
+                       option_type=OptionType.PUT, expiration=today + _td(days=d), strike=k,
+                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800)
+        for k, b in ((390.0, 33.4), (385.0, 30.3), (380.0, 27.4))
+        for d, b in ((26, b), (33, b + 1.6))
+    ]
+    grid = rollgrid.build(chain, strike=390.0, expiration=exp, contracts=1, spot=368.75,
+                          today=today, collected=36.10)
+    c, _ = _exits_client(grid=grid)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": exp.isoformat(),
+            "collected": "36.10"}).text
+        cells = body[body.index('class="roll-grid"'):body.index("</table>")]
+        assert "<a " not in cells and "hx-get" not in cells, "cells are data, not controls"
+        assert "assignment odds" in body, "what the click used to add now labels the rows"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
