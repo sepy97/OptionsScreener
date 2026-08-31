@@ -1166,3 +1166,26 @@ def test_blank_names_to_check_reaches_the_engine_as_no_cap(tmp_path) -> None:
     started = _client(runner2).post("/runs", data={"top_n": "25"})  # still a working speed lever
     runner2.wait(_job_id_from(started.text))
     assert svc2.seen_criteria.top_n == 25
+
+
+def test_an_etf_row_is_labelled_and_its_fundamental_columns_read_as_not_applicable(
+    tmp_path,
+) -> None:
+    """ETFs are screened alongside stocks, not in a separate list, so the table has to say why
+    two of their columns are blank. A bare dash reads as a fetch that failed; the tag is what
+    tells "no answer exists" apart from "we could not get one"."""
+    runner = _runner(_FakeService(result=[]), tmp_path)
+    etf = _candidate("GDX")
+    etf.is_etf, etf.fundamental_score, etf.peer_percentile = True, None, None
+    stock = _candidate("KGC")
+    stock.fundamental_score, stock.peer_percentile = 0.88, 0.91
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done",
+                        result=[c.model_dump(mode="json") for c in (stock, etf)])
+    body = _client(runner).get("/").text
+
+    rows = body[body.index("<tbody>"):body.index("</tbody>")]
+    gdx = rows[rows.index("GDX"):]
+    assert 'class="etf-tag"' in gdx and ">ETF<" in gdx
+    assert "88/100" in rows and "91%" in rows, "the stock still shows its ratings"
+    assert "88/100" not in gdx and "91%" not in gdx, "and the ETF shows neither"

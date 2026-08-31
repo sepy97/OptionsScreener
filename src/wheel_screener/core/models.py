@@ -140,6 +140,9 @@ class ScreenCriteria(BaseModel):
     # Contracts bid for at the top of the book: can this actually be sold, and how many. The
     # only one of the four that answers that directly rather than by proxy.
     min_bid_size: int = 10
+    # Screen ETFs alongside stocks. They skip the fundamental stages entirely and join the
+    # same ranked list, so a strong yield on XLF competes with one on a stock on equal terms.
+    include_etfs: bool = True
     # optional IV floor on the selected put (None = off). Elevated IV = richer premium; when set,
     # a contract must have a known implied vol at or above this fraction (0.40 == 40%) to qualify.
     min_iv: float | None = None
@@ -495,6 +498,12 @@ class Underlying(BaseModel):
     price: float | None = None
     market_cap: float | None = None
     sector: str | None = None
+    # An ETF, which is screened ALONGSIDE stocks rather than separately — same list, same
+    # ranking. It simply carries no fundamentals: there are no margins to judge, no leverage to
+    # gate on and no peers to rank against, so `fundamental_score` and `peer_percentile` stay
+    # None and the blend judges it on yield alone. Inventing a neutral 0.5 would be a claim
+    # about a thing that has no answer.
+    is_etf: bool = False
     # fundamentals
     metrics: FundamentalMetrics | None = None
     rating: FundamentalRating | None = None
@@ -560,6 +569,9 @@ class CandidateResult(BaseModel):
 
     symbol: str
     contract: OptionContract
+    # Carried so the table can say WHY the fundamental columns are blank. A bare dash reads as
+    # data we failed to fetch; "not applicable" is a different statement and the honest one.
+    is_etf: bool = False
     fundamental_score: float | None = None  # absolute financial strength 0..1 (primary rating)
     peer_percentile: float | None = None  # percentile vs the screened field 0..1 (secondary)
     annualized_yield: float | None = None

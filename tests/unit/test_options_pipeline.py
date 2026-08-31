@@ -565,3 +565,34 @@ def test_the_prerank_cap_gates_before_it_cuts() -> None:
     crit = ScreenCriteria(prerank_keep=10, top_n=10)
     kept = rate_and_rank(_Provider(), names, crit, date(2026, 8, 29), guard)
     assert len(kept) == 10, "all 10 slots should hold viable names, not gate-failures"
+
+
+def test_an_unrated_name_ranks_where_a_typical_one_does_not_above_all_of_them() -> None:
+    """Scoring an unrated name on yield alone let the ABSENCE of an assessment act as a perfect
+    one. Harmless while only the odd thinly-covered stock was unrated; decisive once ETFs joined
+    the same list, since none of them can be rated — they swept the top ranks at a flat 1.00,
+    a 3x leveraged fund among them, while a stock rated 0.88 on the same yield came ninth."""
+    field = [
+        CandidateResult(symbol=f"S{i}", contract=_put(90, -0.2, 40, 1.0),
+                        fundamental_score=score, annualized_yield=0.25)
+        for i, score in enumerate((0.70, 0.75, 0.80, 0.85, 0.90))
+    ]
+    etf = CandidateResult(symbol="ETF", contract=_put(90, -0.2, 40, 1.0),
+                          fundamental_score=None, annualized_yield=0.25)
+    ranked = rank([etf, *field], fundamental_weight=0.5)
+    assert ranked[0].symbol != "ETF", "an unassessed name must not outrank every assessed one"
+    etf_row = next(c for c in ranked if c.symbol == "ETF")
+    # it sits where the median-rated name does: above the weak half, below the strong half
+    assert 0 < ranked.index(etf_row) < len(ranked) - 1
+    assert abs(etf_row.score - next(c.score for c in ranked if c.symbol == "S2")) < 1e-9
+
+
+def test_a_field_too_small_to_have_a_middle_falls_back_to_yield_alone() -> None:
+    """Two points are not a field. Taking their midpoint would let one weak name drag every
+    unrated one to zero — the deletion the unknown-is-not-zero rule exists to prevent."""
+    unknown = CandidateResult(symbol="U", contract=_put(90, -0.2, 40, 1.0),
+                              fundamental_score=None, annualized_yield=0.25)
+    weak = CandidateResult(symbol="Z", contract=_put(90, -0.2, 40, 1.0),
+                           fundamental_score=0.0, annualized_yield=0.25)
+    ranked = rank([unknown, weak], fundamental_weight=0.5)
+    assert ranked[0].symbol == "U" and ranked[0].score == 1.0

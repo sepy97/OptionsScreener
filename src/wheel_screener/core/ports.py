@@ -60,6 +60,13 @@ class ChainProvider(Protocol):
 
 
 @runtime_checkable
+class EtfUniverseProvider(Protocol):
+    """Optionable ETFs for the screen. Optional: without one, the screen is stocks only."""
+
+    def etf_universe(self, criteria: ScreenCriteria) -> list[Underlying]: ...
+
+
+@runtime_checkable
 class BatchChainProvider(Protocol):
     """A chain source that can serve MANY underlyings in a few requests.
 

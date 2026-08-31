@@ -41,10 +41,11 @@ from wheel_screener.core.pipeline.select_strike import (
     signed_target_delta,
 )
 from wheel_screener.core.pipeline.universe import build_universe
-from wheel_screener.core.ports import (
+from wheel_screener.core.ports import (  # noqa: F401 - EtfUniverseProvider is a field type
     BrokerageAccountProvider,
     ChainProvider,
     CompanyProfileProvider,
+    EtfUniverseProvider,
     FundamentalReportProvider,
     FundamentalsProvider,
 )
@@ -90,6 +91,9 @@ class ScreenerService:
     profiles: CompanyProfileProvider | None = None
     # optional: the linked brokerage. None when no broker is connected.
     accounts: BrokerageAccountProvider | None = None
+    # optional: optionable ETFs, which join the SAME screen rather than a separate one.
+    # Without it the screen is stocks only, which is the pre-existing behaviour.
+    etfs: EtfUniverseProvider | None = None
     _scores: dict[str, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def _universe_scores(self, criteria: ScreenCriteria, today: date) -> dict[str, float]:
@@ -225,6 +229,7 @@ class ScreenerService:
         """
         guard = self._build_guard(criteria, today)
         survivors = self.screen_fundamentals(criteria, today, guard)
+        survivors = survivors + self._etf_survivors(criteria)
         filt = self._chain_filter(criteria, OptionType.PUT)  # the screen is CSP-only
         deadline = (
             time.monotonic() + criteria.max_runtime_seconds
@@ -250,7 +255,7 @@ class ScreenerService:
                 continue
             candidates.append(
                 self._candidate(
-                    u.symbol, put, fundamental_score=u.fundamental_score,
+                    u.symbol, put, is_etf=u.is_etf, fundamental_score=u.fundamental_score,
                     peer_percentile=u.peer_percentile,
                     next_earnings=u.next_earnings, has_weeklys=u.has_weeklys,
                     earnings_status=guard.status(u.symbol, put.expiration),
@@ -509,6 +514,24 @@ class ScreenerService:
         accounts = self.accounts.accounts()
         self._price_positions(accounts)
         return accounts
+
+    def _etf_survivors(self, criteria: ScreenCriteria) -> list[Underlying]:
+        """ETFs joining the same list, having skipped every fundamental stage.
+
+        They bypass the gates and the cross-sectional rank because neither has an answer for a
+        fund: there is no leverage to cap, no coverage to require and no peer set to sit in.
+        They still face every CONTRACT-level test — delta, DTE, liquidity, earnings — because
+        those judge the option rather than the issuer, and an ETF's chain can be as untradeable
+        as a stock's.
+        """
+        if not criteria.include_etfs or self.etfs is None:
+            return []
+        try:
+            return self.etfs.etf_universe(criteria)
+        except ProviderError as e:
+            # A screen that returns stocks is worth more than one that returns an error page.
+            logger.warning("etf universe unavailable (%s); screening stocks only", e)
+            return []
 
     def _price_positions(self, accounts: list[BrokerageAccount]) -> None:
         """Stamp each short put with its underlying's price, for the assignment watch.
