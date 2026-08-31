@@ -119,20 +119,51 @@ class RollGrid:
         return (self.collected - self.close_cost) * CONTRACT_MULTIPLIER * self.contracts
 
 
-def _pick_strikes(listed: set[float], around: float, spot: float | None, span: int) -> list[float]:
-    """``span`` strikes either side of the position's own, ordered high to low.
+# Enough rows to reach the money from a deep out-of-the-money strike without the panel growing
+# without bound. Past this the range is trimmed from the far end, never from the money.
+MAX_STRIKE_ROWS = 19
 
-    Centred on the CURRENT strike rather than on spot: the question is what to roll this
-    position to, and a grid that wanders off with the share price stops containing the row the
-    reader came to compare against.
+
+def _pick_strikes(
+    listed: set[float], around: float, spot: float | None, span: int
+) -> list[float]:
+    """Strikes worth rolling to, ordered high to low.
+
+    Centred on the position's own strike AND stretched to reach spot, because those are two
+    different places and the second is where the tradeable rolls are. Extrinsic peaks at the
+    money, so a put sitting far out of it — QCOM's $150 against a $170 share — has its whole
+    interesting range between the strike and the price, and a window of four either side of
+    $150 contains none of it.
+
+    The current strike is always included: it is the row the reader came to compare against.
     """
     ordered = sorted(listed)
-    if around not in listed and ordered:
-        around = min(ordered, key=lambda k: abs(k - (spot or around)))
-    if around not in listed:
+    if not ordered:
         return []
-    i = ordered.index(around)
-    return sorted(ordered[max(0, i - span): i + span + 1], reverse=True)
+    if around not in listed:
+        around = min(ordered, key=lambda k: abs(k - (spot or around)))
+    lo_anchor = hi_anchor = ordered.index(around)
+    if spot is not None:
+        at_money = ordered.index(min(ordered, key=lambda k: abs(k - spot)))
+        lo_anchor, hi_anchor = min(lo_anchor, at_money), max(hi_anchor, at_money)
+    lo = max(0, lo_anchor - span)
+    hi = min(len(ordered) - 1, hi_anchor + span)
+
+    # Trim from whichever end is further from the money, so a long reach never costs the rows
+    # that matter. The held strike is protected because it is one of the two anchors.
+    while hi - lo + 1 > MAX_STRIKE_ROWS:
+        drop_low = abs(ordered[lo] - (spot or around)) >= abs(ordered[hi] - (spot or around))
+        if drop_low and lo < lo_anchor:
+            lo += 1
+        elif not drop_low and hi > hi_anchor:
+            hi -= 1
+        elif lo < lo_anchor:
+            lo += 1
+        elif hi > hi_anchor:
+            hi -= 1
+        else:
+            break  # everything left is between the anchors; keep it and let the grid scroll
+    return sorted(ordered[lo : hi + 1], reverse=True)
 
 
 def build(
