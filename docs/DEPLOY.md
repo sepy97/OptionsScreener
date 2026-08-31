@@ -144,8 +144,29 @@ The session store and the broker token are written to the mounted volume (`compo
 anything left inside it would be destroyed on every release.
 
 The Schwab app must also have the **Accounts and Trading** product and must register
-`https://steadybull.net/portfolio/oauth/schwab/callback` as a callback URL. Schwab authorisations
-last 7 days; reconnecting is a weekly click that doubles as the login.
+`https://steadybull.net/portfolio/oauth/schwab/callback` as a callback URL.
+
+### The weekly reconnect
+
+Schwab refresh tokens last **7 days**. This is the only part of the deployment that stops working
+on a clock rather than by breaking, so it will not announce itself — the Portfolio tab simply goes
+quiet. Both diagnostics report the time remaining:
+
+```bash
+curl -s https://steadybull.net/health | jq '.brokers, .warnings'
+docker compose exec app wheel-screener doctor      # "Broker link" section
+```
+
+`/health` warns below 48 hours and **deliberately does not go `degraded`** for an expiring link: a
+non-200 there fails the container healthcheck and rolls back the release, which cannot renew a
+token that was always going to lapse.
+
+`doctor` goes further and **calls the broker** rather than reading the token file's age. A token
+can sit on disk, unexpired, and be useless — authorising anywhere else revokes the previous one,
+and a token written in the wrong shape loads without complaint and fails every request. Both look
+healthy to a presence check.
+
+Reconnecting is one click on the Portfolio tab and doubles as the login.
 
 ## Diagnosing a broken data connection
 
@@ -163,5 +184,19 @@ Schwab is OAuth and is refreshed with `auth-login`.
 ## Rollback & backups
 
 - **Rollback:** `git checkout v<previous>` and `docker compose up -d --build`.
-- **Backups:** scheduled DigitalOcean droplet snapshots, plus a cron copy of `data/jobs.sqlite`
-  and `data/fundamentals/overlay_metrics.csv` (the mutable state).
+- **Back up:** `data/jobs.sqlite` and `data/fundamentals/overlay_metrics.csv` — the only state
+  that is neither re-derivable nor re-authorisable. Droplet snapshots cover the rest.
+
+**Do not back up the broker token or the session store**, and this is a decision rather than an
+omission:
+
+| File | Why not |
+|---|---|
+| `data/links/schwab_token.json` | It expires in 7 days, so a restored copy is dead on arrival more often than not — and it is **trading-capable**. Copying it into a backup that leaves the box widens the blast radius of a credential that a single click replaces. |
+| `data/sessions.sqlite` | Browser sessions. Losing it costs one sign-in, and it is capped to the token's life anyway. |
+
+Restoring either is slower and riskier than clicking *Sign in with Schwab*, which is the recovery
+procedure for both.
+
+The fundamentals store under `data/fundamentals/` is rebuilt by the refresh job and does not need
+backing up either; only `overlay_metrics.csv` in it is hand-maintained.

@@ -1012,3 +1012,61 @@ def test_the_grid_replaced_the_ladder_rather_than_joining_it() -> None:
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
+
+
+# ── ops: the link expires on a clock, so it has to be visible before it lapses ──────────────
+
+def _health_with(link) -> dict:
+    c = _client(link)
+    try:
+        return c.get("/health").json()
+    finally:
+        c.__exit__(None, None, None)
+
+
+class _Link(_FakeLink):
+    def __init__(self, connected=True, hours=None, configured=True):
+        super().__init__(connected)
+        self._hours, self._configured = hours, configured
+
+    def status(self):
+        expires = (datetime.now(tz=UTC) + timedelta(hours=self._hours)
+                   if self._hours is not None else None)
+        return BrokerLinkStatus(broker="schwab", configured=self._configured,
+                                connected=self.connected, expires_at=expires)
+
+
+def test_health_reports_how_long_the_broker_link_has_left() -> None:
+    """It is the one part of the deployment that expires on a clock rather than breaking, so it
+    is the one part an operator cannot find by waiting for an error."""
+    body = _health_with(_Link(hours=100))
+    schwab = next(b for b in body["brokers"] if b["broker"] == "schwab")
+    assert schwab["connected"] is True and 99 <= schwab["expires_in_hours"] <= 100
+    assert body["warnings"] == [], "four days out is not worth a warning"
+
+
+def test_health_warns_before_the_link_lapses_without_moving_the_status() -> None:
+    """Degrading here would fail the container healthcheck and roll back a release over a
+    credential that was always going to expire, which redeploying cannot renew. Compared
+    against a healthy link rather than to a literal, so the assertion is about the BROKER's
+    effect and not about whatever else the test app's providers are doing."""
+    healthy = _health_with(_Link(hours=100))
+    expiring = _health_with(_Link(hours=12))
+    assert expiring["status"] == healthy["status"], "the link must not move the status"
+    assert any("expires in 12h" in w for w in expiring["warnings"])
+    assert healthy["warnings"] == []
+
+
+def test_health_says_when_a_configured_broker_has_nobody_signed_in() -> None:
+    body = _health_with(_Link(connected=False, configured=True))
+    assert any("configured but not connected" in w for w in body["warnings"])
+
+
+def test_a_broker_that_cannot_be_read_does_not_break_health() -> None:
+    class _Angry(_FakeLink):
+        def status(self):
+            raise RuntimeError("token file unreadable")
+
+    body = _health_with(_Angry())
+    assert body["status"] == _health_with(_Link(hours=100))["status"]
+    assert next(b for b in body["brokers"] if b["broker"] == "schwab")["error"]

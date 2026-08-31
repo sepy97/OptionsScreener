@@ -524,6 +524,45 @@ def _probe(request: Request, probe: object) -> str | None:
     return detail
 
 
+# A Schwab refresh token lives 7 days. Two of them left is enough notice to reconnect before
+# the tab breaks, and few enough that the warning is not permanently on.
+BROKER_EXPIRY_WARNING_HOURS = 48
+
+
+def _broker_health(request: Request) -> tuple[list[dict], list[str]]:
+    """Per-broker link state, and warnings worth acting on but not worth failing over.
+
+    The link is the one part of this deployment that expires on a clock rather than breaking,
+    so it is the one part an operator cannot discover by waiting for an error — by then the
+    Portfolio tab is already dead. Surfacing the hours remaining is the whole point.
+    """
+    out, warnings = [], []
+    now = datetime.now(tz=UTC)
+    for name, link in (getattr(request.app.state, "links", None) or {}).items():
+        try:
+            status = link.status()
+        except Exception as e:  # noqa: BLE001 - health must never raise
+            out.append({"broker": name, "error": str(e)})
+            continue
+        hours = None
+        if status.expires_at is not None:
+            hours = round((status.expires_at - now).total_seconds() / 3600, 1)
+        out.append({
+            "broker": name,
+            "configured": status.configured,
+            "connected": status.connected,
+            "expires_at": status.expires_at.isoformat() if status.expires_at else None,
+            "expires_in_hours": hours,
+        })
+        if status.connected and hours is not None and hours <= BROKER_EXPIRY_WARNING_HOURS:
+            warnings.append(
+                f"{name} authorisation expires in {hours:.0f}h — reconnect on the Portfolio tab"
+            )
+        elif status.configured and not status.connected:
+            warnings.append(f"{name} is configured but not connected")
+    return out, warnings
+
+
 @app.get("/health")
 def health(
     request: Request,
@@ -554,12 +593,19 @@ def health(
     chains = next((p for p in providers if p["role"] == "option chains"), None)
     chain_ready = bool(chains["ready"]) if chains else False
     degraded = [p for p in providers if not p["ready"]]
+    brokers, warnings = _broker_health(request)
     return {
+        # A broker link deliberately does NOT move this. It expires every 7 days by design, and
+        # nothing a redeploy does will renew it — marking the app degraded would fail the
+        # container healthcheck and roll back a release over a credential that was always going
+        # to lapse. The warning below is the signal; the status stays about data connections.
         "status": "ok" if (store_loaded and not degraded) else "degraded",
         "store_loaded": store_loaded,
         "chain_source": settings.chain_source,
         "chain_ready": chain_ready,
         "providers": providers,
+        "brokers": brokers,
+        "warnings": warnings,
     }
 
 

@@ -106,7 +106,14 @@
                            is answered by the shares, and a long option cannot be assigned #}
                         <span class="detail-note">&mdash;</span>
                       {% elif p.in_the_money is none %}
-                        <span class="detail-note">no quote</span>
+                        {# The broker prices the CONTRACT, never the stock behind it, so this
+                           needs a quote from the chain provider — best-effort, and unavailable
+                           for a name it does not cover or when its data is briefly down. Saying
+                           only "no quote" left the reader unable to tell that from "the option
+                           is fine and something else failed". #}
+                        <span class="detail-note" title="assignment depends on the SHARE price,
+                          which the broker does not report — it is fetched separately and was not
+                          available for this name">no quote</span>
                       {% elif p.in_the_money %}
                         <span class="badge badge--neg">ITM &middot; {{ p.underlying_price | money }}</span>
                       {% else %}
