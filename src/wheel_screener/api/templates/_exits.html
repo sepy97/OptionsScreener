@@ -4,7 +4,8 @@
  <td colspan="9">
   <article class="exits">
     <header class="results-head">
-      <strong>{{ symbol }} ${{ '%g'|format(strike) }} put &middot; ways out</strong>
+      <strong>{{ symbol }} ${{ '%g'|format(strike) }}
+        {{ 'short' if is_short else 'long' }} {{ option_type }} &middot; ways out</strong>
       <span class="result-stats">
         {% if spot %}<span>Spot <b>{{ spot | money }}</b></span>{% endif %}
         <span>{{ contracts | int }} contract{{ 's' if contracts != 1 else '' }}</span>
@@ -96,8 +97,9 @@
         </tbody>
       </table>
       </figure>
-      <p class="detail-note">Value is the money actually earnable, and the rate is that over the
-        collateral it commits, annualised &mdash; the same unit for every row, so the top one
+      <p class="detail-note">Value is the money that changes hands &mdash; earned on a short
+        position, paid on a long one &mdash; and the rate is that over the capital it commits,
+        annualised &mdash; the same unit for every row, so the top one
         wins. Where a row also shows a cash figure, the gap is intrinsic being sold: money that
         arrives now and is handed back at expiry. A roll is scored over the days it
         <em>adds</em> &mdash; the second figure in its Days cell &mdash; since the days before
@@ -112,10 +114,13 @@
            nothing else, and sitting above the roll ladder it looked inert — changed it, pressed
            Reprice, and the rows it does not touch stayed put. It also has no meaning at all when
            the put is out of the money, which is exactly when this section is absent. #}
-        <h5 class="exit-after">If assigned on {{ expiry_label }}, writing a call would pay
-          about</h5>
+        {# A short put assigned leaves shares to write calls against; a short call assigned
+           leaves cash to write puts with. Same sentence, opposite side. #}
+        {% set written = 'call' if option_type == 'put' else 'put' %}
+        <h5 class="exit-after">If assigned on {{ expiry_label }}, writing a {{ written }} would
+          pay about</h5>
         <div class="exit-controls exit-controls--after">
-          <label>Call strike
+          <label>{{ written|capitalize }} strike
             <input type="text" name="call_strike" value="{{ call_strike }}" inputmode="decimal"
                    placeholder="same (${{ '%g'|format(strike) }})">
           </label>

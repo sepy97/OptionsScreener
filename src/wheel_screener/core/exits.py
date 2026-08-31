@@ -72,11 +72,38 @@ class ExitOption:
         return (earnable / self.collateral) * (365.0 / self.days)
 
 
-def intrinsic(strike: float, spot: float | None, contracts: float) -> float:
-    """What a short put owes at today's price, if it were settled now."""
+def intrinsic(
+    strike: float, spot: float | None, contracts: float,
+    option_type: OptionType = OptionType.PUT,
+) -> float:
+    """What the contract is worth on exercise at today's price. Never negative."""
     if spot is None:
         return 0.0
-    return max(0.0, strike - spot) * CONTRACT_MULTIPLIER * contracts
+    gap = strike - spot if option_type is OptionType.PUT else spot - strike
+    return max(0.0, gap) * CONTRACT_MULTIPLIER * contracts
+
+
+def committed(
+    strike: float, spot: float | None, contracts: float,
+    option_type: OptionType, is_short: bool, own_value: float,
+) -> float:
+    """The capital this position ties up — the denominator every rate is built on.
+
+    It is a different quantity for each kind of position, and using the wrong one is the
+    quietest way to make two rows uncomparable:
+
+    * a SHORT PUT reserves cash equal to the strike, because that is what assignment costs;
+    * a SHORT CALL encumbers shares, so the capital is what those shares are worth today, not
+      what they cost — a covered call against a position bought at $200 and now worth $400 ties
+      up $400 of value, and pretending otherwise doubles its apparent return;
+    * a LONG option ties up only what it would fetch if sold. Nothing else is at stake, and the
+      premium originally paid is gone whatever happens next.
+    """
+    if not is_short:
+        return own_value
+    if option_type is OptionType.PUT:
+        return strike * CONTRACT_MULTIPLIER * contracts
+    return (spot or strike) * CONTRACT_MULTIPLIER * contracts
 
 
 def _match(chain: list[OptionContract], strike: float, expiration: date) -> OptionContract | None:
@@ -86,152 +113,167 @@ def _match(chain: list[OptionContract], strike: float, expiration: date) -> Opti
 
 
 def keep(
-    puts: list[OptionContract], strike: float, expiration: date, contracts: float,
-    spot: float | None, today: date,
+    chain: list[OptionContract], strike: float, expiration: date, contracts: float,
+    spot: float | None, today: date, *,
+    option_type: OptionType = OptionType.PUT, is_short: bool = True,
 ) -> ExitOption | None:
-    """Hold to expiry: you earn the remaining extrinsic, and the collateral stays committed.
+    """Hold to expiry. The extrinsic changes hands either way — the SIGN is the whole story.
 
-    Priced off the ASK, because closing means buying the contract back and that is what it would
-    cost. Using the mid would flatter every hold.
+    Short, you are paid to wait: the time value decays in your favour and you keep it. Long, you
+    are paying to wait, and the identical number is a cost. Reporting both as positive would put
+    a bleeding long call alongside a working short put as though they were the same thing.
+
+    Priced off the side you would actually trade out at — the ask to buy a short back, the bid to
+    sell a long. The mid flatters both.
     """
-    cur = _match(puts, strike, expiration)
-    if cur is None or cur.ask is None:
+    cur = _match(chain, strike, expiration)
+    if cur is None:
         return None
-    collateral = strike * CONTRACT_MULTIPLIER * contracts
-    cost_to_close = cur.ask * CONTRACT_MULTIPLIER * contracts
-    earnable = cost_to_close - intrinsic(strike, spot, contracts)
+    price = cur.ask if is_short else cur.bid
+    if price is None:
+        return None
+    own_value = price * CONTRACT_MULTIPLIER * contracts
+    time_value = own_value - intrinsic(strike, spot, contracts, option_type)
+    earnable = time_value if is_short else -time_value
     remaining = (expiration - today).days
     return ExitOption(
         kind="keep", label="Keep to expiry",
         credit=round(earnable, 2), days=remaining, total_days=remaining,
-        collateral=collateral, extrinsic=round(earnable, 2),
-        strike=strike, expiration=expiration,
+        collateral=committed(strike, spot, contracts, option_type, is_short, own_value),
+        extrinsic=round(earnable, 2), strike=strike, expiration=expiration,
     )
 
 
 def rolls(
-    puts: list[OptionContract], strike: float, expiration: date, contracts: float,
+    chain: list[OptionContract], strike: float, expiration: date, contracts: float,
     spot: float | None, today: date, *, roll_strike: float | None = None,
+    option_type: OptionType = OptionType.PUT, is_short: bool = True,
 ) -> list[ExitOption]:
-    """Close the current put and sell a later one, for every expiry on the board.
+    """Close the current contract and reopen it later, for every expiry on the board.
 
-    ``roll_strike`` defaults to the position's own strike — the only comparison that is purely
-    an extension of time. A different strike is offered because traders do it, and is annotated
-    rather than hidden.
+    Short, a roll is a credit: sell the later contract, buy back the near one. Long, it is a
+    debit — sell what you hold, pay for more time — so the same arithmetic runs with the two
+    sides swapped, and the result is negative because extending a long costs money.
+
+    ``roll_strike`` defaults to the position's own, the only comparison that is purely an
+    extension of time. A different strike is offered because traders do it, and is annotated.
     """
-    cur = _match(puts, strike, expiration)
-    if cur is None or cur.ask is None:
+    cur = _match(chain, strike, expiration)
+    if cur is None:
+        return []
+    close_at = cur.ask if is_short else cur.bid          # what unwinding costs / returns
+    if close_at is None:
         return []
     target = strike if roll_strike is None else roll_strike
-    cost_to_close = cur.ask * CONTRACT_MULTIPLIER * contracts
-    here = strike * CONTRACT_MULTIPLIER * contracts
+    unwind = close_at * CONTRACT_MULTIPLIER * contracts
+    here_intrinsic = intrinsic(strike, spot, contracts, option_type)
 
     out: list[ExitOption] = []
     seen: set[date] = set()
-    for c in sorted(puts, key=lambda c: (c.expiration, -(c.bid or 0.0))):
-        if c.strike != target or c.expiration <= expiration or c.bid is None or c.bid <= 0:
+    for c in sorted(chain, key=lambda c: (c.expiration, -(c.bid or 0.0))):
+        if c.strike != target or c.expiration <= expiration:
+            continue
+        open_at = c.bid if is_short else c.ask           # what the new leg pays / costs
+        if open_at is None or open_at <= 0:
             continue
         if c.expiration in seen:
             continue  # an adjusted contract shares strike and expiry with the standard one
         seen.add(c.expiration)
         added = (c.expiration - expiration).days
-        collateral = target * CONTRACT_MULTIPLIER * contracts
-        credit = c.bid * CONTRACT_MULTIPLIER * contracts - cost_to_close
-        time_value = (
-            c.bid * CONTRACT_MULTIPLIER * contracts - intrinsic(target, spot, contracts)
-        ) - (cost_to_close - intrinsic(strike, spot, contracts))
-        # ONE warning, and only the one the numbers cannot show. That the collateral grew is
-        # already in the collateral column; saying it again in prose on every row of a ladder
-        # buried the figures. That part of the credit is intrinsic is the thing a reader cannot
-        # see, because it looks exactly like income until expiry.
-        #
-        # A HIGHER strike is not the same as an in-the-money one. Rolling $150 -> $155 while the
-        # stock trades at $164 sells no intrinsic whatever, and warning there teaches the reader
-        # to ignore the warning that matters. Compare the obligations, not the strikes.
+        new_value = open_at * CONTRACT_MULTIPLIER * contracts
+        new_intrinsic = intrinsic(target, spot, contracts, option_type)
+        cash = new_value - unwind
+        time_value = (new_value - new_intrinsic) - (unwind - here_intrinsic)
+        if not is_short:
+            cash, time_value = -cash, -time_value        # a long pays to extend
+
         warns: list[str] = []
-        if intrinsic(target, spot, contracts) > intrinsic(strike, spot, contracts):
+        if new_intrinsic > here_intrinsic and is_short:
             warns.append(
                 f"${target:g} is in the money at ${spot:,.2f} — part of this credit is intrinsic, "
                 "money that arrives now and is handed back at expiry"
             )
         out.append(ExitOption(
             kind="roll", label=f"Roll to {c.expiration:%d %b}",
-            credit=round(credit, 2), days=added, total_days=(c.expiration - today).days,
-            collateral=collateral,
+            credit=round(cash, 2), days=added, total_days=(c.expiration - today).days,
+            collateral=committed(target, spot, contracts, option_type, is_short, abs(new_value)),
             extrinsic=round(time_value, 2), strike=target, expiration=c.expiration,
-            collateral_delta=round(collateral - here, 2), warnings=tuple(warns),
+            collateral_delta=round(
+                committed(target, spot, contracts, option_type, is_short, abs(new_value))
+                - committed(strike, spot, contracts, option_type, is_short, unwind), 2),
+            warnings=tuple(warns),
         ))
     return out
 
 
-def covered_calls(
-    calls: list[OptionContract], strike: float, contracts: float,
-    spot: float | None, today: date, *, call_strike: float | None = None,
+def write_after_assignment(
+    chain: list[OptionContract], strike: float, contracts: float,
+    spot: float | None, today: date, *,
+    position_type: OptionType = OptionType.PUT, write_strike: float | None = None,
 ) -> list[ExitOption]:
-    """What writing calls would pay after assignment — estimated by TENOR, not by contract.
+    """What the freed capital would earn once assignment happens — priced by TENOR.
 
-    The obvious implementation quotes the contract you would actually sell, and is wrong. A call
-    expiring 16 Oct is worth $1,648 today with 47 days of life in it, but it would be written on
-    25 Sep with only 21 days left, by which time it is worth about $1,090. Pairing today's price
-    with the post-assignment holding period inflated every rate by half — 77%/yr where 51% was
-    real. You cannot quote a trade you will make in a month.
+    Assignment turns one position into another, and the wheel's two halves mirror exactly:
 
-    So each row is a WRITING TENOR priced from today's market: what a 21-day call fetches today
-    is the honest estimate of what a 21-day call fetches in three weeks, holding price and
-    volatility fixed. It uses only quoted bids — no decay model — and it keeps moneyness fixed,
-    since the same strike against the same spot is the same distance out.
+    * a short PUT is assigned, leaving SHARES worth spot, against which you write CALLS;
+    * a short CALL is assigned, the shares go at the strike, leaving CASH, with which you
+      write PUTS.
 
-    Cross-checked against the alternative: decaying the 16 Oct contract's extrinsic by root-time
-    gives $1,102 against the tenor proxy's $1,090, a 1.1% disagreement. Two independent methods
-    agreeing is the reason to trust either.
+    Either way the default strike is the position's own — for the put that is the basis you were
+    handed, for the call the price you sold at — and the opposite side of the chain is quoted.
 
-    ``expiration`` is deliberately left unset. These are tenors, not tradeable contracts, and
-    printing a date invites exactly the reading — "sell the 02 Sep call" — that started this.
-
-    The same logic mirrors for a short call that gets assigned: the shares go, and the put you
-    would write afterwards is estimated the same way.
+    Rows are WRITING TENORS priced from today's market, never the contract you would eventually
+    sell. That contract holds more time value today than it will when the shares arrive: AVGO's
+    47-day call reads $1,648 now and would be written with 21 days left, worth about $1,090.
+    Pairing today's price with the post-assignment period inflated every rate by half. What a
+    21-day option fetches today is the honest estimate of what a 21-day option fetches in three
+    weeks, and it needs no decay model. Cross-checked against root-time decay of the real
+    contract: $1,090 against $1,102, agreeing to 1%.
     """
-    if spot is None or spot <= 0 or spot >= strike:
+    if spot is None or spot <= 0:
         return []
-    # Default to the put's own strike — the cost basis assignment hands you, so writing there is
-    # the break-even line. An explicit choice is honoured, and either way a strike the chain does
-    # not list snaps to the nearest one: emptying the table over a strike that simply is not
-    # traded looks exactly like the control doing nothing.
-    listed = {c.strike for c in calls}
+    written = OptionType.CALL if position_type is OptionType.PUT else OptionType.PUT
+    # Capital afterwards: shares at market for an assigned put, the sale proceeds for a call.
+    capital = (
+        spot * CONTRACT_MULTIPLIER * contracts if position_type is OptionType.PUT
+        else strike * CONTRACT_MULTIPLIER * contracts
+    )
+    here = strike * CONTRACT_MULTIPLIER * contracts
+
+    listed = {c.strike for c in chain if c.option_type is written}
     if not listed:
         return []
-    wanted = call_strike if call_strike is not None else strike
+    wanted = write_strike if write_strike is not None else strike
     target = wanted if wanted in listed else min(listed, key=lambda k: abs(k - wanted))
 
-    shares_value = spot * CONTRACT_MULTIPLIER * contracts
-    here = strike * CONTRACT_MULTIPLIER * contracts
     out: list[ExitOption] = []
     seen: set[int] = set()
-    for c in sorted(calls, key=lambda c: c.dte):
-        if c.strike != target or c.bid is None or c.bid <= 0 or c.dte <= 0:
+    for c in sorted(chain, key=lambda c: c.dte):
+        if c.option_type is not written or c.strike != target:
             continue
-        if c.dte in seen:
+        if c.bid is None or c.bid <= 0 or c.dte <= 0 or c.dte in seen:
             continue
         seen.add(c.dte)
         premium = c.bid * CONTRACT_MULTIPLIER * contracts
-        warns: list[str] = []
-        if target < spot:
-            warns.append(
-                f"${target:g} is in the money at ${spot:,.2f} — part of this premium is "
-                "intrinsic, and the shares would be called away"
-            )
+        itm = target < spot if written is OptionType.CALL else target > spot
+        warns = (
+            (f"${target:g} is in the money at ${spot:,.2f} — part of this premium is intrinsic, "
+             f"and it would be assigned straight back",)
+            if itm else ()
+        )
         out.append(ExitOption(
-            kind="assign_cc", label=f"{c.dte}-day ${target:g} call",
-            credit=round(premium, 2), days=c.dte, collateral=shares_value,
+            kind="assign_cc", label=f"{c.dte}-day ${target:g} {written.value}",
+            credit=round(premium, 2), days=c.dte, collateral=capital,
             extrinsic=round(premium, 2), strike=target,
-            collateral_delta=round(shares_value - here, 2), warnings=tuple(warns),
+            collateral_delta=round(capital - here, 2), warnings=warns,
         ))
     return out
 
 
 def compare(
-    puts: list[OptionContract], calls: list[OptionContract], *,
+    own: list[OptionContract], opposite: list[OptionContract], *,
     strike: float, expiration: date, contracts: float, spot: float | None, today: date,
+    option_type: OptionType = OptionType.PUT, is_short: bool = True,
     roll_strike: float | None = None, call_strike: float | None = None,
 ) -> tuple[list[ExitOption], list[ExitOption]]:
     """``(alternatives, after_assignment)`` — two lists, because they are two questions.
@@ -245,20 +287,31 @@ def compare(
     the position" as though a choice existed between them.
     """
     rows: list[ExitOption] = []
-    base = keep(puts, strike, expiration, contracts, spot, today)
+    base = keep(own, strike, expiration, contracts, spot, today,
+                option_type=option_type, is_short=is_short)
     if base is not None:
         rows.append(base)
-    rows.extend(rolls(puts, strike, expiration, contracts, spot, today,
-                      roll_strike=roll_strike))
-    later = covered_calls(calls, strike, contracts, spot, today, call_strike=call_strike)
+    rows.extend(rolls(own, strike, expiration, contracts, spot, today, roll_strike=roll_strike,
+                      option_type=option_type, is_short=is_short))
+    # Only a SHORT position in the money has an assignment to plan past. A long option is
+    # exercised by choice, and one out of the money simply expires.
+    later = (
+        write_after_assignment(opposite, strike, contracts, spot, today,
+                               position_type=option_type, write_strike=call_strike)
+        if is_short and is_in_the_money(strike, spot, option_type) else []
+    )
     return (
         sorted(rows, key=lambda r: (r.rate is None, -(r.rate or 0.0))),
         sorted(later, key=lambda r: r.days),
     )
 
 
-def is_in_the_money(strike: float, spot: float | None) -> bool:
-    return spot is not None and spot < strike
+def is_in_the_money(
+    strike: float, spot: float | None, option_type: OptionType = OptionType.PUT
+) -> bool:
+    if spot is None:
+        return False
+    return spot < strike if option_type is OptionType.PUT else spot > strike
 
 
 def option_type_for(kind: str) -> OptionType:

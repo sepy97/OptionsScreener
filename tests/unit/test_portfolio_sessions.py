@@ -761,8 +761,13 @@ def test_a_short_put_row_is_itself_the_control() -> None:
         assert 'class="row-open"' in body and "/portfolio/exits" in body
         assert 'hx-swap="afterend"' in body, "the panel opens under the row it belongs to"
         assert "ways out</button>" not in body, "the button it replaced is gone"
-        # three short puts in the fixture, and only those
-        assert body.count('class="row-open"') == 3
+        # EVERY option opens — three short puts and a short call. All four kinds face the same
+        # question; only the sign of the answer differs, so restricting it to short puts was an
+        # arbitrary line.
+        assert body.count('class="row-open"') == 4
+        assert body.count('"option_type"') == 4 and body.count('"is_short"') == 4
+        # ...and nothing that is not an option: a bond has no strike to roll
+        assert "912810FB9" in body and body.count('class="row-open"') == 4
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -953,7 +958,7 @@ def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:
     try:
         body = c.get("/portfolio/exits", params={
             "symbol": "AAPL", "strike": 190.0, "expiry": "2026-09-18", "contracts": 2}).text
-        assert "If assigned on 18 Sep, writing a call would pay" in body
+        assert "If assigned on 18 Sep, writing a call would" in body
         assert "28-day $190 call" in body
         assert "Est. premium" in body and "Days held" in body and "Shares worth" in body
         # the ranked table above it must not have absorbed the row

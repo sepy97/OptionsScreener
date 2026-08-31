@@ -76,13 +76,16 @@
               <tbody>
                 {# soonest first: the near expiry is the one that needs a decision #}
                 {% for p in open_options | sort(attribute='dte') %}
-                  {# A short put row IS the control: clicking it opens the priced ways out,
-                     clicking again closes them. Only short puts — the comparison is written for
-                     an obligation with collateral behind it, and a long option has neither. #}
-                  <tr{% if p.kind == 'short_put' %} class="row-open"
+                  {# The row IS the control: clicking it opens the priced ways out, clicking
+                     again closes them. Every option qualifies — short or long, put or call —
+                     since all four face the same question, and only the SIGN of the answer
+                     differs: a short earns the time value it holds, a long pays it. #}
+                  <tr{% if p.is_option and p.strike and p.expiration %} class="row-open"
                       hx-get="/portfolio/exits" hx-sync="this:drop"
                       hx-vals='{"symbol": "{{ p.underlying }}", "strike": "{{ p.strike }}",
-                                "expiry": "{{ p.expiration }}", "contracts": "{{ p.quantity }}"}'
+                                "expiry": "{{ p.expiration }}", "contracts": "{{ p.quantity }}",
+                                "option_type": "{{ p.option_type.value if p.option_type else 'put' }}",
+                                "is_short": "{{ 'true' if p.kind in ('short_put', 'short_call') else 'false' }}"}'
                       hx-target="this" hx-swap="afterend"
                       hx-on::before-request="let d=this.nextElementSibling;
                         if(d&&d.classList.contains('detail')){d.remove();event.preventDefault();}"

@@ -299,6 +299,8 @@ class ScreenerService:
         *,
         min_dte: int = 1,
         max_dte: int = 120,
+        option_type: OptionType = OptionType.PUT,
+        is_short: bool = True,
         roll_strike: float | None = None,
         call_strike: float | None = None,
     ):
@@ -318,28 +320,28 @@ class ScreenerService:
         lo = max(1, min(min_dte, held_dte))
         hi = max(max_dte, held_dte)
 
-        put_filt = ChainFilter(
-            option_type=OptionType.PUT, min_dte=lo, max_dte=hi, min_open_interest=0
-        )
-        put_chain = self.chains.get_chain(symbol, put_filt)
-        spot = put_chain.underlying_price
+        own_chain = self.chains.get_chain(symbol, ChainFilter(
+            option_type=option_type, min_dte=lo, max_dte=hi, min_open_interest=0
+        ))
+        spot = own_chain.underlying_price
         if not spot or spot <= 0:
             quote = getattr(self.chains, "spot", None)
             spot = quote(symbol) if callable(quote) else None
 
-        calls: list = []
-        if exits.is_in_the_money(strike, spot):
-            call_chain = self.chains.get_chain(
-                symbol,
-                ChainFilter(option_type=OptionType.CALL, min_dte=lo, max_dte=hi,
-                            min_open_interest=0),
-            )
-            calls = call_chain.contracts
+        # The opposite side is only worth a request when there is an assignment to plan past:
+        # a SHORT position, in the money. Long options are exercised by choice and out-of-the-
+        # money ones simply expire, so a second chain pull would buy nothing.
+        opposite: list = []
+        if is_short and exits.is_in_the_money(strike, spot, option_type):
+            other = (OptionType.CALL if option_type is OptionType.PUT else OptionType.PUT)
+            opposite = self.chains.get_chain(symbol, ChainFilter(
+                option_type=other, min_dte=lo, max_dte=hi, min_open_interest=0
+            )).contracts
 
         rows, after = exits.compare(
-            put_chain.contracts, calls, strike=strike, expiration=expiration,
-            contracts=contracts, spot=spot, today=today, roll_strike=roll_strike,
-            call_strike=call_strike,
+            own_chain.contracts, opposite, strike=strike, expiration=expiration,
+            contracts=contracts, spot=spot, today=today, option_type=option_type,
+            is_short=is_short, roll_strike=roll_strike, call_strike=call_strike,
         )
         logger.info(
             "exits: %s $%g %s -> %d alternative(s), %d post-assignment (spot %s)",
