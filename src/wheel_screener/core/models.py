@@ -112,17 +112,34 @@ class ScreenCriteria(BaseModel):
     dte_tolerance: int = 0
     # ranking / liquidity gates
     min_annualized_yield: float | None = None  # e.g. 0.15 == 15%/yr floor
-    # Liquidity floor, measured as the strictest per-contract gate in the screen: only 12.6%
-    # of contracts cleared 100, and dropping it entirely more than doubled the result count.
-    # 50 open contracts is still a real market on the far-OTM strikes this strategy sells.
-    min_open_interest: int = 50
-    # There is deliberately NO spread cap and NO premium floor here. Both were junk-quote
-    # guards, and both were measured to be nearly inert: switching them off changed a live
-    # screen by 1 and 3 names respectively. What they were guarding against is already covered
-    # — a contract needs a real bid (> 0) to be priceable at all, and `min_annualized_yield`
-    # rejects a token premium far more directly than a dollar floor can, because it weighs the
-    # credit against the collateral actually tied up. The spread stays a RESULTS COLUMN: it is
-    # an exit cost the user should see, not a threshold applied behind their back.
+    # Positions outstanding. Stale by a day and cumulative, so it is a lagging proxy for what
+    # the book states directly — but it survives the close, which the book does not. 100 is the
+    # floor the literature names as "avoid below": under it, spreads routinely exceed $0.20.
+    min_open_interest: int = 100
+    # ── liquidity ────────────────────────────────────────────────────────────────────────
+    # Four measures, applied together and identically whatever the clock says. That last part
+    # matters: OPEN INTEREST and VOLUME are daily aggregates, so they mean the same thing at
+    # 3am Sunday as at noon Tuesday, while SPREAD and BID SIZE come from a live book that is
+    # pulled at the close. Switching rules by market hours would make a screen unreproducible,
+    # so the same four always apply and a weekend simply reads stricter.
+    #
+    # The spread cap was removed once before, on the evidence that switching it off changed a
+    # screen by ONE name. That measured the wrong thing: its job is fill quality, not candidate
+    # count. Measured properly, roughly half of an unfiltered screen carries a spread you could
+    # not trade inside — one had a $1.96 bid against an $8.18 ask.
+    max_bid_ask_spread_pct: float = 0.30
+    # ...but percentage spread scales inversely with premium, and this strategy sells cheap
+    # far-OTM puts. A penny-wide market on a 20c contract is 25% and perfectly tradeable, so an
+    # absolutely narrow spread is exempt from the percentage test. That bias is what made the
+    # original cap look useless.
+    spread_abs_exempt: float = 0.05
+    # Contracts traded in the session. Nearly free at 1 — everything with a real market also
+    # trades — which is exactly why it is worth having: it costs nothing and catches a contract
+    # whose quote is a leftover from six weeks ago.
+    min_volume: int = 1
+    # Contracts bid for at the top of the book: can this actually be sold, and how many. The
+    # only one of the four that answers that directly rather than by proxy.
+    min_bid_size: int = 10
     # optional IV floor on the selected put (None = off). Elevated IV = richer premium; when set,
     # a contract must have a known implied vol at or above this fraction (0.40 == 40%) to qualify.
     min_iv: float | None = None

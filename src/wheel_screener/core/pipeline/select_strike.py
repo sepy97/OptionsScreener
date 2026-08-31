@@ -93,7 +93,8 @@ def _eligible_contracts(
 ) -> list[OptionContract]:
     """Contracts of ``option_type`` that pass the sellability gates: has a delta, DTE within
     [min,max] (±tolerance), |delta| <= max_abs_delta, open interest >= min, a real sellable bid
-    (>0 — the yield floor, not a dollar threshold, is what rejects a token credit), (when a
+    (>0 — the yield floor, not a dollar threshold, is what rejects a token credit), a market
+    liquid enough to trade (see ``_tradeable_spread``, plus volume and bid-size floors), (when a
     min_iv floor is set) a known IV >= it, and — when a ``guard`` is supplied — no earnings
     report inside the contract's life.
 
@@ -110,14 +111,34 @@ def _eligible_contracts(
         and (lo - tol) <= c.dte <= (hi + tol)
         and abs(c.delta) <= criteria.max_abs_delta
         and (c.open_interest or 0) >= criteria.min_open_interest
+        and (c.volume or 0) >= criteria.min_volume
+        and (c.bid_size or 0) >= criteria.min_bid_size
         and c.bid is not None
         and c.bid > 0
+        and _tradeable_spread(c, criteria)
         and (
             criteria.min_iv is None
             or (c.implied_volatility is not None and c.implied_volatility >= criteria.min_iv)
         )
         and not (guard is not None and guard.blocks(c.underlying_symbol, c.expiration))
     ]
+
+
+def _tradeable_spread(c: OptionContract, criteria: ScreenCriteria) -> bool:
+    """Is the gap between bid and ask one a seller could work inside?
+
+    Percentage against the mid, because the cost of crossing is what matters and a dollar is a
+    different cost on a 20c contract than on a $30 one. An absolutely narrow spread is exempt:
+    a penny wide on a cheap far-OTM put reads as 25% and is perfectly tradeable, and rejecting
+    those is what made the first version of this cap look like it did nothing useful.
+    """
+    if c.bid is None or c.ask is None or c.ask <= 0:
+        return False
+    gap = c.ask - c.bid
+    if gap <= criteria.spread_abs_exempt:
+        return True
+    mid = (c.ask + c.bid) / 2
+    return mid > 0 and (gap / mid) <= criteria.max_bid_ask_spread_pct
 
 
 def _best_per_expiry(

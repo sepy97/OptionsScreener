@@ -20,7 +20,7 @@ from wheel_screener.core.service import ScreenerService
 _BASE = date(2026, 6, 22)
 
 
-def _put(strike, delta, dte, bid, oi=500, spread=0.02, iv=None):
+def _put(strike, delta, dte, bid, oi=500, spread=0.02, iv=None, vol=50, bid_size=100):
     return OptionContract(
         underlying_symbol="AAA",
         option_symbol=f"AAA-{dte}-{int(strike)}",
@@ -32,11 +32,13 @@ def _put(strike, delta, dte, bid, oi=500, spread=0.02, iv=None):
         bid=bid,
         ask=round(bid * (1 + spread), 4),
         open_interest=oi,
+        volume=vol,
+        bid_size=bid_size,
         implied_volatility=iv,
     )
 
 
-def _call(strike, delta, dte, bid, oi=500, spread=0.02, iv=None):
+def _call(strike, delta, dte, bid, oi=500, spread=0.02, iv=None, vol=50, bid_size=100):
     return OptionContract(
         underlying_symbol="AAA",
         option_symbol=f"AAA-C-{dte}-{int(strike)}",
@@ -48,6 +50,8 @@ def _call(strike, delta, dte, bid, oi=500, spread=0.02, iv=None):
         bid=bid,
         ask=round(bid * (1 + spread), 4),
         open_interest=oi,
+        volume=vol,
+        bid_size=bid_size,
         implied_volatility=iv,
     )
 
@@ -69,32 +73,41 @@ def test_select_put_picks_best_yield_near_target_delta():
 
 
 def test_select_put_applies_gates():
-    crit = ScreenCriteria(min_dte=30, max_dte=45)  # defaults: min_oi=50, |Δ| <= 0.30
-    assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=49)]), crit) is None      # low OI
-    assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=50)]), crit) is not None  # on the floor
+    crit = ScreenCriteria(min_dte=30, max_dte=45)  # defaults: OI 100, vol 1, bid size 10
+    assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=99)]), crit) is None      # low OI
+    assert select_put(_chain([_put(90, -0.20, 40, 1.5, oi=100)]), crit) is not None  # on it
+    assert select_put(_chain([_put(90, -0.20, 40, 1.5, vol=0)]), crit) is None      # never traded
+    assert select_put(_chain([_put(90, -0.20, 40, 1.5, bid_size=9)]), crit) is None  # no depth
+    assert select_put(_chain([_put(90, -0.20, 40, 1.5, bid_size=10)]), crit) is not None
     assert select_put(_chain([_put(90, -0.40, 40, 1.5)]), crit) is None  # |delta|>0.30
     assert select_put(_chain([_put(90, -0.20, 10, 1.5)]), crit) is None  # DTE below window
     assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # bid 0 = unsellable
 
 
-def test_the_spread_cap_and_premium_floor_no_longer_gate_strike_selection():
-    """Both were junk-quote guards and both measured nearly inert on a live screen — switching
-    them off changed the result by 1 and 3 names. What they were guarding is covered better
-    elsewhere: a contract still needs a real bid to be priceable, and a token credit is rejected
-    by the annualized-yield floor, which weighs it against the collateral actually tied up
-    instead of against a flat dollar threshold. The spread survives as a results COLUMN — an
-    exit cost the user can see, rather than a silent cut."""
-    from wheel_screener.core.ranking import annualized_csp_yield
-
+def test_a_spread_you_could_not_trade_inside_is_rejected_again() -> None:
+    """The cap was removed once on the evidence that switching it off changed a screen by ONE
+    name — which measured candidate count, not fill quality, and those are different questions.
+    Measured properly, half an unfiltered screen carries a spread no seller could work inside:
+    one had a $1.96 bid against an $8.18 ask."""
     crit = ScreenCriteria(min_dte=30, max_dte=45)
-    wide = _put(90, -0.20, 40, 1.5, spread=5.0)   # 143% of mid — once rejected outright
-    assert select_put(_chain([wide]), crit) is not None
-    thin = _put(90, -0.20, 40, 0.05)              # a 5c credit — once under the 30c floor
-    assert select_put(_chain([thin]), crit) is not None
-    # ...and this is what disqualifies the thin one instead: 5c on a $90 strike for 40 days is
-    # 0.5%/yr, an order of magnitude under the form's 10% floor.
-    assert annualized_csp_yield(0.05, 90, 40) < 0.10
-    assert select_put(_chain([_put(90, -0.20, 40, 0.0)]), crit) is None  # no bid = no market
+    ok = _put(90, -0.20, 40, 1.50, spread=0.20)          # 20% of mid
+    assert select_put(_chain([ok]), crit) is not None
+    wide = _put(90, -0.20, 40, 1.50, spread=3.0)         # bid 1.50 against ask 6.00
+    assert select_put(_chain([wide]), crit) is None
+
+
+def test_a_penny_wide_market_on_a_cheap_contract_is_not_punished() -> None:
+    """Percentage spread scales inversely with premium, and this strategy sells cheap far-OTM
+    puts. A 1c spread on a 20c contract reads as 5% of mid... but a 5c one reads as 22%, which
+    is tradeable and would fail the percentage test. Rejecting those is exactly what made the
+    first version of this cap look useless."""
+    crit = ScreenCriteria(min_dte=30, max_dte=45)
+    cheap = _put(90, -0.20, 40, 0.20, spread=0.25)       # 20c bid, 25c ask -> 22% of mid
+    assert (cheap.ask - cheap.bid) <= crit.spread_abs_exempt
+    assert select_put(_chain([cheap]), crit) is not None, "5c wide is tradeable at any price"
+    # ...and the exemption is absolute, so a wide gap on a cheap contract still fails
+    gappy = _put(90, -0.20, 40, 0.20, spread=2.0)        # 20c bid, 60c ask
+    assert select_put(_chain([gappy]), crit) is None
 
 
 def test_select_put_min_iv_floor():
