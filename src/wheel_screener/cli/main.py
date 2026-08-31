@@ -146,11 +146,68 @@ def doctor() -> None:
             failures += 1
             typer.echo(f"  XX {probe.role:24} {probe.name:9} {detail}")
 
+    # The broker link is reported separately because it fails DIFFERENTLY: a data connection
+    # breaks and stays broken until someone fixes it, while this one expires on a clock and is
+    # renewed by a click. Counting it among the failures would make `doctor` exit non-zero once
+    # a week for something that is working exactly as designed.
+    _report_broker(settings)
+
     typer.echo("")
     if failures:
         typer.echo(f"{failures} of {len(probes)} connection(s) unhealthy.", err=True)
         raise typer.Exit(code=1)
     typer.echo(f"All {len(probes)} connection(s) healthy.")
+
+
+def _report_broker(settings: Settings) -> None:
+    """Whether a broker is linked, for how much longer, and whether it actually WORKS.
+
+    The last part is why this calls the broker instead of reading the token file's age. A file
+    can be present, unexpired and useless: authorising again elsewhere revokes the previous
+    refresh token, and a token this app wrote in the wrong shape loaded without complaint and
+    failed every request. Both look identical to a presence check, which is the same reason
+    /health probes its data connections rather than checking that a key is set.
+
+    Never raises. This is the command you run when something is already broken.
+    """
+    from datetime import UTC, datetime
+
+    from wheel_screener.adapters.schwab.link import SchwabOAuthLink
+
+    typer.echo("\nBroker link\n")
+    try:
+        status = SchwabOAuthLink(settings.schwab).status()
+    except Exception as e:  # noqa: BLE001 - report, never crash the diagnostic
+        typer.echo(f"  ?  schwab     could not be read: {e}")
+        return
+
+    if not status.connected or status.expires_at is None:
+        if status.configured:
+            typer.echo("  XX schwab     no usable token — sign in on the Portfolio tab")
+        else:
+            typer.echo("  -  schwab     nobody has signed in, and the web flow is unavailable "
+                       "here (no credentials, or a loopback callback)")
+        return
+
+    hours = (status.expires_at - datetime.now(tz=UTC)).total_seconds() / 3600
+    when = f"expires in {hours:.0f}h ({status.expires_at:%d %b %H:%M} UTC)"
+    try:
+        accounts = build_service(settings).brokerage_accounts()
+    except Exception as e:  # noqa: BLE001 - the failure IS the diagnostic
+        typer.echo(f"  XX schwab     token on disk {when}, but the broker rejected it:")
+        typer.echo(f"                {e}")
+        typer.echo("     sign in again on the Portfolio tab — authorising elsewhere revokes "
+                   "the previous token")
+        return
+
+    mark = "ok" if hours > 48 else "!!"
+    typer.echo(f"  {mark} schwab     {len(accounts)} account(s), {when}")
+    if hours <= 48:
+        typer.echo("     reconnect on the Portfolio tab; it is a click and doubles as the login")
+
+    if not status.configured:
+        typer.echo("     note: the WEB sign-in is unavailable here (loopback callback), so this "
+                   "token came from `auth-login` and must be renewed the same way")
 
 
 @app.command()

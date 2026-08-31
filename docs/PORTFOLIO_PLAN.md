@@ -560,10 +560,22 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
         of the table as the best available action, against shares that would not be owned for
         another three weeks. Two lists now: alternatives available today, and what the capital
         earns after assignment, measured from the assignment date rather than from today.
-- [ ] **P5 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture. Add: a
-      *stale-quote* note for the assignment watch — spot comes from the chain provider on a
-      best-effort basis and an unknown price renders "no quote", which is honest but silent about
-      *why*.
+- [x] **P5 — ops.** Token expiry in `/health` and `doctor`, docs, backup posture, and the
+      stale-quote note on the assignment watch. Two things worth keeping:
+      - **The link is the only part that expires on a clock rather than breaking**, so it is the
+        only part an operator cannot find by waiting for an error. `/health` reports the hours
+        left and warns under 48 — but deliberately does NOT go `degraded`, because a non-200
+        there fails the container healthcheck and rolls back a release over a credential that
+        was always going to lapse and that redeploying cannot renew.
+      - **`doctor` calls the broker rather than reading the token file's age.** A token can sit
+        on disk, unexpired, and be useless: authorising anywhere else revokes the previous one,
+        and the double-wrapped token of v2.6.x loaded without complaint and failed every
+        request. Both look healthy to a presence check — the same reason `/health` probes its
+        data connections instead of checking that a key is set.
+      - **Backup posture is "don't", for the token and sessions.** Written down because the
+        instinct is to back up everything: the token expires in 7 days so a restored copy is
+        usually dead, it is trading-capable so copying it off the box widens the blast radius,
+        and one click replaces it faster than a restore would.
 - [ ] **P6 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
 - [ ] *(later)* **A second broker**, to prove the abstraction is real rather than Schwab wearing a
