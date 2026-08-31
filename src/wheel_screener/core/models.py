@@ -271,6 +271,11 @@ class Position(BaseModel):
     unrealized_pl: float | None = None
     # option rows only
     option_type: OptionType | None = None
+    # From the broker's TRANSACTIONS, not its positions: the day this was opened and the price
+    # it was opened at. Both stay None when the opening trade is outside the 60-day window the
+    # API allows, which is why every figure built on them is optional rather than assumed.
+    opened_on: date | None = None
+    opening_price: float | None = None
     strike: float | None = None
     expiration: date | None = None
     dte: int | None = None
@@ -281,6 +286,28 @@ class Position(BaseModel):
     # Spot at render time, when a quote source is available. Only used to say whether a short put
     # is in the money; None simply hides the assignment column rather than guessing.
     underlying_price: float | None = None
+
+    @property
+    def days_held(self) -> int | None:
+        return None if self.opened_on is None else (date.today() - self.opened_on).days
+
+    @property
+    def original_dte(self) -> int | None:
+        """How long the trade was meant to run when it was put on."""
+        if self.opened_on is None or self.expiration is None:
+            return None
+        return (self.expiration - self.opened_on).days
+
+    @property
+    def planned_yield(self) -> float | None:
+        """The annualised return this was sold for, judged at the moment it was sold.
+
+        Answers "was this a good trade when I made it", which is a different question from
+        what it is worth now — and the only one the entry price can settle.
+        """
+        if not (self.opening_price and self.strike and self.original_dte):
+            return None
+        return (self.opening_price / self.strike) * (365.0 / self.original_dte)
 
     @property
     def label(self) -> str:

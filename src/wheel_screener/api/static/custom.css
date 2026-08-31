@@ -403,3 +403,30 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
   text-transform: uppercase; letter-spacing: 0.03em;
 }
 .exit-controls--after { margin: 0.4rem 0 0.6rem; }
+
+/* ── roll surface ────────────────────────────────────────────────────────────────────── */
+.roll-grid-wrap { margin: 0 0 0.5rem; }
+.roll-grid { table-layout: auto; max-width: none; font-size: 0.8125rem; }
+.roll-grid th, .roll-grid td { padding: 0.3rem 0.4rem; text-align: center; }
+.roll-grid tbody th { text-align: right; white-space: nowrap; font-weight: 600; }
+.roll-grid thead th { font-size: 0.6875rem; }
+.roll-grid .detail-note { display: block; font-size: 0.6875rem; line-height: 1.2; }
+.roll-grid td.rg { padding: 0; }
+.roll-grid td.rg a {
+  display: block; padding: 0.3rem 0.45rem; border-radius: var(--radius-sm);
+  background: var(--wheel-accent-soft); color: inherit; text-decoration: none;
+}
+.roll-grid td.rg a:hover { background: var(--wheel-accent); color: #fff; }
+.roll-grid td.rg a:hover .detail-note { color: rgba(255, 255, 255, 0.8); }
+.roll-grid td.rg-current a { background: var(--sunken); box-shadow: inset 0 0 0 1px var(--border); }
+.roll-grid td.rg-sel a { box-shadow: inset 0 0 0 2px var(--wheel-accent-strong); }
+.roll-grid td.rg-empty { color: var(--pico-muted-color); }
+.roll-context { font-size: 0.8125rem; margin: 0 0 0.6rem; }
+.roll-detail {
+  display: flex; flex-wrap: wrap; gap: 0.4rem 1.75rem; margin: 0.6rem 0 0.4rem;
+  font-size: 0.8125rem;
+}
+.roll-detail div { display: flex; gap: 0.5rem; align-items: baseline; }
+.roll-detail dt { color: var(--pico-muted-color); margin: 0; }
+.roll-detail dd { margin: 0; font-variant-numeric: tabular-nums; }
+.roll-net { font-size: 0.8125rem; margin: 0 0 0.5rem; }

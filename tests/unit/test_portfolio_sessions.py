@@ -700,7 +700,7 @@ def test_no_html_entity_is_double_escaped_on_the_page() -> None:
 
 # ── exit comparison ────────────────────────────────────────────────────────────────────────
 
-def _exits_client(rows=None, spot=185.0, error=None, after=None):
+def _exits_client(rows=None, spot=185.0, error=None, after=None, grid=None):
     from wheel_screener.api.deps import get_service
     from wheel_screener.core.exits import ExitOption
 
@@ -742,7 +742,7 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
             # (alternatives, after-assignment, spot) — the middle list is not an alternative to
             # anything above it, which is why the service hands it back separately
             return (default if rows is None else rows), (
-                default_after if after is None else after), spot
+                default_after if after is None else after), grid, spot
 
     svc = _Svc()
     c = _client()

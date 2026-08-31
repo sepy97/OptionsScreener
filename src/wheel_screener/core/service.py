@@ -8,7 +8,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from wheel_screener.core import exits
+from wheel_screener.core import exits, rollgrid
 from wheel_screener.core.earnings import EarningsGuard
 from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
 from wheel_screener.core.fundamentals import (
@@ -301,15 +301,17 @@ class ScreenerService:
         max_dte: int = 120,
         option_type: OptionType = OptionType.PUT,
         is_short: bool = True,
+        collected: float | None = None,
+        opened_on: date | None = None,
         roll_strike: float | None = None,
         call_strike: float | None = None,
     ):
         """Every way out of one open short put, priced and ranked.
 
-        Returns ``(alternatives, after_assignment, spot)``. The requested DTE window is always
-        widened to contain the position's own expiry — without that contract there is no cost to
-        close, so the baseline "keep" row cannot be formed and the whole table becomes a list of
-        alternatives to nothing.
+        Returns ``(alternatives, after_assignment, roll_grid, spot)``. The requested DTE window
+        is always widened to contain the position's own expiry — without that contract there is
+        no cost to close, so the baseline "keep" row cannot be formed and the whole table becomes
+        a list of alternatives to nothing.
 
         Calls are only fetched when the put is in the money. Out of the money, assignment is not
         the live outcome, so offering an assign-and-write row would compare against a position
@@ -338,6 +340,12 @@ class ScreenerService:
                 option_type=other, min_dte=lo, max_dte=hi, min_open_interest=0
             )).contracts
 
+        grid = rollgrid.build(
+            own_chain.contracts, strike=strike, expiration=expiration, contracts=contracts,
+            spot=spot, today=today, option_type=option_type, collected=collected,
+            opened_on=opened_on,
+        ) if is_short else None
+
         rows, after = exits.compare(
             own_chain.contracts, opposite, strike=strike, expiration=expiration,
             contracts=contracts, spot=spot, today=today, option_type=option_type,
@@ -348,7 +356,7 @@ class ScreenerService:
             symbol, strike, expiration, len(rows), len(after),
             f"{spot:.2f}" if spot else "unknown",
         )
-        return rows, after, spot
+        return rows, after, grid, spot
 
     def search_ticker(
         self,
