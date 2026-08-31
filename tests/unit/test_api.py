@@ -439,9 +439,14 @@ def test_dashboard_renders_form(tmp_path) -> None:
     for name in ("min_price", "max_price", "target_delta", "max_abs_delta",
                  "min_open_interest", "min_iv"):
         assert f'name="{name}"' in r.text
-    # Retired: two junk-quote guards measured to be nearly inert (1 and 3 names on a live
-    # screen), and a timeout box whose blank default disabled the run budget entirely.
-    for gone in ("max_spread_pct", "min_premium", "timeout_seconds"):
+    # The spread cap is BACK. It was retired on the evidence that switching it off changed a
+    # screen by one name — which measured candidate count, not fill quality. Measured properly,
+    # roughly half an unfiltered screen quotes a spread no seller could work inside.
+    for liquidity in ("max_spread_pct", "min_open_interest", "min_bid_size", "min_volume"):
+        assert f'name="{liquidity}"' in r.text
+    # still retired: a dollar premium floor the yield floor already covers, and a timeout box
+    # whose blank default disabled the run budget entirely.
+    for gone in ("min_premium", "timeout_seconds"):
         assert f'name="{gone}"' not in r.text
 
 

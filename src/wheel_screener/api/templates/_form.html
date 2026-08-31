@@ -116,10 +116,28 @@
       </div>
     </div>
     <div class="grid">
+      <label>Max bid-ask spread
+        <input type="number" name="max_spread_pct" value="{{ defaults.max_spread_pct }}"
+               min="0.01" max="1" step="0.01">
+        <small>as a fraction of mid &mdash; 0.30 = 30%. Does most of the liquidity work:
+          around half an unfiltered screen quotes a spread no seller could work inside.
+          Anything under 5&cent; wide is exempt, since a penny market on a cheap contract is
+          tradeable whatever its percentage</small>
+      </label>
       <label>Min open interest
         <input type="number" name="min_open_interest" value="{{ defaults.min_open_interest }}" min="0">
-        <small>contract liquidity floor &mdash; the strictest per-contract gate in the
-          screen, so raising it costs results quickly</small>
+        <small>positions outstanding. Stale by a day, but it survives the close &mdash; below
+          100 spreads routinely exceed 20&cent;</small>
+      </label>
+      <label>Min bid size
+        <input type="number" name="min_bid_size" value="{{ defaults.min_bid_size }}" min="0">
+        <small>contracts bid at the top of book &mdash; the only one of the four that answers
+          &ldquo;can I sell this, and how many&rdquo; directly rather than by proxy</small>
+      </label>
+      <label>Min volume
+        <input type="number" name="min_volume" value="{{ defaults.min_volume }}" min="0">
+        <small>traded in the session. Nearly free at 1, which is the point: it costs nothing
+          and catches a quote left over from six weeks ago</small>
       </label>
       <label>Min IV
         <input type="number" name="min_iv" value="{{ defaults.min_iv or '' }}"

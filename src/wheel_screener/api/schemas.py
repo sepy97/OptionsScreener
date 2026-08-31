@@ -32,7 +32,16 @@ class ScreenRequest(BaseModel):
     # entered as a positive magnitude (0.20); negated to the put's signed delta in to_criteria.
     target_delta: float = Field(0.20, gt=0.0, le=1.0, description="Target put |delta|.")
     max_abs_delta: float = Field(0.30, gt=0.0, le=1.0, description="Widest |delta| kept.")
-    min_open_interest: int = Field(50, ge=0, description="Contract open-interest floor.")
+    # Four liquidity measures, applied together and identically whatever the clock says.
+    # Open interest and volume are daily aggregates and mean the same at 3am Sunday as at noon
+    # Tuesday; spread and bid size read a live book. Switching rules by market hours would make
+    # a screen unreproducible, so all four always apply and a weekend simply reads stricter.
+    min_open_interest: int = Field(100, ge=0, description="Contract open-interest floor.")
+    min_volume: int = Field(1, ge=0, description="Contracts traded in the session.")
+    min_bid_size: int = Field(10, ge=0, description="Contracts bid at the top of book.")
+    max_spread_pct: float = Field(
+        0.30, gt=0.0, le=1.0, description="Bid-ask gap as a fraction of mid."
+    )
     min_iv: float | None = Field(None, ge=0.0, description="Optional IV floor (blank=off).")
 
     @model_validator(mode="after")
@@ -60,5 +69,8 @@ class ScreenRequest(BaseModel):
             target_delta=-abs(self.target_delta),  # puts have negative delta
             max_abs_delta=self.max_abs_delta,
             min_open_interest=self.min_open_interest,
+            min_volume=self.min_volume,
+            min_bid_size=self.min_bid_size,
+            max_bid_ask_spread_pct=self.max_spread_pct,
             min_iv=self.min_iv,
         )

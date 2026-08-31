@@ -75,6 +75,9 @@ def _contract(
         mid=mid,
         bid_size=_int(q.get("bs")),
         ask_size=_int(q.get("as")),
+        # The session's own total, which is why it still means something when the book has
+        # been pulled: Friday's volume is Friday's volume whenever you read it.
+        volume=_int((snap.get("dailyBar") or {}).get("v")),
         open_interest=_int(oi_by_symbol.get(occ)),
         delta=_num(g.get("delta")),
         gamma=_num(g.get("gamma")),

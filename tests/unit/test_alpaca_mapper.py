@@ -53,12 +53,12 @@ def test_alpaca_chain_feeds_select_put() -> None:
     today = date(2026, 6, 25)
     snapshots = {
         "AAA260725P00090000": {  # ~-0.20Δ, liquid -> the pick
-            "latestQuote": {"bp": 1.40, "ap": 1.50}, "greeks": {"delta": -0.20},
-            "impliedVolatility": 0.34,
+            "latestQuote": {"bp": 1.40, "ap": 1.50, "bs": 100}, "greeks": {"delta": -0.20},
+            "impliedVolatility": 0.34, "dailyBar": {"v": 50},
         },
         "AAA260725P00085000": {  # -0.10Δ, lower yield -> not chosen
-            "latestQuote": {"bp": 0.80, "ap": 0.90}, "greeks": {"delta": -0.10},
-            "impliedVolatility": 0.30,
+            "latestQuote": {"bp": 0.80, "ap": 0.90, "bs": 100}, "greeks": {"delta": -0.10},
+            "impliedVolatility": 0.30, "dailyBar": {"v": 50},
         },
     }
     oi = {"AAA260725P00090000": 800, "AAA260725P00085000": 300}
@@ -73,8 +73,8 @@ def test_select_put_honors_strict_dte_window() -> None:
     today = date(2026, 6, 25)
     strict = ScreenCriteria(min_dte=21, max_dte=35)
     far = f"AAA{today + timedelta(days=60):%y%m%d}P00090000"
-    snaps = {far: {"latestQuote": {"bp": 1.4, "ap": 1.5}, "greeks": {"delta": -0.20},
-                   "impliedVolatility": 0.34}}
+    snaps = {far: {"latestQuote": {"bp": 1.4, "ap": 1.5, "bs": 100}, "dailyBar": {"v": 50},
+                   "greeks": {"delta": -0.20}, "impliedVolatility": 0.34}}
     chain = build_chain("AAA", snaps, {far: 800}, today)
     assert select_put(chain, strict) is None  # strict by default: 60 DTE is out of band
     picked = select_put(chain, strict.model_copy(update={"dte_tolerance": 30}))  # opt-in
