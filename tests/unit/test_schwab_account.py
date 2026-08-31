@@ -7,6 +7,8 @@ including the two things that surprised us: `cashBalance` is not necessarily the
 
 from __future__ import annotations
 
+from datetime import date
+
 import pytest
 
 from wheel_screener.adapters.schwab.account import SchwabAccountProvider
@@ -315,3 +317,104 @@ def test_asset_class_is_carried_through_for_options_too() -> None:
     acct = _provider([], _acct_with(_pos(
         "AAPL  260918P00190000", "OPTION", short=1.0))).accounts()[0]
     assert acct.positions[0].is_option is True and acct.positions[0].asset_label == "Option"
+
+
+# ── opening trades ─────────────────────────────────────────────────────────────────────────
+
+def _txn(symbol, when, price, effect="OPENING", asset="OPTION"):
+    return {"type": "TRADE", "tradeDate": when, "transferItems": [
+        {"instrument": {"symbol": symbol, "assetType": asset},
+         "price": price, "amount": -1, "positionEffect": effect}]}
+
+
+class _TxnClient(_Client):
+    def __init__(self, numbers, accounts, transactions, status=200):
+        super().__init__(numbers, accounts, status)
+        self._txns = transactions
+        self.txn_args = None
+
+    def get_transactions(self, account_hash, **kw):
+        self.txn_args = {"account_hash": account_hash, **kw}
+        return _Response(self._txns, 200)
+
+
+def _with_txns(accounts, transactions):
+    client = _TxnClient([], accounts, transactions)
+    prov = SchwabAccountProvider(
+        SchwabSettings(client_id="k", client_secret="s"), client_factory=lambda _s: client)
+    return prov.accounts(), client
+
+
+def test_a_position_is_dated_from_its_opening_trade() -> None:
+    """The positions endpoint has no open date. Without one there is no holding period, and no
+    way to say what the trade was sold for versus what it is worth now."""
+    occ = "AAPL  260918P00190000"
+    accts, _ = _with_txns(
+        _acct_with(_pos(occ, "OPTION", short=1.0, instrument={"underlyingSymbol": "AAPL"})),
+        [_txn(occ, "2026-08-07T14:32:00+0000", 3.85)])
+    p = accts[0].positions[0]
+    assert p.opened_on == date(2026, 8, 7) and p.opening_price == 3.85
+
+
+def test_the_earliest_opening_fill_dates_a_position_built_in_lots() -> None:
+    """Dating from the last top-up would shorten the holding period and flatter the return."""
+    occ = "AAPL  260918P00190000"
+    accts, _ = _with_txns(
+        _acct_with(_pos(occ, "OPTION", short=2.0)),
+        [_txn(occ, "2026-08-20T15:00:00+0000", 3.10),
+         _txn(occ, "2026-08-07T14:32:00+0000", 3.85)])
+    assert accts[0].positions[0].opened_on == date(2026, 8, 7)
+
+
+def test_closing_and_non_option_rows_do_not_date_a_position() -> None:
+    """A roll's near leg is a CLOSING trade; dating from it would time the position from the
+    wrong end."""
+    occ = "AAPL  260918P00190000"
+    accts, _ = _with_txns(
+        _acct_with(_pos(occ, "OPTION", short=1.0)),
+        [_txn(occ, "2026-08-25T15:00:00+0000", 2.10, effect="CLOSING"),
+         _txn("AAPL", "2026-08-01T15:00:00+0000", 180.0, asset="EQUITY")])
+    assert accts[0].positions[0].opened_on is None
+
+
+def test_transactions_are_asked_for_within_the_sixty_day_window() -> None:
+    """Schwab refuses a start_date further back than 60 days, so asking for more is an error
+    rather than a longer history."""
+    from schwab.client import Client
+
+    occ = "AAPL  260918P00190000"
+    _, client = _with_txns(_acct_with(_pos(occ, "OPTION", short=1.0)), [])
+    assert (date.today() - client.txn_args["start_date"]).days <= 60
+    assert client.txn_args["transaction_types"] == [Client.Transactions.TransactionType.TRADE]
+
+
+def test_a_broker_that_will_not_answer_costs_a_date_not_the_page() -> None:
+    class _Angry(_Client):
+        def get_transactions(self, account_hash, **kw):
+            raise RuntimeError("transactions endpoint unavailable")
+
+    occ = "AAPL  260918P00190000"
+    client = _Angry([], _acct_with(_pos(occ, "OPTION", short=1.0)))
+    accts = SchwabAccountProvider(
+        SchwabSettings(client_id="k", client_secret="s"),
+        client_factory=lambda _s: client).accounts()
+    assert accts and accts[0].positions[0].opened_on is None
+
+
+def test_transactions_are_not_requested_when_no_options_are_held() -> None:
+    """A share-only account has nothing an opening trade would tell it, so the call is skipped."""
+    _, client = _with_txns(_acct_with(_pos("AAPL", "EQUITY", long=100.0)), [])
+    assert client.txn_args is None
+
+
+def test_planned_yield_is_judged_at_the_moment_the_trade_was_made() -> None:
+    from wheel_screener.core.models import PositionKind
+
+    p = Position(symbol="X", underlying="X", kind=PositionKind.SHORT_PUT, quantity=1,
+                 strike=190.0, expiration=date(2026, 9, 18),
+                 opened_on=date(2026, 8, 7), opening_price=3.85)
+    assert p.original_dte == 42
+    assert abs(p.planned_yield - (3.85 / 190.0) * (365 / 42)) < 1e-9
+    bare = Position(symbol="X", underlying="X", kind=PositionKind.SHORT_PUT, quantity=1,
+                    strike=190.0, expiration=date(2026, 9, 18))
+    assert bare.planned_yield is None and bare.days_held is None

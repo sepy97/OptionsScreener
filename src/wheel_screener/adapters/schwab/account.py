@@ -12,7 +12,7 @@ mapping notes below record what that showed, including two things the documentat
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime, timedelta
 
 import httpx
 
@@ -109,15 +109,91 @@ class SchwabAccountProvider:
             for row in (numbers or [])
             if isinstance(row, dict)
         }
-        return [
+        accounts = [
             self._to_account(entry["securitiesAccount"], hashes)
             for entry in (payload or [])
             if isinstance(entry, dict) and isinstance(entry.get("securitiesAccount"), dict)
         ]
+        for account in accounts:
+            if not any(p.is_option for p in account.positions):
+                continue  # no options, so nothing an opening trade would tell us
+            opened = self._opening_trades(client, account.account_id, date.today())
+            for p in account.positions:
+                match = opened.get(p.symbol)
+                if match is not None:
+                    p.opened_on, p.opening_price = match
+        return accounts
 
     # Rows that are cash by another name. A sweep fund is already counted in the cash balance,
     # so listing it as a holding would double-count it on screen and make "shares held" nonsense.
     _CASH_EQUIVALENT = ("MONEY_MARKET_FUND", "CASH_EQUIVALENT")
+
+    # Schwab refuses a start_date more than 60 days back. That is a real limit and not worth
+    # fighting: a wheel position lives 20-45 days, so its opening trade is inside the window
+    # whenever it matters, and a position older than that simply keeps an unknown open date
+    # rather than blocking the page.
+    TRANSACTION_LOOKBACK_DAYS = 60
+
+    def _opening_trades(self, client, account_hash: str, today: date) -> dict[str, tuple]:
+        """``{option symbol: (opened_on, price per share)}`` for options opened recently.
+
+        The earliest opening fill wins, so a position built in several lots is dated from when
+        it was actually started rather than from the last top-up.
+
+        Best-effort throughout: this enriches a page that already renders without it, so a
+        broker that will not answer costs a date, never the tab.
+        """
+        from schwab.client import Client as _SchwabClient
+
+        try:
+            payload = self._json(client.get_transactions(
+                account_hash,
+                start_date=today - timedelta(days=self.TRANSACTION_LOOKBACK_DAYS),
+                transaction_types=[_SchwabClient.Transactions.TransactionType.TRADE],
+            ))
+        except Exception as e:  # noqa: BLE001 - a missing date must not cost the page
+            logger.info("schwab transactions unavailable (%s); open dates will be blank", e)
+            return {}
+
+        out: dict[str, tuple] = {}
+        for row in payload or []:
+            if not isinstance(row, dict):
+                continue
+            stamp = self._trade_date(row)
+            for item in row.get("transferItems") or []:
+                if not isinstance(item, dict):
+                    continue
+                instrument = item.get("instrument") or {}
+                symbol = str(instrument.get("symbol") or "").strip()
+                if not symbol or str(instrument.get("assetType") or "").upper() != "OPTION":
+                    continue
+                # An opening trade is what dates the position; a close or a roll's near leg
+                # would date it from the wrong end.
+                if str(item.get("positionEffect") or "").upper() not in ("OPENING", ""):
+                    continue
+                price = _num(item, "price")
+                if stamp is None or price is None:
+                    continue
+                current = out.get(symbol)
+                if current is None or stamp < current[0]:
+                    out[symbol] = (stamp, abs(price))
+        return out
+
+    @staticmethod
+    def _trade_date(row: dict) -> date | None:
+        """The day a transaction settled to, from whichever field carries it."""
+        for field in ("tradeDate", "time", "settlementDate"):
+            raw = row.get(field)
+            if not isinstance(raw, str) or not raw:
+                continue
+            try:
+                return datetime.fromisoformat(raw.replace("Z", "+00:00")).date()
+            except ValueError:
+                try:
+                    return date.fromisoformat(raw[:10])
+                except ValueError:
+                    continue
+        return None
 
     def _to_positions(self, acct: dict, today: date) -> list[Position]:
         """Normalise the broker's rows into wheel-shaped holdings.

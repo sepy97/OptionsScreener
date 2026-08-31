@@ -700,7 +700,7 @@ def test_no_html_entity_is_double_escaped_on_the_page() -> None:
 
 # ── exit comparison ────────────────────────────────────────────────────────────────────────
 
-def _exits_client(rows=None, spot=185.0, error=None, after=None):
+def _exits_client(rows=None, spot=185.0, error=None, after=None, grid=None):
     from wheel_screener.api.deps import get_service
     from wheel_screener.core.exits import ExitOption
 
@@ -742,7 +742,7 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None):
             # (alternatives, after-assignment, spot) — the middle list is not an alternative to
             # anything above it, which is why the service hands it back separately
             return (default if rows is None else rows), (
-                default_after if after is None else after), spot
+                default_after if after is None else after), grid, spot
 
     svc = _Svc()
     c = _client()
@@ -796,7 +796,7 @@ def test_ways_out_prices_the_position_that_was_clicked() -> None:
         assert r.status_code == 200
         assert svc.seen["symbol"] == "AAPL" and svc.seen["strike"] == 190.0
         assert svc.seen["expiration"] == _date(2026, 9, 18)
-        assert "Keep to expiry" in r.text
+        assert "Or keep it:" in r.text, "the baseline moved into the header with the grid"
         assert "$190 call" in r.text and "If assigned on 18 Sep" in r.text
         assert "$390" not in r.text, "the panel must answer for the position that was clicked"
     finally:
@@ -841,24 +841,6 @@ def test_an_inverted_dte_range_is_swapped_not_rejected() -> None:
         c.__exit__(None, None, None)
 
 
-def test_the_intrinsic_trap_is_shown_on_the_row_that_carries_it() -> None:
-    """A roll up pays the biggest credit and is usually the worst action. It must not be able to
-    sit at the top of the table looking like free money."""
-    c, _ = _exits_client()
-    try:
-        body = c.get("/portfolio/exits", params={
-            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
-        assert "part of this credit is intrinsic" in body
-        assert "$200 is in the money at $185.00" in body
-        # one Value column: the earnable figure leads, the cheque is a sub-line only on the
-        # rows where the two differ — which is exactly the rows that need explaining
-        assert "-$600" in body and "$2,300.00 cash" in body
-        assert "Cash now" not in body, "the second column was identical on almost every row"
-    finally:
-        app.dependency_overrides.clear()
-        c.__exit__(None, None, None)
-
-
 def test_a_bad_expiry_is_a_422_not_a_traceback() -> None:
     c, _ = _exits_client()
     try:
@@ -892,19 +874,6 @@ def test_the_exit_panel_needs_a_session_like_the_rest_of_the_tab() -> None:
         c.__exit__(None, None, None)
 
 
-def test_the_cash_subline_appears_only_where_it_differs_from_value() -> None:
-    """Keeping, assign-and-write and same-strike rolls all have cheque == earnable. Printing it
-    twice on every one of those rows is what made the second column worth removing."""
-    c, _ = _exits_client()
-    try:
-        body = c.get("/portfolio/exits", params={
-            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
-        assert body.count("cash</span>") == 1, "only the roll that sells intrinsic explains itself"
-    finally:
-        app.dependency_overrides.clear()
-        c.__exit__(None, None, None)
-
-
 def test_the_panel_lets_its_prose_wrap() -> None:
     """`th, td { white-space: nowrap }` is global and white-space inherits, so every sentence in
     the panel ran off the side of the page."""
@@ -912,30 +881,6 @@ def test_the_panel_lets_its_prose_wrap() -> None:
     assert ".exits-row > td { white-space: normal; }" in css
     wrap = ".exits table td:first-child, .exits table th:first-child"
     assert wrap + " { white-space: normal; }" in css
-
-
-def test_a_strike_warning_is_said_once_not_on_every_row() -> None:
-    """The warnings describe the STRIKE chosen, not the expiry, so repeating them down a ladder
-    of eight rolls tripled every row's height and buried the numbers."""
-    from wheel_screener.core.exits import ExitOption
-
-    ladder = [
-        ExitOption(kind="roll", label=f"Roll to {d} Sep", credit=100.0 * i, days=7 * i,
-                   collateral=15500.0, extrinsic=100.0 * i, strike=155.0,
-                   collateral_delta=500.0, warnings=("$155 is in the money at $150.00",))
-        for i, d in enumerate(("11", "18", "25"), start=1)
-    ]
-    c, _ = _exits_client(rows=ladder)
-    try:
-        body = c.get("/portfolio/exits", params={
-            "symbol": "QCOM", "strike": 150.0, "expiry": "2026-09-04",
-            "roll_strike": "155"}).text
-        assert body.count("$155 is in the money") == 1
-        assert 'class="exit-warnings"' in body, "said once, above the table it applies to"
-        assert body.count("Roll to") == 3, "and every row is still listed"
-    finally:
-        app.dependency_overrides.clear()
-        c.__exit__(None, None, None)
 
 
 def test_the_exit_table_declares_its_column_widths() -> None:
@@ -962,35 +907,9 @@ def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:
         assert "28-day $190 call" in body
         assert "Est. premium" in body and "Days held" in body and "Shares worth" in body
         # the ranked table above it must not have absorbed the row
-        ranked = body[:body.index("If assigned on")]
-        assert "28-day $190 call" not in ranked
-        assert "Keep to expiry" in ranked
-    finally:
-        app.dependency_overrides.clear()
-        c.__exit__(None, None, None)
-
-
-def test_the_days_column_headlines_one_quantity_in_every_row() -> None:
-    """"26" and "56 added" were not the same measurement, and "56 added" said neither what 56
-    was added TO nor what the run came to. Every headline is now days committed from today; a
-    roll breaks that down underneath, which also shows the figure its rate is scored on."""
-    from wheel_screener.core.exits import ExitOption
-
-    rows = [
-        ExitOption(kind="keep", label="Keep to expiry", credit=1249.0, days=26,
-                   collateral=39000.0, extrinsic=1249.0, total_days=26),
-        ExitOption(kind="roll", label="Roll to 20 Nov", credit=871.0, days=56,
-                   collateral=39000.0, extrinsic=871.0, strike=390.0, total_days=82),
-    ]
-    c, _ = _exits_client(rows=rows)
-    try:
-        body = c.get("/portfolio/exits", params={
-            "symbol": "AVGO", "strike": 390.0, "expiry": "2026-09-25"}).text
-        cells = body[body.index("<tbody>"):body.index("</tbody>")]
-        assert "82" in cells and "26 current" in cells and "56 added" in cells
-        assert "56 added" not in cells.split("Roll to 20 Nov")[0], "the split is on the roll row"
-        # 26 + 56 = 82: the breakdown must actually reconcile with the headline
-        assert "26 current\n                    + 56 added" in cells
+        above = body[:body.index("If assigned on")]
+        assert "28-day $190 call" not in above, "the continuation stays in its own section"
+        assert "Or keep it:" in above
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -1031,7 +950,9 @@ def test_no_call_strike_control_when_there_is_nothing_for_it_to_do() -> None:
             "symbol": "QCOM", "strike": 150.0, "expiry": "2026-09-04"}).text
         assert "If assigned on" not in body
         assert 'name="call_strike"' not in body
-        assert 'name="roll_strike"' in body, "the roll controls still apply"
+        # the grid replaced the roll-strike box: you pick a cell rather than typing a strike
+        assert 'name="roll_strike"' not in body
+        assert 'name="min_dte"' in body, "the window controls still bound the grid"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -1050,6 +971,41 @@ def test_every_control_in_the_panel_is_inside_its_form() -> None:
         opened, closed = body.index("<form"), body.index("</form>")
         for m in re.finditer(r'<(?:input|button|select|textarea)\b', body):
             assert opened < m.start() < closed, f"control at {m.start()} is outside the form"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_grid_replaced_the_ladder_rather_than_joining_it() -> None:
+    """A roll is one decision over two axes, and the grid shows both. Leaving the old
+    one-strike-at-a-time table beside it would list the same rolls twice."""
+    from datetime import date as _d
+    from datetime import timedelta as _td
+
+    from wheel_screener.core import rollgrid
+    from wheel_screener.core.models import OptionContract, OptionType
+
+    today, exp = _d.today(), _d.today() + _td(days=26)
+    chain = [
+        OptionContract(underlying_symbol="AVGO", option_symbol=f"A{k}{d}",
+                       option_type=OptionType.PUT, expiration=today + _td(days=d), strike=k,
+                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800)
+        for k, b in ((390.0, 33.4), (385.0, 30.3), (380.0, 27.4))
+        for d, b in ((26, b), (33, b + 1.6), (40, b + 2.9))
+    ]
+    grid = rollgrid.build(chain, strike=390.0, expiration=exp, contracts=1, spot=368.75,
+                          today=today, collected=36.10)
+    c, _ = _exits_client(grid=grid)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AVGO", "strike": 390.0, "expiry": exp.isoformat(),
+            "collected": "36.10"}).text
+        assert 'class="roll-grid"' in body
+        # scoped above the post-assignment table, which legitimately keeps its own rate column
+        above = body.split("If assigned on")[0]
+        assert "Roll to " not in above, "the ladder's rows are gone"
+        assert "Rate/yr" not in above, "and so is its rate column"
+        assert "Or keep it:" in above, "the baseline it carried lives in the header now"
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)

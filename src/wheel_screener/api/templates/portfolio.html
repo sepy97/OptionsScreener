@@ -85,7 +85,9 @@
                       hx-vals='{"symbol": "{{ p.underlying }}", "strike": "{{ p.strike }}",
                                 "expiry": "{{ p.expiration }}", "contracts": "{{ p.quantity }}",
                                 "option_type": "{{ p.option_type.value if p.option_type else 'put' }}",
-                                "is_short": "{{ 'true' if p.kind in ('short_put', 'short_call') else 'false' }}"}'
+                                "is_short": "{{ 'true' if p.kind in ('short_put', 'short_call') else 'false' }}",
+                                "collected": "{{ p.opening_price or p.average_price or '' }}",
+                                "opened": "{{ p.opened_on or '' }}"}'
                       hx-target="this" hx-swap="afterend"
                       hx-on::before-request="let d=this.nextElementSibling;
                         if(d&&d.classList.contains('detail')){d.remove();event.preventDefault();}"

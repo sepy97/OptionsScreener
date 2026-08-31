@@ -26,10 +26,6 @@
       <div class="exit-controls">
       {# Same strike is the default because it is the only roll that is purely an extension of
          time. A different strike is offered — traders do it — and annotated rather than hidden. #}
-      <label>Roll strike
-        <input type="text" name="roll_strike" value="{{ roll_strike }}" inputmode="decimal"
-               placeholder="same (${{ '%g'|format(strike) }})">
-      </label>
       <label>Min DTE
         <input type="number" name="min_dte" value="{{ min_dte }}" min="1" max="400">
       </label>
@@ -47,63 +43,123 @@
       {# Every warning here describes the STRIKE that was chosen, not the individual expiry, so
          each one was repeating identically down the whole ladder and tripling every row's
          height. Said once, above the table it applies to. #}
-      {% set notes = [] %}
-      {% for r in rows %}{% for w in r.warnings %}
-        {% if w not in notes %}{% set _ = notes.append(w) %}{% endif %}
-      {% endfor %}{% endfor %}
-      {% if notes %}
-        <ul class="exit-warnings">
-          {% for w in notes %}<li>{{ w }}</li>{% endfor %}
-        </ul>
+      {% if grid and grid.collected %}
+        {# What the position has already done. Closing is the roll-to-nothing case, so it is
+           priced here rather than in a view of its own. #}
+        <p class="roll-context">
+          Collected <b>${{ '%.2f'|format(grid.collected) }}/sh</b>{% if grid.opened_on %}
+            on {{ grid.opened_on.strftime('%d %b') }}{% endif %}{% if grid.planned_yield %}
+            &mdash; sold for <b>~{{ '%.0f'|format(100 * grid.planned_yield) }}%/yr</b> held to
+            expiry{% endif %}<br>
+          Buying it back costs <b>${{ '%.2f'|format(grid.close_cost) }}/sh</b>
+          {% if grid.captured is not none %}
+            &rarr; <b>{{ '%.0f'|format(100 * grid.captured) }}% captured</b>
+          {% endif %}
+          {% if grid.close_books is not none %}
+            &middot; closing now books <b>{{ grid.close_books | money }}</b>
+          {% endif %}
+          {# The pair that decides an early close: capturing most of the premium in a fraction
+             of the time beats holding, and only these two side by side say so. #}
+          {% if grid.realised_yield and grid.days_held %}
+            <b>({{ '%.0f'|format(100 * grid.realised_yield) }}%/yr over
+            {{ grid.days_held }}d held)</b>
+          {% endif %}
+        </p>
       {% endif %}
-      <figure>
-      <table>
-        <thead><tr>
-          <th>Action</th><th>Value</th><th>Days</th><th>Collateral</th><th>Rate/yr</th>
-        </tr></thead>
-        <tbody>
-          {% for r in rows %}
-            <tr{{ ' class="exit-best"'|safe if loop.first }}>
-              <td><b>{{ r.label }}</b></td>
-              <td>
-                {# The earnable money, which is also what the rate is built from. For keeping,
-                   assign-and-write and same-strike rolls it IS the cheque. It differs only when
-                   a roll sells intrinsic, and then the cheque is shown underneath rather than
-                   given a column of its own that is identical on almost every row. #}
-                {{ r.extrinsic | money }}
-                {% if r.extrinsic is not none and r.credit != r.extrinsic %}
-                  <br><span class="detail-note">{{ r.credit | money }} cash</span>
-                {% endif %}
-              </td>
-              {# The headline is one consistent quantity in every row: days the capital is tied
-                 up from today. That was the real inconsistency — "26" and "56 added" were not
-                 the same measurement, and "56 added" said neither what 56 was added TO nor what
-                 the run came to. A roll breaks its total down underneath, which also shows the
-                 56 the rate is scored on. #}
-              <td>
-                {{ r.total_days if r.total_days is not none else r.days }}
-                {% if r.kind == 'roll' and r.total_days is not none %}
-                  <br><span class="detail-note">{{ r.total_days - r.days }} current
-                    + {{ r.days }} added</span>
-                {% endif %}
-              </td>
-              {# the figure itself carries the change; the notice above says what it costs #}
-              <td>{{ r.collateral | money }}</td>
-              <td class="{{ 'y-hi' if r.rate and r.rate >= 0.25 else ('y-mid' if r.rate and r.rate >= 0.15 else 'y-lo') }}">
-                {{ '%.1f%%'|format(r.rate * 100) if r.rate is not none else '—' }}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      </figure>
-      <p class="detail-note">Value is the money that changes hands &mdash; earned on a short
-        position, paid on a long one &mdash; and the rate is that over the capital it commits,
-        annualised &mdash; the same unit for every row, so the top one
-        wins. Where a row also shows a cash figure, the gap is intrinsic being sold: money that
-        arrives now and is handed back at expiry. A roll is scored over the days it
-        <em>adds</em> &mdash; the second figure in its Days cell &mdash; since the days before
-        your current expiry are yours either way.</p>
+
+      {# Its own paragraph, not part of the grid's header: a long position has no roll surface
+         (there is no assignment to plan past) and still has a baseline worth stating. #}
+      {% set held = rows | selectattr('kind', 'equalto', 'keep') | list | first %}
+      {% if held %}
+        <p class="roll-context">Or keep it: <b>{{ held.credit | money }}</b>
+          {{ 'earned' if held.credit >= 0 else 'paid' }} over <b>{{ held.days }} days</b>,
+          <b>{{ '%.1f%%'|format(100 * held.rate) }}/yr</b> on {{ held.collateral | money }}
+          &mdash; the baseline anything else is judged against.</p>
+      {% endif %}
+
+      {# The roll SURFACE. A roll is one decision over two axes — which strike, how long — and
+         the interesting cells are diagonal, so a pair of ladders makes the reader reprice one
+         at a time to compare what a grid shows at once. Each cell is the net credit per share
+         against buying the current leg back; beneath it, that credit spread over the days it
+         adds. The current expiry has no added days to divide by, so its column carries
+         assignment odds instead of a divide-by-zero dressed up as data. #}
+      {% if grid %}
+        <figure class="roll-grid-wrap">
+        <table class="roll-grid">
+          <thead><tr><th>Strike</th>
+            {% for e in grid.expiries %}
+              <th>{{ e.strftime('%d %b') }}<span class="detail-note">
+                {{ (e - grid.current_expiry).days + (grid.current_expiry - today).days }}d</span></th>
+            {% endfor %}
+          </tr></thead>
+          <tbody>
+            {% for k in grid.strikes %}
+              <tr>
+                <th>${{ '%g'|format(k) }}{% if k == grid.current_strike %}
+                  <span class="detail-note">now</span>{% endif %}</th>
+                {% for e in grid.expiries %}
+                  {% set c = grid.cell(k, e) %}
+                  {% if c is none or c.net_credit is none %}
+                    <td class="rg-empty">&mdash;</td>
+                  {% else %}
+                    <td class="rg{{ ' rg-current' if c.is_current }}{{ ' rg-sel' if selected
+                        and selected.strike == c.strike and selected.expiration == c.expiration }}">
+                      <a href="#" hx-get="/portfolio/exits" hx-target="closest tr" hx-swap="outerHTML"
+                         hx-vals='{"symbol": "{{ symbol }}", "strike": "{{ strike }}",
+                                   "expiry": "{{ expiry }}", "contracts": "{{ contracts }}",
+                                   "option_type": "{{ option_type }}",
+                                   "is_short": "{{ 'true' if is_short else 'false' }}",
+                                   "collected": "{{ collected }}",
+                                   "cell_strike": "{{ c.strike }}",
+                                   "cell_expiry": "{{ c.expiration }}"}'>
+                        {% if c.is_current %}<b>current</b>{% else %}
+                          <b>{{ '%+.2f'|format(c.net_credit) }}</b>{% endif %}
+                        <span class="detail-note">
+                          {%- if c.per_day is not none -%}
+                            {{ '%.1f'|format(100 * c.per_day) }}&cent;/d
+                          {%- elif c.assignment_odds is not none -%}
+                            ~{{ '%.0f'|format(100 * c.assignment_odds) }}% odds
+                          {%- else -%}&nbsp;{%- endif -%}
+                        </span>
+                      </a>
+                    </td>
+                  {% endif %}
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        </figure>
+        {% if not detail %}
+          <p class="detail-note">Pick a cell to see it against the position it would replace.</p>
+        {% endif %}
+        {% if detail %}
+          <dl class="roll-detail">
+            <div><dt>Strike</dt><dd>${{ '%g'|format(detail.from_strike) }} &rarr;
+              <b>${{ '%g'|format(detail.cell.strike) }}</b></dd></div>
+            <div><dt>Expiry</dt><dd>{{ detail.from_expiry.strftime('%d %b') }} &rarr;
+              <b>{{ detail.cell.expiration.strftime('%d %b') }}</b>
+              {% if detail.cell.added_days %}(+{{ detail.cell.added_days }}d){% endif %}</dd></div>
+            {% if detail.from_odds is not none and detail.cell.assignment_odds is not none %}
+              <div><dt>Assignment</dt><dd>~{{ '%.0f'|format(100 * detail.from_odds) }}% &rarr;
+                <b>~{{ '%.0f'|format(100 * detail.cell.assignment_odds) }}%</b></dd></div>
+            {% endif %}
+            {% if detail.to_breakeven is not none %}
+              {# Where the wheel actually settles: strike minus every premium collected so far.
+                 Rolling DOWN improves it twice — lower strike, and more premium banked. #}
+              <div><dt>Breakeven</dt><dd>{{ detail.from_breakeven | money }} &rarr;
+                <b>{{ detail.to_breakeven | money }}</b></dd></div>
+            {% endif %}
+          </dl>
+          <p class="roll-net">Buy back <b>{{ detail.buyback | money }}</b> &rarr; new leg
+            collects <b>{{ detail.opens | money }}</b> &rarr; net
+            <b class="{{ 'y-hi' if detail.net > 0 else 'y-lo' }}">{{ detail.net | money }}</b></p>
+        {% endif %}
+        <p class="detail-note">Cells: net credit per share against buying the current leg back;
+          beneath it, that credit per day added. Odds are |delta| &mdash; the market's own
+          estimate of finishing in the money, quoted rather than modelled. Candidates, not
+          recommendations: a higher strike always pays more because it owes more.</p>
+      {% endif %}
 
       {# NOT an alternative to the rows above. Assignment happens when the put expires, so this
          is what the capital earns AFTER keeping it, not instead of. Ranked together, a call
