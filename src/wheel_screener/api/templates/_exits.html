@@ -26,10 +26,6 @@
       <div class="exit-controls">
       {# Same strike is the default because it is the only roll that is purely an extension of
          time. A different strike is offered — traders do it — and annotated rather than hidden. #}
-      <label>Roll strike
-        <input type="text" name="roll_strike" value="{{ roll_strike }}" inputmode="decimal"
-               placeholder="same (${{ '%g'|format(strike) }})">
-      </label>
       <label>Min DTE
         <input type="number" name="min_dte" value="{{ min_dte }}" min="1" max="400">
       </label>
@@ -69,6 +65,16 @@
             {{ grid.days_held }}d held)</b>
           {% endif %}
         </p>
+      {% endif %}
+
+      {# Its own paragraph, not part of the grid's header: a long position has no roll surface
+         (there is no assignment to plan past) and still has a baseline worth stating. #}
+      {% set held = rows | selectattr('kind', 'equalto', 'keep') | list | first %}
+      {% if held %}
+        <p class="roll-context">Or keep it: <b>{{ held.credit | money }}</b>
+          {{ 'earned' if held.credit >= 0 else 'paid' }} over <b>{{ held.days }} days</b>,
+          <b>{{ '%.1f%%'|format(100 * held.rate) }}/yr</b> on {{ held.collateral | money }}
+          &mdash; the baseline anything else is judged against.</p>
       {% endif %}
 
       {# The roll SURFACE. A roll is one decision over two axes — which strike, how long — and
@@ -154,64 +160,6 @@
           estimate of finishing in the money, quoted rather than modelled. Candidates, not
           recommendations: a higher strike always pays more because it owes more.</p>
       {% endif %}
-
-      {% set notes = [] %}
-      {% for r in rows %}{% for w in r.warnings %}
-        {% if w not in notes %}{% set _ = notes.append(w) %}{% endif %}
-      {% endfor %}{% endfor %}
-      {% if notes %}
-        <ul class="exit-warnings">
-          {% for w in notes %}<li>{{ w }}</li>{% endfor %}
-        </ul>
-      {% endif %}
-      <figure>
-      <table>
-        <thead><tr>
-          <th>Action</th><th>Value</th><th>Days</th><th>Collateral</th><th>Rate/yr</th>
-        </tr></thead>
-        <tbody>
-          {% for r in rows %}
-            <tr{{ ' class="exit-best"'|safe if loop.first }}>
-              <td><b>{{ r.label }}</b></td>
-              <td>
-                {# The earnable money, which is also what the rate is built from. For keeping,
-                   assign-and-write and same-strike rolls it IS the cheque. It differs only when
-                   a roll sells intrinsic, and then the cheque is shown underneath rather than
-                   given a column of its own that is identical on almost every row. #}
-                {{ r.extrinsic | money }}
-                {% if r.extrinsic is not none and r.credit != r.extrinsic %}
-                  <br><span class="detail-note">{{ r.credit | money }} cash</span>
-                {% endif %}
-              </td>
-              {# The headline is one consistent quantity in every row: days the capital is tied
-                 up from today. That was the real inconsistency — "26" and "56 added" were not
-                 the same measurement, and "56 added" said neither what 56 was added TO nor what
-                 the run came to. A roll breaks its total down underneath, which also shows the
-                 56 the rate is scored on. #}
-              <td>
-                {{ r.total_days if r.total_days is not none else r.days }}
-                {% if r.kind == 'roll' and r.total_days is not none %}
-                  <br><span class="detail-note">{{ r.total_days - r.days }} current
-                    + {{ r.days }} added</span>
-                {% endif %}
-              </td>
-              {# the figure itself carries the change; the notice above says what it costs #}
-              <td>{{ r.collateral | money }}</td>
-              <td class="{{ 'y-hi' if r.rate and r.rate >= 0.25 else ('y-mid' if r.rate and r.rate >= 0.15 else 'y-lo') }}">
-                {{ '%.1f%%'|format(r.rate * 100) if r.rate is not none else '—' }}
-              </td>
-            </tr>
-          {% endfor %}
-        </tbody>
-      </table>
-      </figure>
-      <p class="detail-note">Value is the money that changes hands &mdash; earned on a short
-        position, paid on a long one &mdash; and the rate is that over the capital it commits,
-        annualised &mdash; the same unit for every row, so the top one
-        wins. Where a row also shows a cash figure, the gap is intrinsic being sold: money that
-        arrives now and is handed back at expiry. A roll is scored over the days it
-        <em>adds</em> &mdash; the second figure in its Days cell &mdash; since the days before
-        your current expiry are yours either way.</p>
 
       {# NOT an alternative to the rows above. Assignment happens when the put expires, so this
          is what the capital earns AFTER keeping it, not instead of. Ranked together, a call
