@@ -977,6 +977,7 @@ def start_run(
     request: Request,
     top_n: str = Form(""),  # blank = MAX (no cap)
     fundamental_weight: float = Form(0.5),
+    include_etfs: bool = Form(True),
     min_dollar_volume: str = Form("25,000,000"),   # accountant-formatted; commas stripped below
     min_yield: str = Form("0.10"),
     min_dte: int = Form(14),
@@ -996,6 +997,7 @@ def start_run(
     try:
         req = ScreenRequest(
             top_n=_opt_int(top_n), fundamental_weight=fundamental_weight,
+            include_etfs=include_etfs,
             min_dollar_volume=float((min_dollar_volume or "").replace(",", "").strip() or 0),
             min_yield=_opt_float(min_yield),
             min_dte=min_dte, max_dte=max_dte,

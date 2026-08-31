@@ -1189,3 +1189,28 @@ def test_an_etf_row_is_labelled_and_its_fundamental_columns_read_as_not_applicab
     assert 'class="etf-tag"' in gdx and ">ETF<" in gdx
     assert "88/100" in rows and "91%" in rows, "the stock still shows its ratings"
     assert "88/100" not in gdx and "91%" not in gdx, "and the ETF shows neither"
+
+
+def test_the_universe_knob_reaches_the_engine_both_ways(tmp_path) -> None:
+    """Radios, not a checkbox: an unchecked box submits NOTHING, so a default-on checkbox is one
+    the user cannot switch off. Both settings have to actually arrive."""
+    for sent, expected in (("true", True), ("false", False)):
+        svc = _FakeService(result=[_candidate()])
+        runner = _runner(svc, tmp_path / sent)
+        started = _client(runner).post("/runs", data={"include_etfs": sent})
+        runner.wait(_job_id_from(started.text))
+        assert svc.seen_criteria.include_etfs is expected
+
+    # ...and omitting it entirely keeps the default on, as the form always sends one
+    svc = _FakeService(result=[_candidate()])
+    runner = _runner(svc, tmp_path / "default")
+    started = _client(runner).post("/runs", data={})
+    runner.wait(_job_id_from(started.text))
+    assert svc.seen_criteria.include_etfs is True
+
+
+def test_the_form_offers_the_universe_choice_as_a_pair_of_radios(tmp_path) -> None:
+    body = _client(_runner(_FakeService(result=[]), tmp_path)).get("/").text
+    assert 'name="include_etfs" value="true"' in body
+    assert 'name="include_etfs" value="false"' in body
+    assert 'type="checkbox"' not in body, "a default-on checkbox could never be unset"
