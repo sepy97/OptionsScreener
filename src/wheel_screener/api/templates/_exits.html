@@ -86,7 +86,7 @@
       {% if grid %}
         <figure class="roll-grid-wrap">
         <table class="roll-grid">
-          <thead><tr><th>Strike</th>
+          <thead><tr><th>Strike<span class="detail-note">assignment odds</span></th>
             {% for e in grid.expiries %}
               <th>{{ e.strftime('%d %b') }}<span class="detail-note">
                 {{ (e - grid.current_expiry).days + (grid.current_expiry - today).days }}d</span></th>
@@ -95,8 +95,16 @@
           <tbody>
             {% for k in grid.strikes %}
               <tr>
-                <th>${{ '%g'|format(k) }}{% if k == grid.current_strike %}
-                  <span class="detail-note">now</span>{% endif %}</th>
+                {# Odds are mostly a property of the STRIKE — they drift only slowly across
+                   expiries — so they label the row rather than occupying a cell in the one
+                   column that had no added days to divide by. #}
+                {% set here = grid.cell(k, grid.current_expiry) %}
+                <th>${{ '%g'|format(k) }}{% if k == grid.current_strike %} &middot; now{% endif %}
+                  <span class="detail-note">
+                    {%- if here and here.assignment_odds is not none -%}
+                      ~{{ '%.0f'|format(100 * here.assignment_odds) }}%
+                    {%- else -%}&nbsp;{%- endif -%}
+                  </span></th>
                 {% for e in grid.expiries %}
                   {% set c = grid.cell(k, e) %}
                   {% if c is none or c.net_credit is none %}
@@ -112,13 +120,13 @@
                                    "collected": "{{ collected }}",
                                    "cell_strike": "{{ c.strike }}",
                                    "cell_expiry": "{{ c.expiration }}"}'>
+                        {# The total the deal books, not a per-share quote: a five-contract
+                           position books five times what one share's figure suggests. #}
                         {% if c.is_current %}<b>current</b>{% else %}
-                          <b>{{ '%+.2f'|format(c.net_credit) }}</b>{% endif %}
+                          <b>{{ c.credit_total | signed }}</b>{% endif %}
                         <span class="detail-note">
-                          {%- if c.per_day is not none -%}
-                            {{ '%.1f'|format(100 * c.per_day) }}&cent;/d
-                          {%- elif c.assignment_odds is not none -%}
-                            ~{{ '%.0f'|format(100 * c.assignment_odds) }}% odds
+                          {%- if c.per_day_total is not none -%}
+                            {{ c.per_day_total | signed(1) }}/d
                           {%- else -%}&nbsp;{%- endif -%}
                         </span>
                       </a>
@@ -155,10 +163,14 @@
             collects <b>{{ detail.opens | money }}</b> &rarr; net
             <b class="{{ 'y-hi' if detail.net > 0 else 'y-lo' }}">{{ detail.net | money }}</b></p>
         {% endif %}
-        <p class="detail-note">Cells: net credit per share against buying the current leg back;
-          beneath it, that credit per day added. Odds are |delta| &mdash; the market's own
-          estimate of finishing in the money, quoted rather than modelled. Candidates, not
-          recommendations: a higher strike always pays more because it owes more.</p>
+        <p class="detail-note">Cells: what the roll books in total &mdash; the new leg's bid
+          less what buying the current one back costs, for all {{ contracts | int }} contract{{
+          's' if contracts != 1 else '' }} &mdash; with that spread over the days it adds
+          beneath. Odds are <b>|delta|</b>, the market's own estimate of finishing in the money
+          and so of being assigned; shown at your current expiry, since they drift only slowly
+          across later ones. It is the standard desk approximation rather than a true
+          probability, and it is quoted rather than modelled. Candidates, not recommendations:
+          a higher strike always pays more because it owes more.</p>
       {% endif %}
 
       {# NOT an alternative to the rows above. Assignment happens when the put expires, so this
@@ -183,7 +195,7 @@
           <button type="submit" class="secondary outline">Reprice</button>
         </div>
         <figure>
-        <table>
+        <table class="exit-table">
           <thead><tr>
             <th>Write</th><th>Est. premium</th><th>Days held</th><th>Shares worth</th>
             <th>Rate/yr</th>

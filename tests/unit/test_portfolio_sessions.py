@@ -887,8 +887,11 @@ def test_the_exit_table_declares_its_column_widths() -> None:
     """`table { width: 100% }` is global; under auto layout the surplus goes to the widest
     column, stranding a short action label at one end of a half-panel-wide cell."""
     css = pathlib.Path("src/wheel_screener/api/static/custom.css").read_text()
-    assert ".exits table { table-layout: fixed; max-width: 58rem; }" in css
-    assert css.count(".exits table th:nth-child(") == 5, "one declared width per column"
+    assert ".exit-table { table-layout: fixed; max-width: 58rem; }" in css
+    assert css.count(".exit-table th:nth-child(") == 5, "one declared width per column"
+    # Scoped to that table by class. Unscoped, `.exits table th:nth-child(1) { width: 32% }`
+    # also matched the roll grid and gave a third of an eight-column table to its row labels.
+    assert ".exits table th:nth-child(" not in css
 
 
 def test_post_assignment_calls_sit_apart_from_the_alternatives() -> None:

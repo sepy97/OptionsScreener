@@ -371,12 +371,15 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
    sat alone in a cell half the panel wide, with the figure stranded on the far side. Fixed
    layout with declared proportions puts the columns where they are wanted, and the cap stops
    the table sprawling across a wide monitor in the first place. */
-.exits table { table-layout: fixed; max-width: 58rem; }
-.exits table th:nth-child(1), .exits table td:nth-child(1) { width: 32%; }
-.exits table th:nth-child(2), .exits table td:nth-child(2) { width: 16%; }
-.exits table th:nth-child(3), .exits table td:nth-child(3) { width: 14%; }
-.exits table th:nth-child(4), .exits table td:nth-child(4) { width: 20%; }
-.exits table th:nth-child(5), .exits table td:nth-child(5) { width: 18%; }
+/* Scoped to the five-column table these proportions were measured for. Unscoped they also
+   matched the roll grid, where `nth-child(1) { width: 32% }` outranks anything .roll-grid says
+   and handed a third of an eight-column table to the strike labels. */
+.exit-table { table-layout: fixed; max-width: 58rem; }
+.exit-table th:nth-child(1), .exit-table td:nth-child(1) { width: 32%; }
+.exit-table th:nth-child(2), .exit-table td:nth-child(2) { width: 16%; }
+.exit-table th:nth-child(3), .exit-table td:nth-child(3) { width: 14%; }
+.exit-table th:nth-child(4), .exit-table td:nth-child(4) { width: 20%; }
+.exit-table th:nth-child(5), .exit-table td:nth-child(5) { width: 18%; }
 .exits .exit-warnings, .exits > p { max-width: 58rem; }
 .exit-controls input { width: 7.5rem; }
 .exit-warnings {
@@ -408,7 +411,7 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 .roll-grid-wrap { margin: 0 0 0.5rem; }
 .roll-grid { table-layout: auto; max-width: none; font-size: 0.8125rem; }
 .roll-grid th, .roll-grid td { padding: 0.3rem 0.4rem; text-align: center; }
-.roll-grid tbody th { text-align: right; white-space: nowrap; font-weight: 600; }
+.roll-grid tbody th { text-align: right; white-space: nowrap; font-weight: 600; width: 1%; }
 .roll-grid thead th { font-size: 0.6875rem; }
 .roll-grid .detail-note { display: block; font-size: 0.6875rem; line-height: 1.2; }
 .roll-grid td.rg { padding: 0; }

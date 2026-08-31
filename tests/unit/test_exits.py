@@ -329,3 +329,28 @@ def test_the_continuation_is_offered_only_where_assignment_can_happen_to_you() -
         _, after = compare(_PUT_CHAIN, _CALL_CHAIN, strike=390.0, expiration=_HELD, contracts=1,
                            spot=spot, today=TODAY, **kw)
         assert bool(after) is expected, label
+
+
+def test_a_grid_cell_books_the_whole_position_not_one_share() -> None:
+    """A five-contract position books five times what a per-share quote suggests, and the cell
+    is meant to be the value of the deal."""
+    from datetime import timedelta as _td
+
+    from wheel_screener.core import rollgrid
+
+    exp = TODAY + _td(days=26)
+    chain = [
+        OptionContract(underlying_symbol="KGC", option_symbol=f"K{d}", option_type=OptionType.PUT,
+                       expiration=TODAY + _td(days=d), strike=25.0, dte=d,
+                       bid=b, ask=b + 0.05, delta=-0.3, open_interest=500)
+        for d, b in ((26, 0.40), (54, 0.95))
+    ]
+    one = rollgrid.build(chain, strike=25.0, expiration=exp, contracts=1, spot=31.27, today=TODAY)
+    five = rollgrid.build(chain, strike=25.0, expiration=exp, contracts=5, spot=31.27, today=TODAY)
+    later = TODAY + _td(days=54)
+    assert one.cell(25.0, later).credit_total == round(
+        five.cell(25.0, later).credit_total / 5, 2)
+    assert abs(five.cell(25.0, later).credit_total - 5 * 100 * 0.50) < 1e-6
+    # and the per-day figure scales with it rather than staying per-share
+    cell = five.cell(25.0, later)
+    assert abs(cell.per_day_total - cell.credit_total / 28) < 1e-9
