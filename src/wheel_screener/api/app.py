@@ -318,7 +318,19 @@ def _money(v: object) -> str:
     return f"-${abs(v):,.2f}" if v < 0 else f"${v:,.2f}"
 
 
+def _signed(v: object, places: int = 0) -> str:
+    """Compact signed money for a grid cell: +$1,541 / -$229.
+
+    The sign is the first thing read here, so it leads. Jinja's format filter is %-formatting
+    and has no thousands flag, which is why this exists rather than a format string.
+    """
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return "—"
+    return f"{'-' if v < 0 else '+'}${abs(v):,.{places}f}"
+
+
 templates.env.filters["money"] = _money
+templates.env.filters["signed"] = _signed
 
 
 # The pipeline logs one stage line each (captured into job['progress']); we recover the funnel

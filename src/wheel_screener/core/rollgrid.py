@@ -37,10 +37,22 @@ class GridCell:
     open_interest: int | None = None
     is_current: bool = False
 
+    contracts: float = 1.0
+
     @property
     def credit_total(self) -> float | None:
         """What the roll actually books, for the contracts held."""
-        return None if self.net_credit is None else self.net_credit * CONTRACT_MULTIPLIER
+        if self.net_credit is None:
+            return None
+        return self.net_credit * CONTRACT_MULTIPLIER * self.contracts
+
+    @property
+    def per_day_total(self) -> float | None:
+        """That total spread over the days it adds."""
+        total = self.credit_total
+        if total is None or self.added_days <= 0:
+            return None
+        return total / self.added_days
 
 
 @dataclass(frozen=True)
@@ -203,6 +215,7 @@ def build(
             # No added days on the current expiry, so no per-day figure exists there; that
             # column carries the odds instead rather than a divide-by-zero dressed as data.
             per_day=(round(credit / added, 4) if credit is not None and added > 0 else None),
+            contracts=contracts,
             assignment_odds=(abs(c.delta) if c.delta is not None else None),
             open_interest=c.open_interest, is_current=is_current,
         )
