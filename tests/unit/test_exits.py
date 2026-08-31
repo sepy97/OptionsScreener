@@ -354,3 +354,36 @@ def test_a_grid_cell_books_the_whole_position_not_one_share() -> None:
     # and the per-day figure scales with it rather than staying per-share
     cell = five.cell(25.0, later)
     assert abs(cell.per_day_total - cell.credit_total / 28) < 1e-9
+
+
+def test_the_grid_reaches_the_money_from_a_deep_out_of_the_money_strike() -> None:
+    """QCOM's $150 put against a $170 share: extrinsic peaks at the money, so the whole
+    interesting range sits between the strike and the price. Four strikes either side of $150
+    contains none of it, and no amount of scrolling reaches rows that were never in the set."""
+    from wheel_screener.core.rollgrid import _pick_strikes
+
+    listed = {150 + 2.5 * i for i in range(13)} | {120.0, 130.0, 140.0, 190.0}
+    picked = _pick_strikes(listed, 150.0, 170.0, 4)
+    assert 150.0 in picked, "the row the reader came to compare against"
+    assert 170.0 in picked, "and the money, which is where the rolls are"
+    assert all(k in picked for k in (155.0, 160.0, 165.0)), "and everything between"
+
+
+def test_the_held_strike_survives_the_row_cap() -> None:
+    """Trimming happens from whichever end is further from the money, never from the anchors."""
+    from wheel_screener.core.rollgrid import MAX_STRIKE_ROWS, _pick_strikes
+
+    listed = {50.0 + i for i in range(120)}
+    picked = _pick_strikes(listed, 60.0, 150.0, 4)
+    assert 60.0 in picked, "the position's own strike is never trimmed away"
+    assert 150.0 in picked, "nor the money"
+    assert len(picked) >= MAX_STRIKE_ROWS, "the span between anchors is kept and scrolled"
+
+
+def test_a_strike_already_at_the_money_keeps_a_window_either_side() -> None:
+    from wheel_screener.core.rollgrid import _pick_strikes
+
+    listed = {370.0 + 5 * i for i in range(13)} | {350.0, 360.0}
+    picked = _pick_strikes(listed, 390.0, 368.75, 4)
+    assert max(picked) > 390.0 and min(picked) < 370.0, "still centred, not one-sided"
+    assert len(picked) <= 12, "and no wider than it needs to be"
