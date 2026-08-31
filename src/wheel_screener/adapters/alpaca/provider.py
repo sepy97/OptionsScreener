@@ -468,7 +468,7 @@ class AlpacaChainProvider:
             if under:
                 by_name.setdefault(under, {})[occ] = snap
         for sym, per in by_name.items():
-            chain = build_chain(sym, per, oi_by_name.get(sym) or {}, today)
+            chain = build_chain(sym, per, oi_by_name.get(sym) or {}, today, spot=spot.get(sym))
             out[sym] = chain
             self._store_batch_chain(sym, from_date, to_date, side, per, oi_by_name.get(sym) or {})
 

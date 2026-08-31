@@ -110,26 +110,16 @@
                   {% if c is none or c.net_credit is none %}
                     <td class="rg-empty">&mdash;</td>
                   {% else %}
-                    <td class="rg{{ ' rg-current' if c.is_current }}{{ ' rg-sel' if selected
-                        and selected.strike == c.strike and selected.expiration == c.expiration }}">
-                      <a href="#" hx-get="/portfolio/exits" hx-target="closest tr" hx-swap="outerHTML"
-                         hx-vals='{"symbol": "{{ symbol }}", "strike": "{{ strike }}",
-                                   "expiry": "{{ expiry }}", "contracts": "{{ contracts }}",
-                                   "option_type": "{{ option_type }}",
-                                   "is_short": "{{ 'true' if is_short else 'false' }}",
-                                   "collected": "{{ collected }}",
-                                   "cell_strike": "{{ c.strike }}",
-                                   "cell_expiry": "{{ c.expiration }}"}'>
-                        {# The total the deal books, not a per-share quote: a five-contract
-                           position books five times what one share's figure suggests. #}
-                        {% if c.is_current %}<b>current</b>{% else %}
-                          <b>{{ c.credit_total | signed }}</b>{% endif %}
-                        <span class="detail-note">
-                          {%- if c.per_day_total is not none -%}
-                            {{ c.per_day_total | signed(1) }}/d
-                          {%- else -%}&nbsp;{%- endif -%}
-                        </span>
-                      </a>
+                    {# The total the deal books, not a per-share quote: a five-contract
+                       position books five times what one share's figure suggests. #}
+                    <td class="rg{{ ' rg-current' if c.is_current }}">
+                      {% if c.is_current %}<b>current</b>{% else %}
+                        <b>{{ c.credit_total | signed }}</b>{% endif %}
+                      <span class="detail-note">
+                        {%- if c.per_day_total is not none -%}
+                          {{ c.per_day_total | signed(1) }}/d
+                        {%- else -%}&nbsp;{%- endif -%}
+                      </span>
                     </td>
                   {% endif %}
                 {% endfor %}
@@ -138,31 +128,6 @@
           </tbody>
         </table>
         </figure>
-        {% if not detail %}
-          <p class="detail-note">Pick a cell to see it against the position it would replace.</p>
-        {% endif %}
-        {% if detail %}
-          <dl class="roll-detail">
-            <div><dt>Strike</dt><dd>${{ '%g'|format(detail.from_strike) }} &rarr;
-              <b>${{ '%g'|format(detail.cell.strike) }}</b></dd></div>
-            <div><dt>Expiry</dt><dd>{{ detail.from_expiry.strftime('%d %b') }} &rarr;
-              <b>{{ detail.cell.expiration.strftime('%d %b') }}</b>
-              {% if detail.cell.added_days %}(+{{ detail.cell.added_days }}d){% endif %}</dd></div>
-            {% if detail.from_odds is not none and detail.cell.assignment_odds is not none %}
-              <div><dt>Assignment</dt><dd>~{{ '%.0f'|format(100 * detail.from_odds) }}% &rarr;
-                <b>~{{ '%.0f'|format(100 * detail.cell.assignment_odds) }}%</b></dd></div>
-            {% endif %}
-            {% if detail.to_breakeven is not none %}
-              {# Where the wheel actually settles: strike minus every premium collected so far.
-                 Rolling DOWN improves it twice — lower strike, and more premium banked. #}
-              <div><dt>Breakeven</dt><dd>{{ detail.from_breakeven | money }} &rarr;
-                <b>{{ detail.to_breakeven | money }}</b></dd></div>
-            {% endif %}
-          </dl>
-          <p class="roll-net">Buy back <b>{{ detail.buyback | money }}</b> &rarr; new leg
-            collects <b>{{ detail.opens | money }}</b> &rarr; net
-            <b class="{{ 'y-hi' if detail.net > 0 else 'y-lo' }}">{{ detail.net | money }}</b></p>
-        {% endif %}
         <p class="detail-note">Cells: what the roll books in total &mdash; the new leg's bid
           less what buying the current one back costs, for all {{ contracts | int }} contract{{
           's' if contracts != 1 else '' }} &mdash; with that spread over the days it adds
@@ -216,9 +181,7 @@
         </table>
         </figure>
         <p class="detail-note">Estimated from what each tenor pays in <em>today's</em> market,
-          holding price and volatility fixed. Quoting the contract you would actually sell
-          overstates it badly &mdash; a 47-day call priced today, written with 21 days left, read
-          77%/yr where 51% was real.</p>
+          holding price and volatility fixed.</p>
       {% endif %}
     {% endif %}
     </form>

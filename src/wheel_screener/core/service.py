@@ -255,7 +255,9 @@ class ScreenerService:
                 continue
             candidates.append(
                 self._candidate(
-                    u.symbol, put, is_etf=u.is_etf, fundamental_score=u.fundamental_score,
+                    u.symbol, put, is_etf=u.is_etf,
+                    underlying_price=snapshot.underlying_price,
+                    fundamental_score=u.fundamental_score,
                     peer_percentile=u.peer_percentile,
                     next_earnings=u.next_earnings, has_weeklys=u.has_weeklys,
                     earnings_status=guard.status(u.symbol, put.expiration),

@@ -422,17 +422,8 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 .roll-grid td.rg a:hover { background: var(--wheel-accent); color: #fff; }
 .roll-grid td.rg a:hover .detail-note { color: rgba(255, 255, 255, 0.8); }
 .roll-grid td.rg-current a { background: var(--sunken); box-shadow: inset 0 0 0 1px var(--border); }
-.roll-grid td.rg-sel a { box-shadow: inset 0 0 0 2px var(--wheel-accent-strong); }
 .roll-grid td.rg-empty { color: var(--pico-muted-color); }
 .roll-context { font-size: 0.8125rem; margin: 0 0 0.6rem; }
-.roll-detail {
-  display: flex; flex-wrap: wrap; gap: 0.4rem 1.75rem; margin: 0.6rem 0 0.4rem;
-  font-size: 0.8125rem;
-}
-.roll-detail div { display: flex; gap: 0.5rem; align-items: baseline; }
-.roll-detail dt { color: var(--pico-muted-color); margin: 0; }
-.roll-detail dd { margin: 0; font-variant-numeric: tabular-nums; }
-.roll-net { font-size: 0.8125rem; margin: 0 0 0.5rem; }
 .etf-tag {
   margin-left: 0.35rem; padding: 0.05rem 0.3rem; border-radius: 3px; font-size: 0.625rem;
   font-weight: 700; letter-spacing: 0.04em; background: var(--sunken); color: var(--pico-muted-color);

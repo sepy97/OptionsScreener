@@ -23,6 +23,12 @@
       <a href="#" class="detail-close" onclick="this.closest('tr').remove();return false;"
          aria-label="close">{{ icon.close() }}</a>
       <strong>{{ c.symbol }}</strong> <span class="detail-sym">{{ k.option_symbol }} &middot; put</span>
+      {# The price the pick was judged against, not the price now. A stored run is read hours
+         later and the stock moves under it. #}
+      {% if c.underlying_price %}
+        <span class="detail-sym">&middot; spot {{ c.underlying_price | money }}
+          {{ "when screened, " ~ run_age if run_age else "when screened" }}</span>
+      {% endif %}
       {# row-level flags: earnings risk (amber when on/before expiry) + quiet notes otherwise #}
       {% if c.next_earnings or earn_unknown or c.has_weeklys or notes %}
       <div class="detail-flags">

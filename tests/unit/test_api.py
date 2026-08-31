@@ -1219,3 +1219,25 @@ def test_the_universe_choice_is_always_visible_not_buried_in_advanced(tmp_path) 
     basic = body[:body.index('<details class="advanced"')]
     assert 'name="include_etfs"' in basic, "it must sit above the Advanced disclosure"
     assert "Rank by" in basic and 'name="min_dte"' in basic
+
+
+def test_the_row_detail_shows_the_spot_the_pick_was_judged_against(tmp_path) -> None:
+    """A stored run is read hours later and the stock moves under it: a strike that was 7% out
+    when the screen ran can be at the money by the time anyone opens the row. Recording what it
+    was judged against makes that visible instead of puzzling."""
+    runner = _runner(_FakeService(result=[]), tmp_path)
+    c = _candidate("YELP")
+    c.underlying_price = 23.18
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done", result=[c.model_dump(mode="json")])
+    body = _client(runner).get("/runs/j/candidates/YELP").text
+    assert "$23.18" in body and "when screened" in body
+
+
+def test_a_run_without_a_recorded_spot_says_nothing_rather_than_guessing(tmp_path) -> None:
+    """Older stored runs predate the field, and the per-name chain path still leaves it unset."""
+    runner = _runner(_FakeService(result=[]), tmp_path)
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done", result=[_candidate("YELP").model_dump(mode="json")])
+    body = _client(runner).get("/runs/j/candidates/YELP").text
+    assert "when screened" not in body
