@@ -1166,3 +1166,56 @@ def test_blank_names_to_check_reaches_the_engine_as_no_cap(tmp_path) -> None:
     started = _client(runner2).post("/runs", data={"top_n": "25"})  # still a working speed lever
     runner2.wait(_job_id_from(started.text))
     assert svc2.seen_criteria.top_n == 25
+
+
+def test_an_etf_row_is_labelled_and_its_fundamental_columns_read_as_not_applicable(
+    tmp_path,
+) -> None:
+    """ETFs are screened alongside stocks, not in a separate list, so the table has to say why
+    two of their columns are blank. A bare dash reads as a fetch that failed; the tag is what
+    tells "no answer exists" apart from "we could not get one"."""
+    runner = _runner(_FakeService(result=[]), tmp_path)
+    etf = _candidate("GDX")
+    etf.is_etf, etf.fundamental_score, etf.peer_percentile = True, None, None
+    stock = _candidate("KGC")
+    stock.fundamental_score, stock.peer_percentile = 0.88, 0.91
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done",
+                        result=[c.model_dump(mode="json") for c in (stock, etf)])
+    body = _client(runner).get("/").text
+
+    rows = body[body.index("<tbody>"):body.index("</tbody>")]
+    gdx = rows[rows.index("GDX"):]
+    assert 'class="etf-tag"' in gdx and ">ETF<" in gdx
+    assert "88/100" in rows and "91%" in rows, "the stock still shows its ratings"
+    assert "88/100" not in gdx and "91%" not in gdx, "and the ETF shows neither"
+
+
+def test_the_universe_knob_reaches_the_engine_both_ways(tmp_path) -> None:
+    """Radios, not a checkbox: an unchecked box submits NOTHING, so a default-on checkbox is one
+    the user cannot switch off. Both settings have to actually arrive."""
+    for sent, expected in (("true", True), ("false", False)):
+        svc = _FakeService(result=[_candidate()])
+        runner = _runner(svc, tmp_path / sent)
+        started = _client(runner).post("/runs", data={"include_etfs": sent})
+        runner.wait(_job_id_from(started.text))
+        assert svc.seen_criteria.include_etfs is expected
+
+    # ...and omitting it entirely keeps the default on, as the form always sends one
+    svc = _FakeService(result=[_candidate()])
+    runner = _runner(svc, tmp_path / "default")
+    started = _client(runner).post("/runs", data={})
+    runner.wait(_job_id_from(started.text))
+    assert svc.seen_criteria.include_etfs is True
+
+
+def test_the_universe_choice_is_always_visible_not_buried_in_advanced(tmp_path) -> None:
+    """It decides WHAT gets screened, so it belongs beside Rank by rather than behind a
+    disclosure most readers never open."""
+    body = _client(_runner(_FakeService(result=[]), tmp_path)).get("/").text
+    assert 'name="include_etfs" value="true"' in body
+    assert 'name="include_etfs" value="false"' in body
+    assert 'type="checkbox"' not in body, "a default-on checkbox could never be unset"
+    basic = body[:body.index('<details class="advanced"')]
+    assert 'name="include_etfs"' in basic, "it must sit above the Advanced disclosure"
+    assert "Rank by" in basic and 'name="min_dte"' in basic

@@ -19,6 +19,9 @@ class ScreenRequest(BaseModel):
     top_n: int | None = Field(None, ge=1, description="Chains to pull; None = every survivor.")
     fundamental_weight: float = Field(0.5, ge=0.0, le=1.0, description="1=quality, 0=yield.")
     min_score: float | None = Field(None, ge=0.0, le=1.0, description="Blended-score floor.")
+    # Radios rather than a checkbox: an unchecked box submits NOTHING, so a default-on
+    # checkbox is one that cannot be turned off. A pair of radios always sends a value.
+    include_etfs: bool = Field(True, description="Screen ETFs in the same list as stocks.")
     min_dollar_volume: float = Field(
         25_000_000.0, ge=0.0, description="Skip stocks below this avg daily $-volume (0=off)."
     )
@@ -61,6 +64,7 @@ class ScreenRequest(BaseModel):
             fundamental_weight=self.fundamental_weight,
             min_score=self.min_score,
             min_dollar_volume=self.min_dollar_volume,
+            include_etfs=self.include_etfs,
             min_annualized_yield=self.min_yield,
             min_dte=self.min_dte,
             max_dte=self.max_dte,

@@ -43,14 +43,43 @@ def yield_rating(
 def blend(strength: float | None, yield_rated: float, weight: float) -> float:
     """Weighted geometric mean of the two ratings.
 
-    UNKNOWN strength is not zero. A name whose fundamentals we never established is judged on
-    its yield alone rather than being driven to a score of 0 — under a geometric mean that
-    would delete it from the list entirely, which is a far stronger claim than the data
-    supports. (A name we DID rate at 0 is a different statement and does score 0.)
+    UNKNOWN strength is not zero — under a geometric mean that would delete the name from the
+    list, a far stronger claim than the data supports. But it is not one either, and returning
+    the yield alone made it exactly that: an unrated name scored as though it had rated
+    PERFECTLY. Harmless while the only unrated names were the odd stock with thin coverage;
+    decisive once ETFs joined the same list, since none of them can be rated. They swept the
+    top five ranks at a flat 1.00 — including a 3x leveraged fund, whose yield is high
+    precisely because its assignment risk is — while a stock rated 0.88 on the same yield came
+    ninth. The absence of an assessment is not a good assessment.
+
+    ``strength`` is therefore expected to be substituted with the field's median before this is
+    called (see ``rank``), so an unrated name sits where a typical one does: neither rewarded
+    nor punished for a question that has no answer.
     """
     if strength is None:
         return yield_rated
     return (strength**weight) * (yield_rated ** (1.0 - weight))
+
+
+# A median needs a field to be the middle of. Below this many rated names there is no field,
+# only a couple of points, and substituting their midpoint would let one weak name drag every
+# unrated one to zero — which is exactly the deletion the unknown-is-not-zero rule exists to
+# prevent. Under it, unrated names fall back to yield alone.
+_MIN_RATED_FOR_MEDIAN = 5
+
+
+def _median(values: list[float]) -> float | None:
+    """The middle of the rated field, or None when there is not enough of one to speak of.
+
+    None rather than a made-up 0.5: a screen with nothing rated has no field to sit in the
+    middle of, and inventing one would rank against a fiction.
+    """
+    if len(values) < _MIN_RATED_FOR_MEDIAN:
+        return None
+    mid = len(values) // 2
+    if len(values) % 2:
+        return values[mid]
+    return (values[mid - 1] + values[mid]) / 2
 
 
 def rank(
@@ -61,10 +90,20 @@ def rank(
     yield_satisfactory: float = 0.15,
     min_score: float | None = None,
 ) -> list[CandidateResult]:
-    """Score every candidate, drop anything under ``min_score``, and sort best-first."""
+    """Score every candidate, drop anything under ``min_score``, and sort best-first.
+
+    Unrated names — ETFs, and the occasional stock with too little coverage to judge — take the
+    field's MEDIAN strength rather than none at all. Scoring them on yield alone let the
+    absence of an assessment act as a perfect one, which put every ETF above every stock.
+    """
+    rated_scores = sorted(
+        c.fundamental_score for c in candidates if c.fundamental_score is not None
+    )
+    stand_in = _median(rated_scores)
     for c in candidates:
         rated = yield_rating(c.annualized_yield, yield_good, yield_satisfactory)
-        c.score = blend(c.fundamental_score, rated, fundamental_weight)
+        strength = c.fundamental_score if c.fundamental_score is not None else stand_in
+        c.score = blend(strength, rated, fundamental_weight)
     kept = candidates if min_score is None else [
         c for c in candidates if (c.score or 0.0) >= min_score
     ]

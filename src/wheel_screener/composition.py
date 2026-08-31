@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from wheel_screener.adapters.alpaca.provider import AlpacaChainProvider
+from wheel_screener.adapters.etf.universe import EtfUniverseProvider
 from wheel_screener.adapters.fmp.provider import FmpFundamentalsProvider
 from wheel_screener.adapters.fundcore.provider import FundcoreReportProvider
 from wheel_screener.adapters.local.earnings import LocalEarningsCalendar
@@ -90,6 +91,16 @@ def _build_accounts(settings: Settings) -> BrokerageAccountProvider | None:
     return SchwabAccountProvider(settings.schwab)
 
 
+def _build_etfs(settings: Settings) -> EtfUniverseProvider | None:
+    """ETFs need FMP to know WHICH symbols are funds and Alpaca to price them, so both must be
+    configured. Missing either simply means a stocks-only screen."""
+    if not settings.fmp.api_key.get_secret_value():
+        return None
+    if not settings.alpaca.api_key.get_secret_value():
+        return None
+    return EtfUniverseProvider(settings.fmp, settings.alpaca)
+
+
 def build_service(settings: Settings | None = None) -> ScreenerService:
     settings = settings or Settings()
     fundamentals = _build_fundamentals(settings)
@@ -99,6 +110,7 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
         reports=_build_reports(settings),
         profiles=_build_profiles(fundamentals),
         accounts=_build_accounts(settings),
+        etfs=_build_etfs(settings),
     )
 
 
