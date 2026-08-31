@@ -992,7 +992,8 @@ def test_the_grid_replaced_the_ladder_rather_than_joining_it() -> None:
     chain = [
         OptionContract(underlying_symbol="AVGO", option_symbol=f"A{k}{d}",
                        option_type=OptionType.PUT, expiration=today + _td(days=d), strike=k,
-                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800)
+                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800,
+                       volume=40, bid_size=25)
         for k, b in ((390.0, 33.4), (385.0, 30.3), (380.0, 27.4))
         for d, b in ((26, b), (33, b + 1.6), (40, b + 2.9))
     ]
@@ -1085,7 +1086,8 @@ def test_the_roll_grid_is_read_not_clicked() -> None:
     chain = [
         OptionContract(underlying_symbol="AVGO", option_symbol=f"A{k}{d}",
                        option_type=OptionType.PUT, expiration=today + _td(days=d), strike=k,
-                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800)
+                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800,
+                       volume=40, bid_size=25)
         for k, b in ((390.0, 33.4), (385.0, 30.3), (380.0, 27.4))
         for d, b in ((26, b), (33, b + 1.6))
     ]
@@ -1119,7 +1121,8 @@ def test_roll_cells_are_coloured_by_sign_and_gaps_are_left_blank() -> None:
     chain = [
         OptionContract(underlying_symbol="AVGO", option_symbol=f"A{k}{d}",
                        option_type=OptionType.PUT, expiration=today + _td(days=d), strike=k,
-                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800)
+                       dte=d, bid=b, ask=b + 0.35, delta=-0.6, open_interest=800,
+                       volume=40, bid_size=25)
         for k, base in ((390.0, 33.4), (385.0, 30.3), (380.0, 27.4), (400.0, 40.5))
         for d, b in ((26, base), (40, base + 2.9))
         if not (k == 385.0 and d == 40)
@@ -1133,6 +1136,132 @@ def test_roll_cells_are_coloured_by_sign_and_gaps_are_left_blank() -> None:
         assert "rg-pos" in body and "rg-neg" in body
         assert "rg-empty" in body, "an unlisted strike is a gap, not a zero"
         assert "does not list for that expiry" in body, "and the note says so"
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_grid_marks_a_quote_nobody_trades_instead_of_showing_it_as_a_bargain() -> None:
+    """KGC, 23 Aug 2026: the $30.5 put quoted 1.06 at 18 Sep, 0.74 at 25 Sep, 0.68 at 2 Oct —
+    the bid FALLING as expiry extends, which no real option can do. Zero open interest, a 90%
+    spread, no volume. The grid read it as the cheapest roll on the board and tinted it green,
+    because it applied none of the four liquidity measures the screener applies. The adjacent
+    $31.5 strike, which people actually trade, behaves properly and must stay tinted."""
+    from datetime import date as _d
+    from datetime import timedelta as _td
+
+    from wheel_screener.core import rollgrid
+    from wheel_screener.core.models import OptionContract, OptionType
+
+    today, exp = _d.today(), _d.today() + _td(days=26)
+
+    def put(k, d, bid, ask, oi, vol, bs):
+        return OptionContract(
+            underlying_symbol="KGC", option_symbol=f"K{k}{d}", option_type=OptionType.PUT,
+            expiration=today + _td(days=d), strike=k, dte=d, bid=bid, ask=ask, delta=-0.45,
+            open_interest=oi, volume=vol, bid_size=bs,
+        )
+
+    chain = [
+        # the held leg, and the strike that trades: bids rise with time, as they must
+        put(31.5, 26, 1.61, 1.72, 900, 10, 40), put(31.5, 40, 1.83, 1.95, 640, 5, 30),
+        # the ghost: bid falls with time, 90% spread, nothing outstanding, nothing traded
+        put(30.5, 26, 1.06, 1.67, 0, 0, 15), put(30.5, 40, 0.68, 1.79, 0, 1, 76),
+    ]
+    grid = rollgrid.build(chain, strike=31.5, expiration=exp, contracts=5, spot=31.1,
+                          today=today, collected=1.50)
+    assert grid is not None
+    ghost = grid.cell(30.5, today + _td(days=40))
+    assert ghost is not None and ghost.untradeable, "0 OI at a 90% spread is not a price"
+    assert "spread" in ghost.untradeable
+    real = grid.cell(31.5, today + _td(days=40))
+    assert real is not None and real.untradeable is None, "the strike people trade must survive"
+
+    c, _ = _exits_client(grid=grid)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "KGC", "strike": 31.5, "expiry": exp.isoformat()}).text
+        assert "rg-thin" in body, "the ghost is marked"
+        assert "Untradeable:" in body, "and says which measure it failed, on hover"
+        assert "rg-pos" in body, "while the tradeable roll keeps its tint"
+        # the mark REPLACES the sign tint: a fictional credit shown in green is the whole bug
+        assert 'rg-thin"' in body or "rg-thin\"" in body
+        assert "rg-pos rg-thin" not in body and "rg-thin rg-pos" not in body
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_grid_applies_the_screeners_measures_at_a_floor_suited_to_one_board() -> None:
+    """The screen's four measures, but a looser open-interest floor, and the gap is deliberate.
+    The screen picks a few names from ~800 and can demand 100 contracts outstanding; the grid
+    describes ONE board. Measured at the screen's floor, AAPL's at-the-money 32-day put (88 open
+    interest) came back untradeable and half of every board hatched — a mark that lands on
+    everything is one the reader stops seeing."""
+    import inspect
+    from datetime import date as _d
+    from datetime import timedelta as _td
+
+    from wheel_screener.core import rollgrid
+    from wheel_screener.core.models import OptionContract, OptionType, ScreenCriteria
+    from wheel_screener.core.rollgrid import _liquidity_problem
+
+    GRID_MIN_OI = inspect.signature(rollgrid.build).parameters["min_oi"].default
+
+    def c(**kw):
+        base = dict(bid=2.00, ask=2.20, open_interest=800, volume=40, bid_size=25)
+        return OptionContract(
+            underlying_symbol="X", option_symbol="X1", option_type=OptionType.PUT,
+            expiration=_d.today() + _td(days=30), strike=100.0, dte=30, **{**base, **kw},
+        )
+
+    d = ScreenCriteria()
+    kw = dict(max_spread=d.max_bid_ask_spread_pct, spread_exempt=d.spread_abs_exempt,
+              min_oi=GRID_MIN_OI, min_volume=d.min_volume, min_bid_size=d.min_bid_size)
+    # three of the four are the screen's own, unchanged
+    assert (kw["max_spread"], kw["spread_exempt"]) == (0.30, 0.05)
+    assert (kw["min_volume"], kw["min_bid_size"]) == (1, 10)
+    # the fourth is looser here, and only here
+    assert GRID_MIN_OI == 10 < d.min_open_interest == 100
+    assert _liquidity_problem(c(), **kw) is None
+    assert _liquidity_problem(c(open_interest=88), **kw) is None, "AAPL at the money is not thin"
+    assert "no bid" in _liquidity_problem(c(bid=0.0), **kw)
+    assert "spread" in _liquidity_problem(c(bid=0.40, ask=1.60), **kw)
+    assert "open interest" in _liquidity_problem(c(open_interest=2), **kw), "KGC's ghost"
+    assert "traded" in _liquidity_problem(c(volume=0), **kw)
+    assert "contracts bid" in _liquidity_problem(c(bid_size=1), **kw)
+    # the absolute exemption: a penny-wide spread on a cheap contract is not illiquidity
+    assert _liquidity_problem(c(bid=0.05, ask=0.09), **kw) is None
+
+
+def test_a_thin_leg_to_buy_back_warns_that_every_figure_is_uncertain() -> None:
+    """The closing ask is subtracted from every cell at once, so when the leg being bought back
+    is itself untraded the fault is not in any one cell — no per-cell mark can carry it."""
+    from datetime import date as _d
+    from datetime import timedelta as _td
+
+    from wheel_screener.core import rollgrid
+    from wheel_screener.core.models import OptionContract, OptionType
+
+    today, exp = _d.today(), _d.today() + _td(days=26)
+    chain = [
+        # the held leg quotes 0.40/1.90 on nothing outstanding: a 130% spread
+        OptionContract(underlying_symbol="ZZZ", option_symbol="Z1", option_type=OptionType.PUT,
+                       expiration=exp, strike=50.0, dte=26, bid=0.40, ask=1.90, delta=-0.3,
+                       open_interest=0, volume=0, bid_size=1),
+        OptionContract(underlying_symbol="ZZZ", option_symbol="Z2", option_type=OptionType.PUT,
+                       expiration=today + _td(days=40), strike=50.0, dte=40, bid=2.60,
+                       ask=2.75, delta=-0.3, open_interest=700, volume=30, bid_size=20),
+    ]
+    grid = rollgrid.build(chain, strike=50.0, expiration=exp, contracts=1, spot=52.0,
+                          today=today, collected=1.00)
+    assert grid is not None and grid.close_untradeable
+    c, _ = _exits_client(grid=grid)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "ZZZ", "strike": 50.0, "expiry": exp.isoformat()}).text
+        assert "Every figure above is uncertain" in body
+        assert "expect to pay less" in body
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
