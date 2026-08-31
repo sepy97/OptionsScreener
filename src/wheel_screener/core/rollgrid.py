@@ -36,6 +36,13 @@ class GridCell:
     assignment_odds: float | None = None  # |delta|
     open_interest: int | None = None
     is_current: bool = False
+    # Why this cell's number should not be believed, or None if it can be. The grid quotes every
+    # listed strike, including ones nobody trades — and an untraded contract's closing bid is a
+    # market maker's parked placeholder, not a price. KGC's $30.5 put quoted 1.06 at 18 Sep and
+    # 0.68 at 2 Oct: the bid FALLING as expiry extends, which no real option can do. Zero open
+    # interest, no volume, a 90% spread. Shown, because a strike existing is worth knowing, but
+    # never shown as a clean figure.
+    untradeable: str | None = None
 
     contracts: float = 1.0
 
@@ -67,6 +74,10 @@ class RollGrid:
     contracts: float
     opened_on: date | None = None   # from the broker's transactions; None past its 60-day window
     today: date | None = None
+    # Whether the leg being BOUGHT BACK is itself thinly traded. Its ask is subtracted from every
+    # cell in the table, so when that ask is a placeholder the whole grid is wrong at once — a
+    # per-cell mark cannot say that, because the fault is not in any one cell.
+    close_untradeable: str | None = None
 
     def cell(self, strike: float, expiration: date) -> GridCell | None:
         return self.cells.get((strike, expiration))
@@ -124,6 +135,38 @@ class RollGrid:
 MAX_STRIKE_ROWS = 19
 
 
+def _liquidity_problem(
+    c: OptionContract, *, max_spread: float, spread_exempt: float,
+    min_oi: int, min_volume: int, min_bid_size: int,
+) -> str | None:
+    """The screen's four measures — spread, open interest, volume, bid depth — or None if the
+    contract passes all of them.
+
+    The same measures, but NOT the same open-interest floor, and the difference is deliberate.
+    The screen chooses a handful of names out of ~800 and can afford to demand 100 contracts
+    outstanding; the grid describes ONE board and has to say which of these cells are real.
+    Measured 2026-08-31 at the screen's floor: AAPL's at-the-money 32-day put, 88 open interest,
+    came back "untradeable", and half of every board hatched — QCOM 65%, AAPL 50%, SOFI 50%.
+    A mark that lands on everything is one the reader learns to skip past. At 10 the same boards
+    read 58 / 35 / 23% while KGC, the board that prompted this, still hatches 81%.
+
+    The other three carry over unchanged: they are already at their loosest useful setting, and
+    it was the SPREAD that caught KGC's ghost strike, not the open interest.
+    """
+    if c.bid is None or c.ask is None or c.bid <= 0:
+        return "no bid — nothing to sell into"
+    gap, mid = c.ask - c.bid, (c.ask + c.bid) / 2
+    if gap > spread_exempt and mid > 0 and gap / mid > max_spread:
+        return f"{gap / mid:.0%} spread — no price you could work inside"
+    if (c.open_interest or 0) < min_oi:
+        return f"{c.open_interest or 0} open interest — nobody holds this"
+    if (c.volume or 0) < min_volume:
+        return "never traded today — the quote is a leftover"
+    if (c.bid_size or 0) < min_bid_size:
+        return f"{c.bid_size or 0} contracts bid — too thin to sell into"
+    return None
+
+
 def _pick_strikes(
     listed: set[float], around: float, spot: float | None, span: int
 ) -> list[float]:
@@ -171,6 +214,8 @@ def build(
     spot: float | None, today: date, option_type: OptionType = OptionType.PUT,
     collected: float | None = None, opened_on: date | None = None,
     strike_span: int = 4, expiry_count: int = 8,
+    max_spread: float = 0.30, spread_exempt: float = 0.05,
+    min_oi: int = 10, min_volume: int = 1, min_bid_size: int = 10,
 ) -> RollGrid | None:
     """Price every listed strike against every listed expiry, from the current leg outward."""
     own = [c for c in chain if c.option_type is option_type]
@@ -209,9 +254,17 @@ def build(
             contracts=contracts,
             assignment_odds=(abs(c.delta) if c.delta is not None else None),
             open_interest=c.open_interest, is_current=is_current,
+            untradeable=(None if is_current else _liquidity_problem(
+                c, max_spread=max_spread, spread_exempt=spread_exempt, min_oi=min_oi,
+                min_volume=min_volume, min_bid_size=min_bid_size,
+            )),
         )
     return RollGrid(
         strikes=strikes, expiries=expiries, cells=cells, current_strike=strike,
         current_expiry=expiration, close_cost=close_cost, collected=collected,
         contracts=contracts, opened_on=opened_on, today=today,
+        close_untradeable=_liquidity_problem(
+            current, max_spread=max_spread, spread_exempt=spread_exempt, min_oi=min_oi,
+            min_volume=min_volume, min_bid_size=min_bid_size,
+        )
     )

@@ -436,6 +436,17 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 /* No contract listed at that strike for that expiry — nothing to price, so nothing to tint.
    A shaded blank reads as a result; this one is the absence of one. */
 .roll-grid td.rg-empty { color: var(--pico-muted-color); background: none; }
+/* A quote nobody trades is not a price, and the cheapest-looking cells are usually these. Hatched
+   rather than merely grey: at a glance it has to read as one to skip, not as a neutral middle. It
+   deliberately does NOT take the sign colours -- tinting a fictional credit green is the bug. */
+.roll-grid td.rg-thin > span {
+  color: var(--pico-muted-color); cursor: help;
+  background: repeating-linear-gradient(-45deg,
+    var(--sunken), var(--sunken) 3px, transparent 3px, transparent 7px);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+.roll-grid td.rg-thin b { font-weight: 400; }
+.roll-grid td.rg-thin .detail-note { color: inherit; opacity: 0.8; }
 .roll-context { font-size: 0.8125rem; margin: 0 0 0.6rem; }
 .etf-tag {
   margin-left: 0.35rem; padding: 0.05rem 0.3rem; border-radius: 3px; font-size: 0.625rem;

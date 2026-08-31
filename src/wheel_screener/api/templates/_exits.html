@@ -115,12 +115,15 @@
                        carries the SIGN so a roll that pays and one that costs do not look
                        alike. #}
                     <td class="rg {{ 'rg-current' if c.is_current
-                        else ('rg-pos' if c.credit_total >= 0 else 'rg-neg') }}">
+                        else ('rg-thin' if c.untradeable
+                        else ('rg-pos' if c.credit_total >= 0 else 'rg-neg')) }}"
+                        {% if c.untradeable %}title="Untradeable: {{ c.untradeable }}"{% endif %}>
                       <span>
                         {% if c.is_current %}<b>current</b>{% else %}
                           <b>{{ c.credit_total | signed }}</b>{% endif %}
                         <span class="detail-note">
-                          {%- if c.per_day_total is not none -%}
+                          {%- if c.untradeable -%}thin
+                          {%- elif c.per_day_total is not none -%}
                             {{ c.per_day_total | signed(1) }}/d
                           {%- else -%}&nbsp;{%- endif -%}
                         </span>
@@ -141,7 +144,20 @@
           across later ones. It is the standard desk approximation rather than a true
           probability, and it is quoted rather than modelled. Candidates, not recommendations:
           a higher strike always pays more because it owes more. A dash is a strike the
-          exchange does not list for that expiry, so there is nothing to price.</p>
+          exchange does not list for that expiry, so there is nothing to price. A hatched
+          <b>thin</b> cell failed one of the screener's liquidity measures &mdash; no bid, a
+          spread wider than 30%, under 10 contracts outstanding, no volume today, or fewer than
+          10 contracts bid. Its number comes from a quote nobody trades, so it is not a price you could get;
+          hover for which measure it failed. Those are the cells that look like bargains.</p>
+        {# The buy-back ask is subtracted from every cell at once, so when the leg you hold is
+           itself untraded no per-cell mark can carry the warning -- every number in the table
+           is built on the same bad figure. #}
+        {% if grid.close_untradeable %}
+          <p class="detail-note"><b>Every figure above is uncertain.</b> The leg you would be
+            buying back is thinly traded itself &mdash; {{ grid.close_untradeable }} &mdash; so
+            the ${{ '%.2f'|format(grid.close_cost) }} closing cost subtracted from every cell is
+            a quote rather than a price. Work the order and expect to pay less.</p>
+        {% endif %}
       {% endif %}
 
       {# NOT an alternative to the rows above. Assignment happens when the put expires, so this
