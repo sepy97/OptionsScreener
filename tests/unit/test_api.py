@@ -1209,8 +1209,13 @@ def test_the_universe_knob_reaches_the_engine_both_ways(tmp_path) -> None:
     assert svc.seen_criteria.include_etfs is True
 
 
-def test_the_form_offers_the_universe_choice_as_a_pair_of_radios(tmp_path) -> None:
+def test_the_universe_choice_is_always_visible_not_buried_in_advanced(tmp_path) -> None:
+    """It decides WHAT gets screened, so it belongs beside Rank by rather than behind a
+    disclosure most readers never open."""
     body = _client(_runner(_FakeService(result=[]), tmp_path)).get("/").text
     assert 'name="include_etfs" value="true"' in body
     assert 'name="include_etfs" value="false"' in body
     assert 'type="checkbox"' not in body, "a default-on checkbox could never be unset"
+    basic = body[:body.index('<details class="advanced"')]
+    assert 'name="include_etfs"' in basic, "it must sit above the Advanced disclosure"
+    assert "Rank by" in basic and 'name="min_dte"' in basic

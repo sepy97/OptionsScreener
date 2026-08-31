@@ -438,3 +438,5 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
   font-weight: 700; letter-spacing: 0.04em; background: var(--sunken); color: var(--pico-muted-color);
   border: 1px solid var(--border); vertical-align: middle;
 }
+/* The two segmented knobs stack beside the DTE ladder, which needs the width for its bars. */
+.knob-stack { display: flex; flex-direction: column; gap: 0.9rem; }

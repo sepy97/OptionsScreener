@@ -39,6 +39,7 @@
         </label>
       </div>
     </div>
+    <div class="knob-stack">
     <fieldset class="rank-by">
       <legend>Rank by</legend>
       {# The presets TILT the blend rather than reaching its ends. At 0 the score ignores
@@ -56,6 +57,20 @@
         <label for="rank-qual">Better quality<small>mostly quality</small></label>
       </div>
     </fieldset>
+      <fieldset class="seg-field">
+      <legend>Universe</legend>
+          {# Radios, not a checkbox: an unchecked box submits nothing at all, so a default-on
+           checkbox is one the user cannot switch off. #}
+        <div class="segmented">
+          <input type="radio" name="include_etfs" value="true" id="uni-both"
+                 {% if defaults.include_etfs %}checked{% endif %}>
+          <label for="uni-both">Stocks + ETFs<small>one ranked list</small></label>
+          <input type="radio" name="include_etfs" value="false" id="uni-stocks"
+                 {% if not defaults.include_etfs %}checked{% endif %}>
+          <label for="uni-stocks">Stocks only<small>skip funds</small></label>
+        </div>
+      </fieldset>
+    </div>
   </div>
   <details class="advanced">
     <summary>Advanced filters</summary>
@@ -84,19 +99,6 @@
       </label>
     </div>
     <div class="grid">
-      <fieldset class="seg-field">
-        <legend>Universe</legend>
-        {# Radios, not a checkbox: an unchecked box submits nothing at all, so a default-on
-           checkbox is one the user cannot switch off. #}
-        <div class="segmented">
-          <input type="radio" name="include_etfs" value="true" id="uni-both"
-                 {% if defaults.include_etfs %}checked{% endif %}>
-          <label for="uni-both">Stocks + ETFs<small>one ranked list</small></label>
-          <input type="radio" name="include_etfs" value="false" id="uni-stocks"
-                 {% if not defaults.include_etfs %}checked{% endif %}>
-          <label for="uni-stocks">Stocks only<small>skip funds</small></label>
-        </div>
-      </fieldset>
       <label>Min avg $-volume/day
         <input type="text" inputmode="numeric" name="min_dollar_volume"
                value="{{ defaults.min_dollar_volume|usd }}"
