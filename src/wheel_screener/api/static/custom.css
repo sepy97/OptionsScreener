@@ -180,6 +180,31 @@ tbody td:nth-child(9), tbody td:nth-child(12) { color: var(--pico-muted-color); 
 /* quiet chips for non-risk flags (earnings-after-expiry, weeklys, notes) — color is reserved for the
    one real risk, earnings-before-expiry, which uses the amber .badge */
 .detail-note { font-size: 0.75rem; color: var(--pico-muted-color); }
+/* ex-dividend: amber like the other warnings; compact inside a table cell, where the tooltip
+   carries that row's numbers and the card / search panel carries the explanation */
+td .badge--div { margin-right: 0.35rem; padding: 0 0.4rem; font-size: 0.68rem; cursor: help; }
+.div-explain {
+  margin: 0.4rem 0 0; padding: 0.45rem 0.75rem; max-width: 58rem;
+  font-size: 0.8125rem; line-height: 1.45; color: var(--ink); white-space: normal;
+  background: var(--warn-soft); border-left: 3px solid var(--warn);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+.div-panel { margin: 0.25rem 0 0.75rem; }
+/* the assignment watch: ITM/OTM, the early-assignment verdict and the ex-date. Up to three
+   badges would push the column off the table's right edge, so they wrap inside a bounded box
+   instead — the verdict is the thing the column exists for, so it must stay on screen. */
+.assign-stack {
+  display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center;
+  gap: 0.25rem 0.3rem; max-width: 15rem; margin-left: auto;
+}
+.assign-stack .badge { margin: 0; }
+.badge--assign { cursor: help; }
+.assign-watch { margin: 0 0 0.9rem; }
+.assign-watch .detail-flags { margin-top: 0; }
+.assign-watch > .detail-note { max-width: 58rem; margin: 0.35rem 0 0; }
+/* red when exercise already pays the holder; quiet when it is out of the question */
+.div-explain.assign-likely { background: var(--neg-soft); border-left-color: var(--neg); }
+.div-explain.assign-low { background: var(--sunken); border-left-color: var(--border); }
 /* label|value definition grid — the card body (reuses tier colors + badges from the table) */
 .card-grid {
   display: grid; grid-template-columns: max-content 1fr;

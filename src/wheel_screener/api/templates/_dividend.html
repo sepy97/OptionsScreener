@@ -1,0 +1,62 @@
+{# The ex-dividend warning, shared by the screen table, the candidate card and the search table.
+   `d` is a core.dividends.DividendImpact (the `dividend_view` filter builds it from a row).
+
+   It explains rather than alarms, because the drop is not a loss on its own: the market prices a
+   declared dividend into the option, so a short put's value does not jump when the stock opens
+   lower. What it changes is the cushion (puts) and the odds of early assignment (calls). #}
+{% import "_icons.html" as icon %}
+
+{%- macro when(d) -%}{{ '~' if d.estimated }}{{ d.first }}{%- endmacro -%}
+
+{%- macro amount(d) -%}{{ '~' if d.estimated }}{{ d.total|money }}{%- endmacro -%}
+
+{# prose already hedges with "about", so it takes the bare figures; an estimate hedges the date #}
+{%- macro on_date(d) -%}{{ 'Around' if d.estimated else 'On' }} {{ d.first }}{%- endmacro -%}
+
+{# distance from the price to the strike, in words — negative means in the money #}
+{%- macro cushion(v) -%}
+  {%- if v >= 0 -%}{{ "%.1f%%"|format(v * 100) }} out of the money
+  {%- else -%}{{ "%.1f%%"|format(-v * 100) }} in the money{%- endif -%}
+{%- endmacro -%}
+
+{# one line, plain text: the row marker's tooltip, carrying THIS row's numbers #}
+{%- macro tip(d, is_call) -%}
+  Ex-dividend {{ when(d) }}{{ ' (estimated, not yet announced)' if d.estimated }}: the stock should drop about {{ d.total|money }}
+  {%- if d.pct_of_spot is not none %} ({{ "%.1f%%"|format(d.pct_of_spot * 100) }} of the price){% endif %}.
+  {%- if is_call %} If this call is in the money on {{ d.exercise_eve }} with less than {{ d.first_amount|money }} of time value left, expect early assignment — you would miss the dividend.
+  {%- else %} Already priced into this put, so no loss from the drop itself
+    {%- if d.cushion_now is not none and d.cushion_after is not none %} — but the cushion goes from {{ cushion(d.cushion_now) }} to {{ cushion(d.cushion_after) }}{% endif %}.
+  {%- endif -%}
+{%- endmacro -%}
+
+{# compact marker for a table row #}
+{%- macro pill(d, is_call) -%}
+<span class="badge badge--div" title="{{ tip(d, is_call)|squash }}">{{ icon.warning() }} ex-div</span>
+{%- endmacro -%}
+
+{# the headline badge in a card #}
+{%- macro badge(d) -%}
+<span class="badge badge--div">{{ icon.warning() }} Ex-dividend {{ when(d) }}{{ ' (estimated)' if d.estimated }} &middot; {{ amount(d) }}
+  {%- if d.pct_of_spot is not none %} ({{ "%.1f%%"|format(d.pct_of_spot * 100) }}){% endif %}{% if d.count > 1 %} &middot; {{ d.count }} dates before expiry{% endif %}</span>
+{%- endmacro -%}
+
+{# the explanation. `strike` names the contract; pass none for a panel that covers several rows #}
+{%- macro explain(d, is_call, strike=none) -%}
+<p class="div-explain">
+  {%- if d.estimated %}<b>Not announced yet</b> — estimated from its {{ d.frequency or 'regular' }} schedule, so the date and amount may move. {% endif %}
+  {%- if is_call %}
+  {{ on_date(d) }} the share price should drop by about {{ d.total|money }} as the dividend is paid out of it — a drop you are compensated for, since you collect the dividend as the shareholder.
+  The risk is <b>early assignment</b>: if {{ 'this call' if strike is not none else 'a call' }} is in the money on {{ d.exercise_eve }}, the last day before the ex-date, and has less than {{ d.first_amount|money }} of time value left, expect the buyer to exercise it to collect the dividend. Your shares go at {{ strike|money if strike is not none else 'the strike' }} a day early and you miss {{ (d.first_amount * 100)|money }} per contract.
+  While the stock stays below {{ strike|money if strike is not none else 'the strike' }} you keep both the shares and the dividend.
+  {%- if d.early_assignment_likely %} <b>It is already in the money with only {{ d.time_value|money }} of time value, so early assignment is likely.</b>{% endif %}
+  {%- else %}
+  {{ on_date(d) }} the share price should drop by about {{ d.total|money }} as the dividend is paid out of it. That is not a surprise gap: the drop is already priced into {{ 'this put' if strike is not none else 'these puts' }} — you are paid for it in the premium — so it won't cost you anything by itself.
+  {%- if strike is not none and d.cushion_now is not none and d.cushion_after is not none %}
+  What it does change is your <b>cushion</b>: the {{ strike|money }} strike is {{ cushion(d.cushion_now) }} at today's price, but {{ cushion(d.cushion_after) }} at the price the stock should trade at after the dividend — and that lower price is what assignment is decided against.
+  {%- else %}
+  What it does change is your <b>cushion</b>: each marked strike sits closer to the money than it looks at today's price, by about the dividend (hover a marked row for its numbers) — and that lower price is what assignment is decided against.
+  {%- endif %}
+  {%- endif %}
+  {%- if d.count > 1 %} {{ d.count }} ex-dividend dates fall before {{ 'expiry' if strike is not none else 'the last marked expiry' }}; the figures use their {{ d.total|money }} total.{% endif %}
+</p>
+{%- endmacro -%}

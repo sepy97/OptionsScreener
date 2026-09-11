@@ -9,6 +9,9 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 
 from wheel_screener.core import exits, rollgrid
+from wheel_screener.core.assignment import DEFAULT_CARRY_RATE
+from wheel_screener.core.assignment import assess as assess_assignment
+from wheel_screener.core.dividends import in_life, upcoming
 from wheel_screener.core.earnings import EarningsGuard
 from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
 from wheel_screener.core.fundamentals import (
@@ -21,6 +24,7 @@ from wheel_screener.core.models import (
     CandidateResult,
     ChainFilter,
     CompanyProfile,
+    Dividend,
     EarningsPolicy,
     EarningsStatus,
     FundamentalMetrics,
@@ -45,6 +49,7 @@ from wheel_screener.core.ports import (  # noqa: F401 - EtfUniverseProvider is a
     BrokerageAccountProvider,
     ChainProvider,
     CompanyProfileProvider,
+    DividendProvider,
     EtfUniverseProvider,
     FundamentalReportProvider,
     FundamentalsProvider,
@@ -73,6 +78,9 @@ class TickerSearch:
     metrics: FundamentalMetrics | None = None  # the ticker's raw fundamentals (P/E, ROE, ...)
     fundamental_score: float | None = None  # absolute financial strength 0-1 (primary rating)
     peer_percentile: float | None = None  # percentile vs the screened field (None if outside it)
+    # the next ex-dividend date whatever the expiries (announced, or estimated from the schedule)
+    next_dividend: Dividend | None = None
+    dividends_known: bool = False  # False = no lookup ran or it failed, NOT "pays no dividend"
 
 
 @dataclass
@@ -94,6 +102,10 @@ class ScreenerService:
     # optional: optionable ETFs, which join the SAME screen rather than a separate one.
     # Without it the screen is stocks only, which is the pre-existing behaviour.
     etfs: EtfUniverseProvider | None = None
+    # optional: dividend history for the ex-dividend flag. Without it nothing is flagged.
+    dividends: DividendProvider | None = None
+    # the short-term rate a put holder earns on the strike — the early-exercise test for puts
+    carry_rate: float = DEFAULT_CARRY_RATE
     _scores: dict[str, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def _universe_scores(self, criteria: ScreenCriteria, today: date) -> dict[str, float]:
@@ -288,12 +300,51 @@ class ScreenerService:
             sum(1 for c in candidates if c.earnings_status is EarningsStatus.UNKNOWN),
             criteria.fundamental_weight,
         )
-        return rank(
+        ranked = rank(
             candidates,
             criteria.fundamental_weight,
             yield_good=criteria.yield_good,
             yield_satisfactory=criteria.yield_satisfactory,
             min_score=criteria.min_score,
+        )
+        # After the last filter (the score floor lives inside rank), so only the names actually
+        # shown cost a lookup. A flag, not a filter: it removes nothing and reorders nothing.
+        if ranked:
+            histories = self._dividend_histories(sorted({c.symbol for c in ranked}))
+            self._stamp_dividends(ranked, today, histories)
+        return ranked
+
+    def _dividend_histories(self, symbols: list[str]) -> dict[str, list[Dividend]] | None:
+        """Dividend histories for the names being shown, or None when there is no source or it
+        failed. Never raises: a missing flag costs a line of context, and must not take a screen
+        or a search down with it."""
+        if self.dividends is None or not symbols:
+            return None
+        try:
+            return self.dividends.dividend_history(symbols)
+        except Exception as e:  # noqa: BLE001 - optional context, never fatal
+            logger.warning("dividends: lookup failed (%s); no ex-dividend flags this time", e)
+            return None
+
+    def _stamp_dividends(
+        self,
+        candidates: list[CandidateResult],
+        today: date,
+        histories: dict[str, list[Dividend]] | None,
+    ) -> None:
+        """Attach the ex-dividends each candidate's contract lives through."""
+        if histories is None or not candidates:
+            return
+        for c in candidates:
+            history = histories.get(c.symbol)
+            if history is None:
+                continue  # couldn't be looked up: say nothing rather than "no dividend"
+            c.dividends = in_life(history, today, c.contract.expiration)
+            c.dividends_checked = True
+        logger.info(
+            "dividends: %d of %d candidate(s) live through an ex-dividend date (%d estimated)",
+            sum(1 for c in candidates if c.dividends), len(candidates),
+            sum(1 for c in candidates if any(d.estimated for d in c.dividends)),
         )
 
     def exit_options(
@@ -315,10 +366,14 @@ class ScreenerService:
     ):
         """Every way out of one open short put, priced and ranked.
 
-        Returns ``(alternatives, after_assignment, roll_grid, spot)``. The requested DTE window
-        is always widened to contain the position's own expiry — without that contract there is
-        no cost to close, so the baseline "keep" row cannot be formed and the whole table becomes
-        a list of alternatives to nothing.
+        Returns ``(alternatives, after_assignment, roll_grid, spot, early_assignment)``. The
+        requested DTE window is always widened to contain the position's own expiry — without
+        that contract there is no cost to close, so the baseline "keep" row cannot be formed and
+        the whole table becomes a list of alternatives to nothing.
+
+        ``early_assignment`` is judged against the held contract's BID — what its holder could
+        sell it for instead of exercising — so it is the precise version of the portfolio row's
+        mark-based estimate. None for a long position, which cannot be assigned.
 
         Calls are only fetched when the put is in the money. Out of the money, assignment is not
         the live outcome, so offering an assign-and-write row would compare against a position
@@ -358,12 +413,26 @@ class ScreenerService:
             contracts=contracts, spot=spot, today=today, option_type=option_type,
             is_short=is_short, roll_strike=roll_strike, call_strike=call_strike,
         )
+        early = None
+        if is_short:
+            mine = next(
+                (c for c in own_chain.contracts
+                 if c.strike == strike and c.expiration == expiration), None,
+            )
+            # the holder's alternative to exercising is selling at the bid; mid if there is none
+            price = None if mine is None else (mine.bid if mine.bid else mine.mid)
+            histories = self._dividend_histories([symbol]) or {}
+            early = assess_assignment(
+                option_type, strike, spot, price, expiration, today,
+                in_life(histories.get(symbol) or [], today, expiration), self.carry_rate,
+            )
         logger.info(
-            "exits: %s $%g %s -> %d alternative(s), %d post-assignment (spot %s)",
+            "exits: %s $%g %s -> %d alternative(s), %d post-assignment (spot %s) · early "
+            "assignment %s",
             symbol, strike, expiration, len(rows), len(after),
-            f"{spot:.2f}" if spot else "unknown",
+            f"{spot:.2f}" if spot else "unknown", early.risk if early else "n/a",
         )
-        return rows, after, grid, spot
+        return rows, after, grid, spot, early
 
     def search_ticker(
         self,
@@ -437,6 +506,12 @@ class ScreenerService:
             c.next_earnings = earnings
             c.fundamental_score = strength
             c.peer_percentile = percentile
+        histories = self._dividend_histories([symbol])
+        self._stamp_dividends(contracts, today, histories)
+        history = histories.get(symbol) if histories is not None else None
+        # The next ex-date whatever the listed expiries, so the header can say "after all of
+        # these" rather than nothing. A year out reaches even an annual payer's next date.
+        ahead = upcoming(history or [], today, today + timedelta(days=366))
         logger.info(
             "search %s: %d %ss near Δ=%.2f (DTE %d-%d) · spot=%s · strength=%s · pct=%s · "
             "earnings=%s (%d of %d expiries span it)",
@@ -454,6 +529,7 @@ class ScreenerService:
             passes_fundamentals=passes, gate_reasons=reasons,
             next_earnings=earnings, earnings_known=earnings is not None, metrics=metrics,
             fundamental_score=strength, peer_percentile=percentile,
+            next_dividend=ahead[0] if ahead else None, dividends_known=history is not None,
         )
 
     def _symbol_earnings(
@@ -536,28 +612,40 @@ class ScreenerService:
             return []
 
     def _price_positions(self, accounts: list[BrokerageAccount]) -> None:
-        """Stamp each short put with its underlying's price, for the assignment watch.
+        """Stamp each short option with its underlying's price, its ex-dividend dates and its
+        early-assignment verdict — the assignment watch.
 
-        The broker prices the CONTRACT, never the stock behind it, so "is this put in the money"
+        The broker prices the CONTRACT, never the stock behind it, so "is this in the money"
         needs a quote from somewhere else. Best-effort by design: a portfolio that renders is
         worth more than one that 500s because a quote endpoint is briefly unhappy, and an unknown
         price shows an em dash rather than implying the position is safe.
+
+        The verdict here is judged against the broker's MARK, since the page lists every position
+        and a chain pull per row would be one request each. The exits panel, which pulls the
+        chain anyway, judges the same question against the bid.
         """
-        spot_of = getattr(self.chains, "spot", None)
-        if not callable(spot_of):
+        short = (PositionKind.SHORT_PUT, PositionKind.SHORT_CALL)
+        held = [p for a in accounts for p in a.positions if p.kind in short]
+        if not held:
             return
-        wanted = {
-            p.underlying for a in accounts for p in a.positions
-            if p.kind is PositionKind.SHORT_PUT
-        }
+        wanted = sorted({p.underlying for p in held})
         prices: dict[str, float | None] = {}
-        for symbol in sorted(wanted):
-            try:
-                prices[symbol] = spot_of(symbol)
-            except Exception:  # noqa: BLE001 - a quote is never worth failing the whole page
-                logger.debug("no spot for %s; assignment watch will show unknown", symbol)
-                prices[symbol] = None
-        for account in accounts:
-            for p in account.positions:
-                if p.kind is PositionKind.SHORT_PUT:
-                    p.underlying_price = prices.get(p.underlying)
+        spot_of = getattr(self.chains, "spot", None)
+        if callable(spot_of):
+            for symbol in wanted:
+                try:
+                    prices[symbol] = spot_of(symbol)
+                except Exception:  # noqa: BLE001 - a quote is never worth failing the whole page
+                    logger.debug("no spot for %s; assignment watch will show unknown", symbol)
+                    prices[symbol] = None
+        histories = self._dividend_histories(wanted) or {}
+        today = date.today()
+        for p in held:
+            p.underlying_price = prices.get(p.underlying)
+            if p.expiration is None or p.strike is None or p.option_type is None:
+                continue
+            p.dividends = in_life(histories.get(p.underlying) or [], today, p.expiration)
+            p.early_assignment = assess_assignment(
+                p.option_type, p.strike, p.underlying_price, p.mark, p.expiration, today,
+                p.dividends, self.carry_rate,
+            )

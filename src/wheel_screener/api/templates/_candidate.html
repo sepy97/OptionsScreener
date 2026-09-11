@@ -1,6 +1,11 @@
 {% import "_icons.html" as icon %}
 {% import "_company.html" as co %}
+{% import "_dividend.html" as divm %}
 {% set k = c.contract %}
+{% set dv = c|dividend_view %}
+{# explicitly false = a lookup was attempted and failed (or no source); an old stored run has no
+   key at all and says nothing either way #}
+{% set div_unknown = c.dividends_checked is defined and not c.dividends_checked %}
 {# default(none)/default([]): old stored snapshots predate these fields, so the key may be absent #}
 {% set fs = c.fundamental_score|default(none) %}
 {% set pp = c.peer_percentile|default(none) %}
@@ -30,7 +35,7 @@
           {{ "when screened, " ~ run_age if run_age else "when screened" }}</span>
       {% endif %}
       {# row-level flags: earnings risk (amber when on/before expiry) + quiet notes otherwise #}
-      {% if c.next_earnings or earn_unknown or c.has_weeklys or notes %}
+      {% if c.next_earnings or earn_unknown or c.has_weeklys or notes or dv or div_unknown %}
       <div class="detail-flags">
         {% if earn_warn %}
         <span class="badge">{{ icon.warning() }} Earnings {{ c.next_earnings }} &middot; before expiry</span>
@@ -39,10 +44,13 @@
         {% elif c.next_earnings %}
         <span class="detail-note">Earnings {{ c.next_earnings }} &middot; after expiry</span>
         {% endif %}
+        {% if dv %}{{ divm.badge(dv) }}
+        {% elif div_unknown %}<span class="detail-note" title="the dividend lookup did not run or failed — this is not the same as no dividend">dividend dates unavailable</span>{% endif %}
         {% if c.has_weeklys %}<span class="detail-note">weeklys</span>{% endif %}
         {% for n in notes %}<span class="detail-note">{{ n }}</span>{% endfor %}
       </div>
       {% endif %}
+      {% if dv %}{{ divm.explain(dv, false, k.strike) }}{% endif %}
       {{ co.company(profile|default(none)) }}
       <dl class="card-grid">
         <dt>Contract</dt>

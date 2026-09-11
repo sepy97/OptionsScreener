@@ -2,9 +2,12 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 
+import pytest
+
 from wheel_screener.core.models import (
     CandidateResult,
     ChainSnapshot,
+    Dividend,
     EarningsStatus,
     FundamentalMetrics,
     OptionContract,
@@ -596,3 +599,183 @@ def test_a_field_too_small_to_have_a_middle_falls_back_to_yield_alone() -> None:
                            fundamental_score=0.0, annualized_yield=0.25)
     ranked = rank([unknown, weak], fundamental_weight=0.5)
     assert ranked[0].symbol == "U" and ranked[0].score == 1.0
+
+
+# --- the ex-dividend flag: marks, never filters ------------------------------------------
+
+class _FakeDividends:
+    """``histories`` maps symbol -> dividend history; a symbol missing from it is "unknown"."""
+
+    def __init__(self, histories=None, error: Exception | None = None) -> None:
+        self.histories = histories or {}
+        self.error = error
+        self.asked: list[list[str]] = []
+
+    def dividend_history(self, symbols):
+        self.asked.append(list(symbols))
+        if self.error is not None:
+            raise self.error
+        return {s: self.histories[s] for s in symbols if s in self.histories}
+
+
+def _ex(days: int, amount: float = 0.71, freq: str = "quarterly"):
+    from wheel_screener.core.models import Dividend
+
+    return Dividend(ex_date=_BASE + timedelta(days=days), amount=amount, frequency=freq)
+
+
+def test_run_screen_flags_an_ex_dividend_inside_the_contract_without_filtering_it():
+    """The drop is priced into the put, so the contract stays — carrying the date it lives
+    through, for the UI to explain."""
+    chain = _chain([_put(90, -0.20, 27, 1.9)], underlying_price=100.0)
+    divs = _FakeDividends({"AAA": [_ex(-80), _ex(20)]})
+    service = ScreenerService(
+        fundamentals=_FakeFundamentals(), chains=_FakeChains(chain), dividends=divs
+    )
+    out = service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE)
+    assert len(out) == 1  # not filtered
+    assert [d.ex_date for d in out[0].dividends] == [_BASE + timedelta(days=20)]
+    assert out[0].dividends_checked
+    assert divs.asked == [["AAA"]]  # one batched lookup, for the names actually shown
+
+
+def test_run_screen_is_unchanged_when_the_dividend_lookup_fails():
+    """A flag is never worth failing a screen over — and a failed lookup must not read as
+    "no dividend", so the candidate is marked unchecked rather than clean."""
+    from wheel_screener.core.errors import RateLimitedError
+
+    chain = _chain([_put(90, -0.20, 27, 1.9)], underlying_price=100.0)
+    service = ScreenerService(
+        fundamentals=_FakeFundamentals(), chains=_FakeChains(chain),
+        dividends=_FakeDividends(error=RateLimitedError("slow down")),
+    )
+    out = service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE)
+    assert len(out) == 1 and out[0].dividends == [] and not out[0].dividends_checked
+
+
+def test_run_screen_skips_the_lookup_when_nothing_qualifies():
+    divs = _FakeDividends({})
+    service = ScreenerService(
+        fundamentals=_FakeFundamentals(), chains=_FakeChains(_chain([])), dividends=divs
+    )
+    assert service.run_screen(ScreenCriteria(top_n=10, min_dte=7, max_dte=45), _BASE) == []
+    assert divs.asked == []
+
+
+def test_search_flags_only_the_expiries_that_live_through_the_ex_date():
+    chain = _chain([_put(90, -0.20, 14, 1.0), _put(88, -0.20, 35, 3.0)], underlying_price=100.0)
+    service = ScreenerService(
+        fundamentals=_FakeFundamentals(), chains=_FakeChains(chain),
+        dividends=_FakeDividends({"AAA": [_ex(-80), _ex(20)]}),
+    )
+    r = service.search_ticker("AAA", ScreenCriteria(min_dte=7, max_dte=45), _BASE, n=5)
+    assert [bool(c.dividends) for c in r.contracts] == [False, True]  # 14d ends before it
+    assert all(c.dividends_checked for c in r.contracts)
+    assert r.next_dividend.ex_date == _BASE + timedelta(days=20) and r.dividends_known
+
+
+def test_search_reports_the_next_ex_date_even_past_every_expiry():
+    chain = _chain([_put(90, -0.20, 14, 1.0)], underlying_price=100.0)
+    service = ScreenerService(
+        fundamentals=_FakeFundamentals(), chains=_FakeChains(chain),
+        dividends=_FakeDividends({"AAA": [_ex(-40)]}),  # next due ~day 51, estimated
+    )
+    r = service.search_ticker("AAA", ScreenCriteria(min_dte=7, max_dte=45), _BASE, n=5)
+    assert r.contracts[0].dividends == []
+    assert r.next_dividend.estimated and r.next_dividend.ex_date == _BASE + timedelta(days=51)
+
+
+def test_search_without_a_dividend_source_claims_nothing():
+    chain = _chain([_put(90, -0.20, 14, 1.0)], underlying_price=100.0)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
+    r = service.search_ticker("AAA", ScreenCriteria(min_dte=7, max_dte=45), _BASE, n=5)
+    assert r.next_dividend is None and not r.dividends_known
+    assert not r.contracts[0].dividends_checked
+
+
+# --- the assignment watch on HELD positions -----------------------------------------------
+
+def _held_account(today: date):
+    from wheel_screener.core.models import BrokerageAccount, Position, PositionKind
+
+    exp = today + timedelta(days=35)
+    return BrokerageAccount(
+        broker="schwab", account_id="h", display_name="...123",
+        positions=[
+            # covered call $50, stock $52, mark $2.13 -> $0.13 of time value
+            Position(symbol="VZ    C", underlying="VZ", kind=PositionKind.SHORT_CALL,
+                     option_type=OptionType.CALL, quantity=2, strike=50.0, expiration=exp,
+                     market_value=-426.0),
+            Position(symbol="KO    P", underlying="KO", kind=PositionKind.SHORT_PUT,
+                     option_type=OptionType.PUT, quantity=1, strike=60.0, expiration=exp,
+                     market_value=-80.0),
+            Position(symbol="VZ", underlying="VZ", kind=PositionKind.SHARES, quantity=200,
+                     asset_type="EQUITY", market_value=10_400.0),
+        ],
+    )
+
+
+class _Accounts:
+    def __init__(self, account):
+        self.account = account
+
+    def accounts(self):
+        return [self.account]
+
+
+def test_held_short_options_are_stamped_with_dividends_and_an_early_assignment_verdict():
+    """The covered call goes ex-dividend with less time value left than the dividend — the
+    textbook early-assignment set-up — and the page has to say so."""
+    from wheel_screener.core.models import AssignmentCause, AssignmentRisk, PositionKind
+
+    today = date.today()
+    spots = {"VZ": 52.0, "KO": 66.0}
+
+    class _Spot(_FakeChains):
+        def spot(self, symbol):
+            return spots[symbol]
+
+    divs = _FakeDividends({
+        "VZ": [Dividend(ex_date=today - timedelta(days=63), amount=0.71, frequency="quarterly"),
+               Dividend(ex_date=today + timedelta(days=28), amount=0.71, frequency="quarterly")],
+        "KO": [],
+    })
+    service = ScreenerService(
+        fundamentals=_FakeFundamentals(), chains=_Spot(_chain([])), dividends=divs,
+        accounts=_Accounts(_held_account(today)),
+    )
+    (account,) = service.brokerage_accounts()
+    call, put, shares = account.positions
+    assert call.underlying_price == 52.0 and call.mark == pytest.approx(2.13)
+    assert [d.ex_date for d in call.dividends] == [today + timedelta(days=28)]
+    assert call.early_assignment.risk is AssignmentRisk.LIKELY
+    assert call.early_assignment.cause is AssignmentCause.DIVIDEND
+    assert put.underlying_price == 66.0 and put.early_assignment.risk is AssignmentRisk.LOW
+    assert shares.kind is PositionKind.SHARES and shares.early_assignment is None
+    assert divs.asked == [["KO", "VZ"]]  # one batched lookup for the held underlyings
+
+
+def test_the_exits_panel_judges_early_assignment_against_the_bid():
+    from wheel_screener.core.models import AssignmentRisk
+
+    today = date.today()
+    exp = today + timedelta(days=35)
+    held = OptionContract(
+        underlying_symbol="VZ", option_symbol="VZ50C", option_type=OptionType.CALL,
+        expiration=exp, strike=50.0, dte=35, bid=2.10, ask=2.20, open_interest=500,
+    )
+    chains = _FakeChains(ChainSnapshot(underlying_symbol="VZ", underlying_price=52.0,
+                                       contracts=[held]))
+    service = ScreenerService(
+        fundamentals=_FakeFundamentals(), chains=chains,
+        dividends=_FakeDividends({"VZ": [Dividend(
+            ex_date=today + timedelta(days=28), amount=0.71, frequency="quarterly")]}),
+    )
+    *_, early = service.exit_options(
+        "VZ", 50.0, exp, 2, today, option_type=OptionType.CALL, is_short=True
+    )
+    assert early.risk is AssignmentRisk.LIKELY and early.time_value == pytest.approx(0.10)
+    long_side = service.exit_options(
+        "VZ", 50.0, exp, 2, today, option_type=OptionType.CALL, is_short=False
+    )
+    assert long_side[-1] is None  # a long option cannot be assigned

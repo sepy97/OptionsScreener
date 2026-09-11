@@ -250,3 +250,51 @@ def test_earnings_calendar_is_never_served_from_cache() -> None:
     first = len(calls)
     provider.earnings_calendar(date(2026, 7, 25), date(2026, 8, 5))
     assert len(calls) == first * 2, "second fetch was served from cache"
+
+
+# --- dividend history (the ex-dividend flag) ----------------------------------------------
+
+def _dividends_route(by_symbol: dict[str, httpx.Response]) -> None:
+    respx.get(f"{BASE}/dividends").mock(
+        side_effect=lambda req: by_symbol[req.url.params["symbol"]]
+    )
+
+
+@respx.mock
+def test_dividend_history_maps_rows_earliest_first() -> None:
+    _dividends_route({"VZ": httpx.Response(200, json=[
+        {"symbol": "VZ", "date": "2026-10-09", "dividend": 0.7075, "adjDividend": 0.7075,
+         "frequency": "Quarterly", "declarationDate": "2026-09-09"},
+        # a pre-split row: adjDividend is restated to today's share basis and wins
+        {"symbol": "VZ", "date": "2026-07-10", "dividend": 1.415, "adjDividend": 0.7075,
+         "frequency": "Quarterly"},
+        {"symbol": "VZ", "date": "", "dividend": 0.5},  # no date -> dropped
+        {"symbol": "VZ", "date": "2026-04-10", "dividend": 0},  # no amount -> dropped
+    ])})
+    got = _provider().dividend_history(["VZ"])["VZ"]
+    assert [d.ex_date for d in got] == [date(2026, 7, 10), date(2026, 10, 9)]
+    assert all(d.amount == 0.7075 and d.frequency == "quarterly" for d in got)
+    assert not any(d.estimated for d in got)
+
+
+@respx.mock
+def test_dividend_history_separates_pays_none_from_unknown() -> None:
+    """An empty history is an answer ("pays none"); a per-symbol 404 is not, so that symbol is
+    left out and the UI says nothing rather than implying no dividend."""
+    _dividends_route({
+        "PLTR": httpx.Response(200, json=[]),
+        "ZZZZ": httpx.Response(404),
+    })
+    got = _provider().dividend_history(["PLTR", "ZZZZ", "PLTR"])
+    assert got == {"PLTR": []}
+
+
+@respx.mock
+def test_dividend_history_raises_on_a_systemic_failure() -> None:
+    _dividends_route({"VZ": httpx.Response(401), "T": httpx.Response(401)})
+    with pytest.raises(AuthExpiredError):
+        _provider().dividend_history(["VZ", "T"])
+
+
+def test_dividend_history_of_nothing_makes_no_calls() -> None:
+    assert _provider().dividend_history([]) == {}

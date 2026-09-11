@@ -1,9 +1,14 @@
 {% import "_icons.html" as icon %}
 {% import "_company.html" as co %}
+{% import "_dividend.html" as divm %}
 {% set r = result %}
 {% set rows = r.contracts %}
 {% set n = rows|length %}
 {% set is_call = (r.side == 'call') %}
+{# rows whose life spans an ex-dividend date; the panel describes the latest of them, which lives
+   through every ex-date any shorter row does #}
+{% set div_rows = rows|selectattr('dividends')|list %}
+{% set div_last = (div_rows|sort(attribute='contract.dte')|last)|dividend_view if div_rows else none %}
 {% set noun = 'call' if is_call else 'put' %}
 {% set sk = sort_key|default('') %}
 {% set so = sort_order|default('desc') %}
@@ -40,10 +45,26 @@
     {% endif %}
     {% if r.next_earnings %}<span class="badge">{{ icon.warning() }} earnings {{ r.next_earnings }}</span>
     {% elif not r.earnings_known %}<span class="badge" title="no earnings date could be established for this ticker — treat every expiry as event risk">{{ icon.warning() }} earnings date unknown</span>{% endif %}
+    {# the ex-dividend date only earns a warning when a listed expiry lives through it (the panel
+       below); past every expiry it is context, and a lookup that failed says so #}
+    {% if not div_rows %}
+      {% if r.next_dividend %}{% set nd = r.next_dividend %}
+      <span class="fund-note" title="{{ 'estimated from its ' ~ (nd.frequency or 'regular') ~ ' schedule — not announced yet' if nd.estimated else 'announced' }}">next ex-div {{ '~' if nd.estimated }}{{ nd.ex_date }} &middot; {{ '~' if nd.estimated }}{{ nd.amount|money }}{{ ' · after these expiries' if rows }}</span>
+      {% elif not r.dividends_known|default(false) %}
+      <span class="fund-note" title="the dividend lookup did not run or failed — this is not the same as no dividend">dividend dates unavailable</span>
+      {% endif %}
+    {% endif %}
     {% if rows %}<a href="/search/export.csv?ticker={{ r.symbol }}&top_n={{ tn }}&min_dte={{ s_min_dte }}&max_dte={{ s_max_dte }}&target_delta={{ s_target_delta }}&side={{ s_side }}"
        role="button" class="secondary outline export-btn" download>{{ icon.download() }} Export CSV</a>{% endif %}
   {{ co.company(profile|default(none)) }}
 </header>
+  {% if div_last %}
+  <div class="div-panel">
+    {{ divm.badge(div_last) }}
+    <span class="fund-note">before {{ div_rows|length }} of these {{ n }} expir{{ 'y' if n == 1 else 'ies' }} (marked ex-div — hover for each one's numbers)</span>
+    {{ divm.explain(div_last, is_call) }}
+  </div>
+  {% endif %}
   {% if rows %}
   <figure>
     <table>
@@ -68,7 +89,8 @@
         {% set k = c.contract %}
         <tr>
           <td>${{ k.strike|num2 }}</td>
-          <td>{{ k.expiration }}{% if c.earnings_status == 'spans' or (r.next_earnings and r.next_earnings <= k.expiration) %}
+          {%- set dv = c|dividend_view %}
+          <td>{% if dv %}{{ divm.pill(dv, is_call) }}{% endif %}{{ k.expiration }}{% if c.earnings_status == 'spans' or (r.next_earnings and r.next_earnings <= k.expiration) %}
             <span title="{% if is_call %}earnings {{ r.next_earnings }} lands before this expiry — you hold the shares through it either way, but a pop gets called away{% else %}earnings {{ r.next_earnings }} lands before this expiry — assignment would be event-driven{% endif %}">{{ icon.warning() }}</span>{% endif %}</td>
           <td>{{ k.dte }}</td>
           <td>{{ "%.2f"|format(k.delta) if k.delta is not none else "—" }}</td>

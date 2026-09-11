@@ -21,6 +21,7 @@ from wheel_screener.core.ports import (
     BrokerageAccountProvider,
     ChainProvider,
     CompanyProfileProvider,
+    DividendProvider,
     FundamentalReportProvider,
     FundamentalsProvider,
 )
@@ -91,6 +92,22 @@ def _build_accounts(settings: Settings) -> BrokerageAccountProvider | None:
     return SchwabAccountProvider(settings.schwab)
 
 
+def _build_dividends(
+    settings: Settings, fundamentals: FundamentalsProvider
+) -> DividendProvider | None:
+    """Dividend history for the ex-dividend flag, or None without an FMP key.
+
+    The bulk store holds no dividend dates, so the local source delegates to live FMP — the
+    same arrangement as earnings. Without a key the flag is simply off, and the UI says nothing
+    rather than implying no dividend.
+    """
+    if isinstance(fundamentals, DividendProvider):
+        return fundamentals
+    if settings.fmp.api_key.get_secret_value():
+        return FmpFundamentalsProvider(settings.fmp)
+    return None
+
+
 def _build_etfs(settings: Settings) -> EtfUniverseProvider | None:
     """ETFs need FMP to know WHICH symbols are funds and Alpaca to price them, so both must be
     configured. Missing either simply means a stocks-only screen."""
@@ -111,6 +128,8 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
         profiles=_build_profiles(fundamentals),
         accounts=_build_accounts(settings),
         etfs=_build_etfs(settings),
+        dividends=_build_dividends(settings, fundamentals),
+        carry_rate=settings.portfolio.carry_rate,
     )
 
 

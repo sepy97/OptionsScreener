@@ -185,3 +185,41 @@ def test_doctor_reports_a_probe_that_raises(monkeypatch) -> None:
     ])
     result = runner.invoke(app, ["doctor"], env={"LOG__ENABLE_FILE": "false"})
     assert result.exit_code == 1 and "kaboom" in result.output
+
+
+def test_search_output_and_candidates_csv_carry_the_ex_dividend(tmp_path, capsys) -> None:
+    from datetime import date
+
+    from wheel_screener.cli.main import _print_search, _write_candidates_csv
+    from wheel_screener.core.models import (
+        CandidateResult,
+        Dividend,
+        EarningsStatus,
+        OptionContract,
+        OptionType,
+    )
+    from wheel_screener.core.service import TickerSearch
+
+    div = Dividend(ex_date=date(2026, 10, 9), amount=0.71, frequency="quarterly")
+    contract = OptionContract(
+        underlying_symbol="VZ", option_symbol="VZ50C", option_type=OptionType.CALL,
+        expiration=date(2026, 10, 16), strike=50.0, dte=35, bid=0.6, ask=0.65, delta=0.2,
+        open_interest=900,
+    )
+    cand = CandidateResult(
+        symbol="VZ", contract=contract, premium=0.6, dividends=[div], dividends_checked=True,
+        earnings_status=EarningsStatus.CLEAN,
+    )
+    _print_search(TickerSearch(
+        symbol="VZ", contracts=[cand], side=OptionType.CALL, underlying_price=48.0,
+        next_dividend=div, dividends_known=True, earnings_known=True,
+    ))
+    out = capsys.readouterr().out
+    assert "next ex-div 2026-10-09 $0.71" in out
+    assert "<- ex-div 2026-10-09 $0.71 (early assignment if ITM)" in out
+
+    path = tmp_path / "c.csv"
+    _write_candidates_csv([cand], str(path))
+    header, row = path.read_text().splitlines()
+    assert header.endswith("ex_dividend,dividend,dividend_estimated")
+    assert row.endswith("2026-10-09,0.71,False")

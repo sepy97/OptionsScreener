@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% import "_icons.html" as icon %}
+{% import "_assignment.html" as am %}
+{% import "_dividend.html" as divm %}
 {% block content %}
   <article>
     <h2>Portfolio</h2>
@@ -100,11 +102,18 @@
                     <td>{{ p.quantity | int }}</td>
                     <td>{{ p.collateral | money }}</td>
                     <td>{{ p.market_value | money }}</td>
-                    <td>
+                    {# EARLY assignment is the one question every short option shares: the holder
+                       exercises before expiry when that gains more than the time value left.
+                       Only shown when it is a live prospect, and the ex-dividend date beside it
+                       whenever the contract lives through one. #}
+                    {% set ea = p.early_assignment %}
+                    {% set early_warn = ea is not none and ea.risk in ('likely', 'possible') %}
+                    {% set dv = p|position_dividend_view %}
+                    <td class="assign-cell"><div class="assign-stack">
                       {% if p.kind != 'short_put' %}
-                        {# assignment risk is only a cash question for a short put; a short call
-                           is answered by the shares, and a long option cannot be assigned #}
-                        <span class="detail-note">&mdash;</span>
+                        {# ITM/OTM is only a cash question for a short put; a short call is
+                           answered by the shares, and a long option cannot be assigned #}
+                        {% if not early_warn and not dv %}<span class="detail-note">&mdash;</span>{% endif %}
                       {% elif p.in_the_money is none %}
                         {# The broker prices the CONTRACT, never the stock behind it, so this
                            needs a quote from the chain provider — best-effort, and unavailable
@@ -119,7 +128,9 @@
                       {% else %}
                         <span class="badge badge--ok">OTM &middot; {{ p.underlying_price | money }}</span>
                       {% endif %}
-                    </td>
+                      {% if early_warn %}{{ am.badge(ea, true) }}{% endif %}
+                      {% if dv %}{{ divm.pill(dv, p.kind == 'short_call') }}{% endif %}
+                    </div></td>
                   </tr>
                 {% endfor %}
               </tbody>

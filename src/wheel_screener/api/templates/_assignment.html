@@ -1,0 +1,93 @@
+{# Early assignment on a held short option: the verdict, and the reason in the holder's terms.
+   `ea` is a core.models.EarlyAssignment. Every cause is the same test — does exercising now gain
+   the holder more than the option's remaining time value? — so each sentence names both. #}
+{% import "_icons.html" as icon %}
+
+{%- macro when(d) -%}{{ d.strftime('%d %b') }}{%- endmacro -%}
+
+{# the dividend the verdict turned on, with its estimate caveat #}
+{%- macro div_amount(ea) -%}
+  {%- set d = ea.dividends[0] -%}{{ d.amount|money }}{{ ' (estimated — not announced yet)' if d.estimated }}
+{%- endmacro -%}
+
+{%- macro label(ea) -%}
+  {%- if ea.risk == 'likely' -%}early assignment likely
+  {%- elif ea.risk == 'possible' -%}early assignment possible
+  {%- elif ea.risk == 'unknown' -%}early assignment: no quote
+  {%- else -%}early assignment unlikely{%- endif -%}
+{%- endmacro -%}
+
+{# one line, plain text: a row's tooltip #}
+{%- macro tip(ea, estimated_from_mark=false) -%}
+  {{ label(ea)|capitalize }}
+  {%- if ea.cause == 'dividend' %} on {{ when(ea.on) }}: {{ ea.time_value|money }} of time value against the {{ ea.threshold|money }} dividend going ex the next day.
+  {%- elif ea.cause == 'interest' %}{{ ' from ' ~ when(ea.on) if ea.deferred }}: {{ ea.time_value|money }} of time value against ~{{ ea.threshold|money }} of interest on the strike.
+  {%- elif ea.cause == 'no_time_value' %}: no time value left ({{ ea.time_value|money }}).
+  {%- else %}.{% endif %}
+  {%- if estimated_from_mark %} Estimated from the broker's mark.{% endif %} Click the row for details.
+{%- endmacro -%}
+
+{%- macro badge(ea, estimated_from_mark=false) -%}
+<span class="badge {{ 'badge--neg' if ea.risk == 'likely' else ('badge--ok' if ea.risk == 'low' else '') }} badge--assign"
+      title="{{ tip(ea, estimated_from_mark)|squash }}">
+  {%- if ea.risk in ('likely', 'possible') %}{{ icon.warning() }} {% endif %}{{ label(ea) }}
+  {%- if ea.on and ea.risk in ('likely', 'possible') %} &middot; {{ ('from ' if ea.deferred else '') ~ when(ea.on) }}{% endif -%}
+</span>
+{%- endmacro -%}
+
+{# the full explanation, for the exits panel #}
+{%- macro explain(ea, is_call, strike, contracts) -%}
+{%- set tv = ea.time_value|money -%}
+{%- set thr = ea.threshold|money -%}
+{%- set k = strike|money -%}
+<p class="div-explain assign-{{ ea.risk }}">
+  {%- if ea.risk == 'unknown' %}
+  It is {{ ea.intrinsic|money }} a share in the money, but no quote came back for the option, so
+  its time value &mdash; and with it the odds of early exercise &mdash; can't be judged.
+  {%- elif not ea.in_the_money %}
+  <b>Unlikely.</b> Out of the money, so exercising would cost the holder money.
+  {%- if is_call and ea.threshold %} That changes if the stock rises above {{ k }} before {{ when(ea.on) }}: with less than {{ thr }} of time value left then, expect it to be exercised to collect the {{ div_amount(ea) }} dividend.{% endif %}
+  {%- elif ea.risk == 'likely' and ea.cause == 'dividend' %}
+  <b>Likely on {{ when(ea.on) }}.</b> This call is {{ ea.intrinsic|money }} a share in the money with only
+  {{ tv }} of time value &mdash; less than the {{ div_amount(ea) }} dividend going ex the next day.
+  Exercising on {{ when(ea.on) }} collects it, so expect the shares to be called away then: you keep
+  the premium, not the dividend ({{ (ea.threshold * 100 * contracts)|money }} on
+  {{ contracts|int }} contract{{ 's' if contracts != 1 }}). A later expiry carries more time value,
+  which is what takes the incentive away.
+  {%- elif ea.risk == 'possible' and ea.cause == 'dividend' %}
+  <b>Possible on {{ when(ea.on) }}.</b> In the money with {{ tv }} of time value, not far above the
+  {{ div_amount(ea) }} dividend going ex the next day. If the stock rises further, or the time value
+  decays before then, exercising to collect it becomes worth the holder's while.
+  {%- elif ea.risk == 'likely' and ea.cause == 'interest' %}
+  <b>Likely, any day.</b> This put is {{ ea.intrinsic|money }} a share in the money with only {{ tv }}
+  of time value &mdash; less than the ~{{ thr }} of interest its holder earns by taking the {{ k }}
+  strike in cash now instead of at expiry. Exercising pays them more than selling it, so expect to
+  buy the shares at {{ k }} before expiry.
+  {%- elif ea.risk == 'possible' and ea.deferred %}
+  <b>Possible from {{ when(ea.on) }}.</b> The holder gains the {{ div_amount(ea) }} ex-dividend drop by
+  waiting, so exercise is unlikely before then. After it, the {{ tv }} of time value is less than the
+  ~{{ thr }} of interest on the strike, and exercising early pays.
+  {%- elif ea.risk == 'possible' and ea.cause == 'interest' %}
+  <b>Possible.</b> In the money with {{ tv }} of time value, getting close to the ~{{ thr }} of interest
+  the holder would earn by taking the {{ k }} strike now. If the stock falls further, exercising early
+  becomes worth their while.
+  {%- elif ea.cause == 'no_time_value' %}
+  <b>Likely, any day.</b> It has no time value left ({{ tv }}), so the holder gets more by exercising
+  than by selling it &mdash; expect {{ 'the shares to be called away' if is_call else 'to buy the shares at ' ~ k }} early.
+  {%- elif ea.deferred %}
+  <b>Unlikely.</b> In the money, but the holder gains the {{ div_amount(ea) }} ex-dividend drop by
+  waiting for {{ when(ea.on) }}, and after it the {{ tv }} of time value still beats the ~{{ thr }} of
+  interest exercising would earn.
+  {%- elif is_call and ea.threshold %}
+  <b>Unlikely.</b> In the money, but its {{ tv }} of time value is well above the {{ div_amount(ea) }}
+  dividend going ex after {{ when(ea.on) }}, so exercising for it would cost the holder more than it
+  pays.
+  {%- elif is_call %}
+  <b>Unlikely.</b> In the money, but with {{ tv }} of time value left and no dividend to collect,
+  exercising early would only throw that away.
+  {%- else %}
+  <b>Unlikely.</b> In the money, but its {{ tv }} of time value is more than the ~{{ thr }} of interest
+  the holder would earn by taking the strike now.
+  {%- endif %}
+</p>
+{%- endmacro -%}

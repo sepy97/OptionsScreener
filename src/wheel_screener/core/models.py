@@ -54,6 +54,61 @@ class EarningsPolicy(StrEnum):
     OFF = "off"  # no earnings handling at all (escape hatch / offline)
 
 
+class Dividend(BaseModel):
+    """One ex-dividend date: the morning the share price drops by ``amount``.
+
+    ``estimated`` marks a date projected from the payer's regular schedule rather than
+    announced. Companies declare only a few weeks ahead, so most ex-dates inside a 45-day
+    contract are not public yet when the contract is sold; leaving them out would read as
+    "no dividend", which is the conflation issue #113 was about for earnings.
+    """
+
+    ex_date: date
+    amount: float  # per share
+    # the payer's own label, lower-cased: quarterly, monthly, semi-annual, annual, weekly,
+    # irregular, special. Only the regular ones are projected forward.
+    frequency: str | None = None
+    estimated: bool = False
+
+
+class AssignmentRisk(StrEnum):
+    """Will the holder of a short option exercise it before expiry?"""
+
+    LIKELY = "likely"  # exercising now pays the holder more than selling the option
+    POSSIBLE = "possible"  # in the money with thin time value — little would tip it
+    LOW = "low"  # out of the money, or plenty of time value left
+    UNKNOWN = "unknown"  # in the money, but the option has no quote to judge it by
+
+
+class AssignmentCause(StrEnum):
+    """What would make early exercise worth the holder's while."""
+
+    DIVIDEND = "dividend"  # calls: exercise the day before the ex-date to collect it
+    INTEREST = "interest"  # puts: take the strike in cash now and earn interest on it
+    NO_TIME_VALUE = "no_time_value"  # either: nothing is given up by exercising
+
+
+class EarlyAssignment(BaseModel):
+    """The early-assignment verdict for one held short option, with the numbers behind it.
+
+    The test is the same for every cause: early exercise happens when what the holder GAINS by
+    exercising now (``threshold``) exceeds what they give up — the option's remaining TIME VALUE,
+    which selling it would have captured instead.
+    """
+
+    risk: AssignmentRisk
+    cause: AssignmentCause | None = None
+    # Calls: the day before the ex-date, when the dividend makes exercise worthwhile. Puts: the
+    # ex-date itself, when it was DEFERRING exercise (holding through it gains the drop).
+    on: date | None = None
+    deferred: bool = False  # a put whose early exercise waits for an ex-date to pass
+    in_the_money: bool = False
+    intrinsic: float = 0.0  # per share
+    time_value: float | None = None  # per share: the option's price beyond intrinsic
+    threshold: float | None = None  # per share: what exercising early would gain the holder
+    dividends: list[Dividend] = Field(default_factory=list)  # ex-dates inside the life
+
+
 class ScreenCriteria(BaseModel):
     """Inputs to a screen run. Mirrors the target CSP/wheel trade profile."""
 
@@ -306,6 +361,26 @@ class Position(BaseModel):
     # Spot at render time, when a quote source is available. Only used to say whether a short put
     # is in the money; None simply hides the assignment column rather than guessing.
     underlying_price: float | None = None
+    # short options only, stamped at render time: the ex-dividends the contract lives through,
+    # and whether its holder is likely to exercise before expiry
+    dividends: list[Dividend] = Field(default_factory=list)
+    early_assignment: EarlyAssignment | None = None
+
+    @property
+    def mark(self) -> float | None:
+        """The option's price per share, from the broker's market value.
+
+        The broker prices the contract at its mark (about the mid), signed by direction and
+        scaled by 100 shares a contract; this undoes both. An estimate for the early-assignment
+        check — a holder deciding whether to exercise compares against the BID, which is lower.
+
+        A zero market value is read as NO mark, not a price of nothing: on an in-the-money
+        option it would otherwise report no time value left and raise a false alarm, and out of
+        the money the verdict does not depend on the price anyway.
+        """
+        if not self.is_option or not self.market_value or not self.quantity:
+            return None
+        return abs(self.market_value) / (100 * self.quantity)
 
     @property
     def days_held(self) -> int | None:
@@ -586,6 +661,12 @@ class CandidateResult(BaseModel):
     # the verdict for THIS contract's expiry (not the name) — carried to the UI/CSV so a
     # blackout miss is visible instead of silent
     earnings_status: EarningsStatus = EarningsStatus.UNKNOWN
+    # Ex-dividend dates inside THIS contract's life (after today, on or before expiry). A flag,
+    # never a filter: the drop is priced into the option, so it is not a gap the way a report
+    # is — but it moves the share price the cushion is judged against, and it is when a short
+    # call gets assigned early. ``dividends_checked`` separates "none" from "never looked".
+    dividends: list[Dividend] = Field(default_factory=list)
+    dividends_checked: bool = False
     has_weeklys: bool | None = None
     score: float | None = None
     notes: list[str] = Field(default_factory=list)

@@ -4,7 +4,8 @@
 part that goes stale fastest. Target release: **v2.0.0** — shipped; positions landed in v2.4.0.
 
 **Status:** live. Sign-in, balances and positions are running in production against a real Schwab
-account. Remaining: P5 (ops) and P6 (cross-links into the screener).
+account; P5 (ops) and P5a (the early-assignment watch, v2.12.0) are done. Remaining: P6
+(cross-links into the screener).
 
 | Decision | State |
 |---|---|
@@ -576,6 +577,31 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
         instinct is to back up everything: the token expires in 7 days so a restored copy is
         usually dead, it is trading-capable so copying it off the box widens the blast radius,
         and one click replaces it faster than a restore would.
+- [x] **P5a — early-assignment watch (v2.12.0).** Every held SHORT option — puts and, for the
+      first time, calls — carries a verdict on whether its holder will exercise before expiry,
+      plus the ex-dividend dates it lives through. The Assignment cell shows a *likely* /
+      *possible* badge and an **ex-div** marker. The exits panel explains the verdict above the
+      ways out. What is baked into `core/assignment.py` and its tests:
+      - **One test, three causes.** A holder exercises early only when that gains more than the
+        option's remaining TIME VALUE, which selling it would capture. What differs by cause is
+        only the gain. For a call it is the dividend: exercise comes the day before the
+        ex-date. For a put it is the interest on the strike cash taken now rather than at
+        expiry. For either, with no time value left, nothing is lost. Out of the money, exercise
+        would cost the holder money.
+      - **A dividend DEFERS a put's exercise.** Holding through the ex-date gains the drop, so
+        the put verdict moves to the ex-date ("possible from 23 Sep") instead of "any day". The
+        interest it is weighed against runs only from the ex-date to expiry.
+      - **A short call's cell was deliberately blank until now.** Its assignment AT expiry is the
+        plan, not a risk. An EARLY one is different, because it takes the dividend with it. So
+        the cell stays blank unless there is a verdict worth showing or an ex-date ahead.
+      - **Two price sources, one question.** The page lists every position, so the row judges
+        against the broker's MARK (|market value| ÷ 100 ÷ contracts) with no extra chain calls.
+        The exits panel already pulls the chain, so it judges against the BID, which is what the
+        holder could sell for instead. The row's tooltip says it is an estimate.
+      - **Not modelled:** tender offers and mergers, and hard-to-borrow stocks. A quote cannot
+        show them; the panel says so rather than implying the verdict covers everything.
+      - The carry rate defaults to 4% (`PORTFOLIO__CARRY_RATE`). The verdict isn't sensitive to
+        a point either way.
 - [ ] **P6 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
 - [ ] *(later)* **A second broker**, to prove the abstraction is real rather than Schwab wearing a
@@ -604,7 +630,9 @@ credential on the volume. That is exactly the case the label was reserved for.
 
 - Multiple linked accounts: pick one, or show all? `get_account_numbers()` returns every linked
   account.
-- Does the assignment watch need live quotes (spot vs strike), or is the position's own market
-  value enough? Live quotes mean a chain/quote call per underlying.
+- ~~Does the assignment watch need live quotes (spot vs strike), or is the position's own market
+  value enough?~~ **Both, for different halves** (P5a). Spot needs a quote per underlying, since
+  the broker never prices the stock. The option's time value comes from the position's own market
+  value (the mark), with no extra call. The exits panel refines it against the live bid.
 - Should the portfolio influence the screen itself (exclude names already held), or only annotate
   the results? Annotating is safer; excluding hides trades the operator may still want.
