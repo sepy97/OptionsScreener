@@ -480,3 +480,19 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 }
 /* The two segmented knobs stack beside the DTE ladder, which needs the width for its bars. */
 .knob-stack { display: flex; flex-direction: column; gap: 0.9rem; }
+
+/* --- put swap rule: the Close? column and its panel --- */
+.swap-bar { display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap; margin: 0 0 0.75rem; }
+.swap-bar button { margin: 0; padding: 0.25rem 0.75rem; font-size: 0.8125rem; }
+.close-cell { text-align: right; }
+.close-link { text-decoration: none; }
+.close-link:hover .badge { filter: brightness(0.94); }
+/* the verdict panel reuses the exits panel's frame, but NOT its 5-column widths: this table has
+   eight columns, and borrowing those widths collapsed bid/yield/collateral on top of each other */
+.swap-row > td { white-space: normal; }   /* the global table nowrap would run the prose off the page */
+.swap-panel .card-grid { margin-bottom: 0.75rem; }
+.swap-panel .card-grid dd { white-space: normal; }
+.swap-panel .card-grid dd .detail-note { display: block; }
+.swap-panel > p, .swap-panel figure { max-width: 72rem; }
+.swap-table { table-layout: auto; }
+.swap-table th:first-child, .swap-table td:first-child { width: 18%; text-align: left; }

@@ -26,6 +26,7 @@ from wheel_screener.core.ports import (
     FundamentalsProvider,
 )
 from wheel_screener.core.service import ScreenerService
+from wheel_screener.core.swap import SwapParams
 
 
 @dataclass(frozen=True)
@@ -130,6 +131,10 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
         etfs=_build_etfs(settings),
         dividends=_build_dividends(settings, fundamentals),
         carry_rate=settings.portfolio.carry_rate,
+        swap_params=SwapParams(
+            min_ratio=settings.swap.min_ratio, min_extra=settings.swap.min_extra,
+            swap_cost=settings.swap.swap_cost, top_n=settings.swap.top_n,
+        ),
     )
 
 

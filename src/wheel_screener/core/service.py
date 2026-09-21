@@ -5,6 +5,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
@@ -30,8 +32,10 @@ from wheel_screener.core.models import (
     FundamentalMetrics,
     FundamentalReport,
     OptionType,
+    Position,
     PositionKind,
     ScreenCriteria,
+    SwapSuggestion,
     Underlying,
 )
 from wheel_screener.core.pipeline.pull_chains import pull_chains
@@ -54,8 +58,23 @@ from wheel_screener.core.ports import (  # noqa: F401 - EtfUniverseProvider is a
     FundamentalReportProvider,
     FundamentalsProvider,
 )
+from wheel_screener.core.swap import OpenPut, SwapParams, list_median_yield
+from wheel_screener.core.swap import review as swap_review
 
 logger = logging.getLogger(__name__)
+
+# Concurrent chain pulls for the swap review. A wheel account holds a handful of puts, so this
+# is about not waiting on them one at a time rather than about throughput.
+_SWAP_WORKERS = 4
+
+
+def _suggestion(c: CandidateResult) -> SwapSuggestion:
+    """A screen candidate (or a freshly picked put) as a swap suggestion."""
+    return SwapSuggestion(
+        symbol=c.symbol, strike=c.contract.strike, expiration=c.contract.expiration,
+        dte=c.contract.dte, delta=c.contract.delta, bid=c.contract.bid,
+        annualized_yield=c.annualized_yield, collateral=c.collateral, score=c.score,
+    )
 
 
 @dataclass
@@ -106,6 +125,8 @@ class ScreenerService:
     dividends: DividendProvider | None = None
     # the short-term rate a put holder earns on the strike — the early-exercise test for puts
     carry_rate: float = DEFAULT_CARRY_RATE
+    # limits for the put swap rule (keep or redeploy the cash behind an open put)
+    swap_params: SwapParams = field(default_factory=SwapParams)
     _scores: dict[str, float] | None = field(default=None, init=False, repr=False, compare=False)
 
     def _universe_scores(self, criteria: ScreenCriteria, today: date) -> dict[str, float]:
@@ -610,6 +631,125 @@ class ScreenerService:
             # A screen that returns stocks is worth more than one that returns an error page.
             logger.warning("etf universe unavailable (%s); screening stocks only", e)
             return []
+
+    def swap_reviews(
+        self,
+        positions: list[Position],
+        candidates: Sequence[CandidateResult] | None,
+        today: date,
+        criteria: ScreenCriteria | None = None,
+    ) -> None:
+        """Stamp each open short put with a keep-or-swap verdict (see ``core.swap``).
+
+        One chain pull per held put does double duty: it carries the ASK that says what buying
+        the put back costs, and the board the YARDSTICK is chosen from — the one put the entry
+        rules would open on that ticker today, picked by the very same ``select_put`` the screen
+        uses, so the comparison is against a put this project would really sell.
+
+        ``candidates`` is the latest screen. It supplies only the fallback median (for a ticker
+        with no valid pick of its own) and the other-ticker suggestions; it never decides whether
+        to swap. Nothing here raises: a verdict is worth less than the page it sits on.
+        """
+        criteria = criteria or ScreenCriteria()
+        picks = [_suggestion(c) for c in candidates or []]
+        median_yield = list_median_yield([p.annualized_yield for p in picks
+                                          if p.annualized_yield is not None])
+        open_puts = [
+            p for p in positions
+            if p.kind is PositionKind.SHORT_PUT and p.strike and p.expiration
+        ]
+        if not open_puts:
+            return
+
+        def one(p: Position) -> None:
+            days = (p.expiration - today).days
+            out_of_scope = days < 1 or (
+                p.underlying_price is not None and p.underlying_price <= p.strike
+            )
+            if out_of_scope:
+                # Nothing a chain could say changes an out-of-scope verdict, so it is settled
+                # before spending the call. (Spot unknown is NOT out of scope: the chain pull
+                # is where that price comes from.)
+                p.swap = swap_review(
+                    OpenPut(symbol=p.underlying, strike=p.strike, days=days,
+                            contracts=p.quantity, spot=p.underlying_price, ask=None),
+                    None, (), median_yield, self.swap_params,
+                )
+                return
+            same, ask = self._yardstick_and_ask(p, criteria, today)
+            others = [
+                s for s in sorted(
+                    picks, key=lambda s: s.annualized_yield or 0.0, reverse=True
+                ) if s.symbol != p.underlying
+            ]
+            p.swap = swap_review(
+                OpenPut(
+                    symbol=p.underlying, strike=p.strike, days=(p.expiration - today).days,
+                    contracts=p.quantity, spot=p.underlying_price, ask=ask,
+                ),
+                same, others, median_yield, self.swap_params,
+            )
+
+        workers = min(len(open_puts), _SWAP_WORKERS)
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            list(pool.map(one, open_puts))
+        logger.info(
+            "swap review: %d open put(s) — %s",
+            len(open_puts),
+            ", ".join(f"{p.underlying} {p.swap.action.value}" for p in open_puts if p.swap),
+        )
+
+    def _yardstick_and_ask(
+        self, position: Position, criteria: ScreenCriteria, today: date
+    ) -> tuple[SwapSuggestion | None, float | None]:
+        """``(the fresh same-ticker pick, the open put's ask)`` from ONE chain pull.
+
+        The window has to cover both the held expiry and the entry window, because they are
+        different questions asked of the same board: what this put costs to close, and what the
+        rules would open instead. Returns ``(None, ask)`` when the ticker has no valid pick today
+        — it fails the fundamental gate, reports before every candidate expiry, or has nothing
+        liquid enough — which is exactly when the list median stands in.
+        """
+        held_days = (position.expiration - today).days
+        try:
+            snapshot = self.chains.get_chain(position.underlying, ChainFilter(
+                option_type=OptionType.PUT,
+                min_dte=max(1, min(criteria.min_dte, held_days)),
+                max_dte=max(criteria.max_dte + criteria.dte_tolerance, held_days),
+                min_open_interest=0,  # the HELD contract must come back whatever its liquidity
+                target_delta=signed_target_delta(criteria.target_delta, OptionType.PUT),
+            ))
+        except Exception as e:  # noqa: BLE001 - one unpriceable name must not sink the page
+            logger.warning("swap review: no chain for %s (%s)", position.underlying, e)
+            return None, None
+
+        mine = next(
+            (c for c in snapshot.contracts
+             if c.strike == position.strike and c.expiration == position.expiration), None,
+        )
+        ask = mine.ask if mine is not None else None
+        if position.underlying_price is None:
+            position.underlying_price = snapshot.underlying_price
+
+        # The entry rules, in the order that costs least: the fundamental gate is a local lookup,
+        # the earnings date is one call, and only then is a strike chosen.
+        metrics = self.fundamentals.fetch_metrics([position.underlying]).get(position.underlying)
+        if metrics is None or gate_reasons(metrics, criteria):
+            return None, ask
+        earnings = self._symbol_earnings(position.underlying, criteria, today)
+        guard = EarningsGuard(
+            {position.underlying: earnings} if earnings else {}, today,
+            buffer_days=criteria.earnings_buffer_days, policy=EarningsPolicy.EXCLUDE,
+            # A per-symbol lookup vouches for no range, so an absent date is unknown rather than
+            # clean. Excluding on that would delete the yardstick for every name FMP is quiet
+            # about, and the fallback median is the safer answer than no comparison at all.
+            exclude_unknown=False,
+        )
+        pick = select_put(snapshot, criteria, guard)
+        if pick is None:
+            return None, ask
+        fresh = _suggestion(self._candidate(position.underlying, pick))
+        return fresh.model_copy(update={"same_ticker": True}), ask
 
     def _price_positions(self, accounts: list[BrokerageAccount]) -> None:
         """Stamp each short option with its underlying's price, its ex-dividend dates and its

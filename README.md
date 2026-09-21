@@ -212,6 +212,37 @@ mark. Click the row for the full explanation, judged against the live bid. The i
 defaults to 4% (`PORTFOLIO__CARRY_RATE`). Tender offers, mergers and hard-to-borrow stocks can
 also trigger early exercise; they aren't modelled because a quote can't show them.
 
+### "Close?" — the put swap rule
+
+An open put gets *used up*: the stock runs away from the strike, the put is nearly worthless, and
+the cash behind it earns almost nothing for the rest of its life. The **Close?** column says
+whether to buy it back and put that cash into a fresh put — **Yes** or **No**, and either one
+opens the reasoning.
+
+The verdict is two limits, both measured against a **yardstick**: the one put the entry rules
+would open on the *same ticker* today, priced at the bid, versus the open put priced at its ask.
+
+| Rule | Default | What it stops |
+|---|---|---|
+| A fresh put must pay `MIN_RATIO`x the open one | 2.0 | Swapping right after opening, when the two are equal by construction |
+| The extra premium over the days left, after cost, must clear `MIN_EXTRA` | $100 | Swaps on small positions, and on puts whose cash frees itself soon anyway |
+
+Same ticker on purpose: same company, same risk, so a yield gap can only mean the open put is
+used up — a jumpy stock elsewhere on the list cannot drag a good position out from under you.
+When that ticker has no valid pick today (off the screen, reporting before the new expiry,
+nothing liquid enough), the **median** of the screen's picks stands in — never the best of them,
+which would fire a swap constantly. Puts the stock has fallen *below* are out of scope: that is
+the assignment question, and the ways-out panel answers it.
+
+Verdicts are priced **live** when the tab loads — one chain pull per open put, cached ~10 minutes
+— and **Refresh prices** re-prices them on demand. The suggestions come from the most recent
+screen, which cron refreshes just after the open and at 15:35 ET so they are current before the
+close; the panel shows that run's age.
+
+Limits are settings (`SWAP__MIN_RATIO`, `SWAP__MIN_EXTRA`, `SWAP__SWAP_COST`, `SWAP__TOP_N`)
+because the rule is a **draft**: see [docs/PUT_SWAP_RULE.md](docs/PUT_SWAP_RULE.md). It has not
+been backtested against simply holding to expiry, so it is a prompt to look, not a signal.
+
 ## The funnel
 
 ```

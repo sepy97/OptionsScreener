@@ -144,6 +144,19 @@ class PortfolioSettings(BaseModel):
     carry_rate: float = 0.04
 
 
+class SwapSettings(BaseModel):
+    """Limits for the put swap rule (buy back a used-up short put, redeploy the cash).
+
+    All four are DRAFT values from the spec: the rule has not been backtested against simply
+    holding to expiry, so they are settings rather than constants.
+    """
+
+    min_ratio: float = 2.0  # rule 1: a fresh put must pay this many times the open one
+    min_extra: float = 100.0  # rule 2: dollars of extra premium over the days left, after cost
+    swap_cost: float = 10.0  # commission plus the bid/ask loss the quotes don't already carry
+    top_n: int = 3  # other-ticker suggestions to show alongside the same-ticker pick
+
+
 class LogSettings(BaseModel):
     """Diagnostic logging. The console level follows -v/-vv; the rotating file always
     captures ``file_level`` and up, so cron'd runs leave a recoverable history."""
@@ -172,6 +185,7 @@ class Settings(BaseSettings):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     portfolio: PortfolioSettings = Field(default_factory=PortfolioSettings)
+    swap: SwapSettings = Field(default_factory=SwapSettings)
 
     # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)
     chain_source: str = "schwab"
