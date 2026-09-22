@@ -44,3 +44,19 @@ def test_build_service_live_source() -> None:
 def test_chain_source_selects_alpaca() -> None:
     assert isinstance(build_service(Settings(chain_source="alpaca")).chains, AlpacaChainProvider)
     assert isinstance(build_service(Settings(chain_source="schwab")).chains, SchwabChainProvider)
+
+
+def test_dividend_source_is_fmp_when_keyed_and_absent_otherwise() -> None:
+    """The bulk store holds no dividend dates, so the local source borrows live FMP for them —
+    and with no key the flag is simply off rather than pretending there are no dividends."""
+    from pydantic import SecretStr
+
+    from wheel_screener.core.ports import DividendProvider
+
+    assert isinstance(FmpFundamentalsProvider(FmpSettings()), DividendProvider)
+    keyed = build_service(Settings(chain_source="schwab", fmp=FmpSettings(api_key=SecretStr("k"))))
+    assert isinstance(keyed.dividends, FmpFundamentalsProvider)
+    keyless = build_service(Settings(chain_source="schwab", fmp=FmpSettings()))
+    assert keyless.dividends is None
+    live = build_service(Settings(fundamentals_source="live", chain_source="schwab"))
+    assert live.dividends is live.fundamentals  # the live source answers for itself

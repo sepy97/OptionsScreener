@@ -122,6 +122,19 @@ Runs the full pipeline live and writes a ranked CSV. Handy flags:
 | `collateral` | `strike × 100` (the cash you set aside) |
 | `fundamental_score` | 0–1 cross-sectional fundamental composite |
 | `score` | 0–1 blended score: weighted **geometric** mean of strength and yield-rating (absolute — comparable across runs) |
+| `ex_dividend` `dividend` `dividend_estimated` | the first ex-dividend date the contract lives through, the per-share total of all of them, and whether any is estimated from the payer's schedule rather than announced (blank = none) |
+
+**Ex-dividend dates are flagged, never filtered.** The ex-date drop is known in size and date, so
+the option market prices it into the premium, and a short put doesn't lose value when the stock
+opens lower. That makes it different from an earnings gap, which is why earnings are filtered and
+dividends aren't. The warning explains the two things a dividend does change:
+
+- **Puts:** the cushion. The strike is closer to the post-dividend price than to today's price.
+- **Calls:** early assignment. An in-the-money call whose time value is less than the dividend
+  tends to be exercised the day before the ex-date.
+
+Dates come from FMP's per-symbol dividend history (needs `FMP__API_KEY`). Companies announce only
+a few weeks ahead, so a regular payer's next date is estimated from its schedule and marked `~`.
 
 > `screen` (fundamentals-only, no chains, no Schwab needed) ranks the universe by fundamentals
 > alone — a quick, free check.
@@ -183,6 +196,21 @@ Access is the sign-in itself: completing the broker's OAuth issues a session, so
 one sees a Connect page rather than an account. Everything the feature owns lives under
 `/portfolio`, and that prefix denies by default — only the three pre-session entry points are open.
 Schwab authorisations last 7 days, so reconnecting is a weekly click that doubles as the login.
+
+**Early-assignment watch.** Every held short option is checked for early assignment. The holder
+of an option exercises it early only when that gains more than the option's remaining time value,
+which selling it would have kept. There are three causes:
+
+| Cause | Applies to | Early exercise pays the holder when… |
+|---|---|---|
+| Dividend | calls | the call is in the money and its time value is below the next dividend. Exercise comes the day before the ex-date, and you lose the shares and the dividend. |
+| Interest on the strike | puts | the put is in the money and its time value is below the interest the strike cash would earn by expiry. A dividend ahead delays this until the ex-date has passed. |
+| No time value left | either | the option trades at parity, so the holder gives up nothing by exercising. |
+
+The row shows a *likely* / *possible* badge plus an **ex-div** marker, estimated from the broker's
+mark. Click the row for the full explanation, judged against the live bid. The interest rate
+defaults to 4% (`PORTFOLIO__CARRY_RATE`). Tender offers, mergers and hard-to-borrow stocks can
+also trigger early exercise; they aren't modelled because a quote can't show them.
 
 ## The funnel
 

@@ -17,6 +17,7 @@ from wheel_screener.core.models import (
     ChainFilter,
     ChainSnapshot,
     CompanyProfile,
+    Dividend,
     FundamentalMetrics,
     FundamentalReport,
     ProviderCaps,
@@ -57,6 +58,21 @@ class ChainProvider(Protocol):
     def get_chain(self, symbol: str, filt: ChainFilter) -> ChainSnapshot: ...
 
     def capabilities(self) -> ProviderCaps: ...
+
+
+@runtime_checkable
+class DividendProvider(Protocol):
+    """Dividend history per symbol: every past ex-date plus any announced upcoming ones.
+
+    Optional, like the profile port: without one no dividend is flagged, and none is claimed
+    absent either (``CandidateResult.dividends_checked`` stays False).
+
+    Returns an entry for every symbol it could look up — an EMPTY list means "pays none" — and
+    leaves out a symbol it could not, so absence reads as unknown rather than as no dividend.
+    Systemic failures (auth, rate limit, outage) raise the typed ``ProviderError`` hierarchy.
+    """
+
+    def dividend_history(self, symbols: list[str]) -> dict[str, list[Dividend]]: ...
 
 
 @runtime_checkable

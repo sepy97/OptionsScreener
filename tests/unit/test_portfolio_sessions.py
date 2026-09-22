@@ -700,7 +700,7 @@ def test_no_html_entity_is_double_escaped_on_the_page() -> None:
 
 # ── exit comparison ────────────────────────────────────────────────────────────────────────
 
-def _exits_client(rows=None, spot=185.0, error=None, after=None, grid=None):
+def _exits_client(rows=None, spot=185.0, error=None, after=None, grid=None, early=None):
     from wheel_screener.api.deps import get_service
     from wheel_screener.core.exits import ExitOption
 
@@ -739,10 +739,10 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None, grid=None):
                              contracts=contracts, **kw)
             if error:
                 raise error
-            # (alternatives, after-assignment, spot) — the middle list is not an alternative to
-            # anything above it, which is why the service hands it back separately
+            # (alternatives, after-assignment, grid, spot, early assignment) — the second list
+            # is not an alternative to anything in the first, which is why it comes back apart
             return (default if rows is None else rows), (
-                default_after if after is None else after), grid, spot
+                default_after if after is None else after), grid, spot, early
 
     svc = _Svc()
     c = _client()
@@ -1271,3 +1271,121 @@ def test_the_roll_grid_is_laid_out_to_fit_rather_than_to_scroll() -> None:
     css = pathlib.Path("src/wheel_screener/api/static/custom.css").read_text()
     assert ".roll-grid { table-layout: fixed; width: 100%;" in css
     assert ".roll-grid td.rg-empty { color: var(--pico-muted-color); background: none; }" in css
+
+
+# ── early assignment + ex-dividend on held positions ────────────────────────────────────────
+
+def _page_for(account) -> str:
+    from wheel_screener.api.deps import get_service
+
+    class _Svc:
+        def brokerage_accounts(self):
+            return [account]
+
+    c = _client()
+    app.dependency_overrides[get_service] = lambda: _Svc()
+    try:
+        _sign_in(c)
+        app.state.balances_cache = None
+        return c.get("/portfolio").text
+    finally:
+        app.dependency_overrides.pop(get_service, None)
+        c.__exit__(None, None, None)
+
+
+def _covered_call_account(risk: str):
+    from datetime import date as _date
+
+    from wheel_screener.core.models import (
+        AssignmentCause,
+        BrokerageAccount,
+        Dividend,
+        EarlyAssignment,
+        Position,
+        PositionKind,
+    )
+
+    ex = _date(2026, 10, 9)
+    div = Dividend(ex_date=ex, amount=0.71, frequency="quarterly")
+    early = EarlyAssignment(
+        risk=risk, cause=AssignmentCause.DIVIDEND if risk != "low" else None,
+        on=_date(2026, 10, 8), in_the_money=risk != "low", intrinsic=2.0,
+        time_value=0.13, threshold=0.71, dividends=[div],
+    )
+    return BrokerageAccount(
+        broker="schwab", account_id="h", display_name="...123",
+        positions=[Position(
+            symbol="VZ    261016C00050000", underlying="VZ", kind=PositionKind.SHORT_CALL,
+            asset_type="OPTION", option_type="call", quantity=2, strike=50.0,
+            expiration=_date(2026, 10, 16), dte=35, market_value=-426.0, underlying_price=52.0,
+            dividends=[div], early_assignment=early,
+        )],
+    )
+
+
+def test_a_covered_call_set_for_early_assignment_is_flagged_on_its_row() -> None:
+    """Before, a short call's assignment cell was always blank: its assignment is the plan. An
+    EARLY one is not — it takes the dividend with it — so the row now says so."""
+    import re
+
+    body = _page_for(_covered_call_account("likely"))
+    assert "early assignment likely" in body and "08 Oct" in body
+    assert "badge--neg" in body and "badge--div" in body  # the verdict + the ex-date marker
+    tip = re.search(r'badge--assign"\s+title="([^"]*)"', body).group(1)
+    assert "$0.13 of time value against the $0.71 dividend" in tip
+    assert "broker&#39;s mark" in tip or "broker's mark" in tip  # the row is an estimate
+
+
+def test_a_quiet_covered_call_keeps_its_blank_cell_but_still_shows_the_ex_date() -> None:
+    body = _page_for(_covered_call_account("low"))
+    assert "badge--assign" not in body  # no verdict badge: not worth one in the list
+    assert "badge--div" in body, "the dividend ahead is still worth knowing"
+
+
+def test_the_exits_panel_explains_the_early_assignment_verdict() -> None:
+    from wheel_screener.core.models import AssignmentCause, EarlyAssignment
+
+    early = EarlyAssignment(
+        risk="likely", cause=AssignmentCause.INTEREST, in_the_money=True, intrinsic=5.0,
+        time_value=0.12, threshold=0.41,
+    )
+    c, _ = _exits_client(early=early)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AAPL", "strike": 190, "expiry": "2026-09-18", "contracts": 2,
+        }).text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+    assert "early assignment likely" in body and "Likely, any day." in body
+    assert "~$0.41 of interest" in body and "$190.00" in body
+    assert "Not modelled" in body and "tender offers" in body
+    assert body.index("assign-watch") < body.index("exit-controls"), "said before the ways out"
+
+
+def test_the_exits_panel_names_the_day_a_covered_call_goes() -> None:
+    account = _covered_call_account("likely")
+    c, _ = _exits_client(early=account.positions[0].early_assignment, spot=52.0)
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "VZ", "strike": 50, "expiry": "2026-10-16", "contracts": 2,
+            "option_type": "call",
+        }).text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+    assert "Likely on 08 Oct." in body and "called away" in body
+    assert "$142.00 on" in body  # $0.71 x 100 x 2 contracts of dividend lost
+    assert "Ex-dividend 2026-10-09" in body
+
+
+def test_no_verdict_no_section() -> None:
+    c, _ = _exits_client()
+    try:
+        body = c.get("/portfolio/exits", params={
+            "symbol": "AAPL", "strike": 190, "expiry": "2026-09-18", "contracts": 2,
+        }).text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+    assert "assign-watch" not in body

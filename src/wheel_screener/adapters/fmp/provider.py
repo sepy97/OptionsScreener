@@ -7,16 +7,22 @@ this adapter only fetches + maps FMP JSON into the core models.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
 
 import httpx
 
 from wheel_screener.adapters.errors import FMP, map_http_error
 from wheel_screener.adapters.fmp.client import FmpClient
-from wheel_screener.adapters.fmp.mapper import map_earnings, map_metrics, map_universe_row
+from wheel_screener.adapters.fmp.mapper import (
+    map_dividends,
+    map_earnings,
+    map_metrics,
+    map_universe_row,
+)
 from wheel_screener.config import FmpSettings
 from wheel_screener.core.errors import ProviderDataError
-from wheel_screener.core.models import FundamentalMetrics, ScreenCriteria, Underlying
+from wheel_screener.core.models import Dividend, FundamentalMetrics, ScreenCriteria, Underlying
 
 # FMP's earnings-calendar silently returns a PARTIAL, right-anchored slice — it drops the
 # EARLIEST rows, which are exactly the near-term ones the blackout needs. Two independent rules
@@ -31,6 +37,9 @@ _EARNINGS_CHUNK_DAYS = 7  # peak season fills a 14-day slice past the cap; 7 sta
 # The documented upstream limit (docs/PLAN.md). Nothing here should come close — every request is
 # a chunk — so exceeding it means a caller found a way around the slicing.
 _EARNINGS_MAX_RANGE_DAYS = 90
+# Concurrent per-symbol dividend lookups. The shared client limiter still caps the rate; this
+# only stops a screen's ~100 candidates from queueing up one request at a time.
+_DIVIDEND_WORKERS = 8
 
 logger = logging.getLogger(__name__)
 
@@ -242,6 +251,47 @@ class FmpFundamentalsProvider:
         if end < start:
             return {}
         return map_earnings(self._earnings_rows(start, end))
+
+    def _dividends_for(self, symbol: str) -> list[Dividend] | None:
+        """One symbol's full dividend history, or None when FMP can't answer for it."""
+        try:
+            # Uncached: the in-memory tier lives as long as the web process, and an
+            # announcement made today must not wait for a restart to show up.
+            payload = self._client.get("dividends", {"symbol": symbol}, cache=False)
+        except httpx.HTTPStatusError as e:
+            mapped = map_http_error(e, FMP)
+            if isinstance(mapped, ProviderDataError):
+                return None  # this symbol only (e.g. 404) -> unknown, not "pays none"
+            raise mapped from e
+        except httpx.TransportError as e:
+            raise map_http_error(e, FMP) from e
+        return map_dividends(payload)
+
+    def dividend_history(self, symbols: list[str]) -> dict[str, list[Dividend]]:
+        """Past and announced ex-dividends per symbol, from the per-symbol endpoint.
+
+        Per symbol rather than the dividends CALENDAR on purpose. The calendar has the same
+        silent limits as the earnings one — a 4000-row cap and a ~90-day clamp that drop the
+        near-term rows without saying so (a Sep 11-Dec 31 request came back starting Oct 2) —
+        and it only knows announced dates. The history knows the payer's schedule too, which
+        is what lets a not-yet-announced ex-date be estimated rather than silently missed.
+
+        It is only ever asked for the handful of names being SHOWN (a screen's candidates, one
+        searched ticker), so the per-name cost stays small; the calls run concurrently.
+        """
+        wanted = list(dict.fromkeys(s for s in symbols if s))
+        out: dict[str, list[Dividend]] = {}
+        if not wanted:
+            return out
+        pool = ThreadPoolExecutor(max_workers=min(_DIVIDEND_WORKERS, len(wanted)))
+        try:
+            for sym, history in zip(wanted, pool.map(self._dividends_for, wanted), strict=True):
+                if history is not None:
+                    out[sym] = history
+        finally:
+            # a systemic error stops the batch at once instead of retrying through every name
+            pool.shutdown(wait=True, cancel_futures=True)
+        return out
 
     def next_earnings(self, symbol: str, on_or_after: date) -> date | None:
         """This one symbol's next report, from the per-symbol endpoint — authoritative and immune

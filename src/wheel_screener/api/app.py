@@ -25,7 +25,8 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from pydantic import ValidationError
+from markupsafe import Markup
+from pydantic import BaseModel, ValidationError
 
 from wheel_screener import __version__
 from wheel_screener.adapters.schwab.link import SchwabOAuthLink
@@ -37,6 +38,8 @@ from wheel_screener.api.schemas import ScreenRequest
 from wheel_screener.api.sessions import SessionStore
 from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
+from wheel_screener.core.dividends import DividendImpact
+from wheel_screener.core.dividends import impact as dividend_impact
 from wheel_screener.core.errors import (
     AuthExpiredError,
     ProviderDataError,
@@ -44,7 +47,7 @@ from wheel_screener.core.errors import (
     ProviderUnavailableError,
     RateLimitedError,
 )
-from wheel_screener.core.models import OptionType, ScreenCriteria
+from wheel_screener.core.models import Dividend, OptionType, ScreenCriteria
 from wheel_screener.core.service import ScreenerService
 
 logger = logging.getLogger(__name__)
@@ -249,7 +252,19 @@ _EXPORT_COLUMNS: list[tuple[str, object]] = [
     ("next_earnings", lambda c: c.get("next_earnings")),
     # clean / spans / unknown for THIS expiry — so an export can be audited at a glance
     ("earnings_status", lambda c: c.get("earnings_status")),
+    # the first ex-dividend inside this contract's life, the per-share total of all of them,
+    # and whether any was estimated from the schedule rather than announced
+    ("ex_dividend", lambda c: ((c.get("dividends") or [{}])[0]).get("ex_date")),
+    ("dividend", lambda c: _dividend_total(c)),
+    ("dividend_estimated", lambda c: (
+        any(d.get("estimated") for d in c["dividends"]) if c.get("dividends") else None
+    )),
 ]
+
+
+def _dividend_total(c: dict) -> float | None:
+    divs = c.get("dividends") or []
+    return round(sum(d.get("amount") or 0.0 for d in divs), 4) if divs else None
 
 
 def _candidates_csv(results: list | None) -> str:
@@ -330,6 +345,51 @@ def _signed(v: object, places: int = 0) -> str:
 
 templates.env.filters["money"] = _money
 templates.env.filters["signed"] = _signed
+
+
+def _dividend_view(c: object) -> DividendImpact | None:
+    """The ex-dividend impact for one result row, or None when it lives through none.
+
+    Rows arrive in two shapes — a stored screen result is a plain dict, a live search row is a
+    CandidateResult — so both are reduced to the dict form first. Old stored runs predate the
+    field and simply have no dividends to show.
+    """
+    if isinstance(c, BaseModel):
+        c = c.model_dump(mode="json")
+    if not isinstance(c, dict) or not c.get("dividends"):
+        return None
+    try:
+        divs = [Dividend.model_validate(d) for d in c["dividends"]]
+    except ValidationError:
+        return None
+    k = c.get("contract") or {}
+    side = OptionType.CALL if k.get("option_type") == OptionType.CALL.value else OptionType.PUT
+    spot = c.get("underlying_price") or k.get("underlying_price")
+    return dividend_impact(divs, side, float(k.get("strike") or 0.0), spot, c.get("premium"))
+
+
+templates.env.filters["dividend_view"] = _dividend_view
+
+
+def _position_dividend_view(p: object) -> DividendImpact | None:
+    """The same impact for a HELD option, priced from the broker's mark."""
+    divs = getattr(p, "dividends", None)
+    if not divs or getattr(p, "option_type", None) is None or getattr(p, "strike", None) is None:
+        return None
+    return dividend_impact(divs, p.option_type, p.strike, p.underlying_price, p.mark)
+
+
+templates.env.filters["position_dividend_view"] = _position_dividend_view
+
+
+def _squash(text: object) -> Markup:
+    """Collapse a macro's output onto one line — for a ``title`` tooltip, where the template's
+    line breaks and indentation would otherwise show. Stays Markup: the macro already escaped
+    it, and escaping twice would print ``&amp;#39;`` in the tooltip."""
+    return Markup(" ".join(str(text).split()))
+
+
+templates.env.filters["squash"] = _squash
 
 
 # The pipeline logs one stage line each (captured into job['progress']); we recover the funnel
@@ -870,7 +930,7 @@ def portfolio_exits(
         min_dte, max_dte = max_dte, min_dte
     try:
         kind = OptionType.CALL if option_type.lower() == "call" else OptionType.PUT
-        rows, after, grid, spot = service.exit_options(
+        rows, after, grid, spot, early = service.exit_options(
             symbol, strike, expiration, contracts, date.today(),
             option_type=kind, is_short=is_short, collected=_opt_float(collected),
             opened_on=_opt_date(opened),
@@ -886,8 +946,14 @@ def portfolio_exits(
              "max_dte": max_dte, "roll_strike": roll_strike, "call_strike": call_strike,
              "option_type": option_type, "is_short": is_short, "expiry_label": expiry,
              "grid": None, "collected": collected,
-             "opened": opened},
+             "opened": opened, "early": None, "div": None},
         )
+    # the dividend's own effect (cushion for a put, the scenario for a call out of the money),
+    # alongside the early-assignment verdict that already accounts for it
+    div = (
+        dividend_impact(early.dividends, kind, strike, spot)
+        if early is not None and early.dividends else None
+    )
     return templates.TemplateResponse(
         request, "_exits.html",
         {"symbol": symbol, "strike": strike, "expiry": expiry, "contracts": contracts,
@@ -897,7 +963,8 @@ def portfolio_exits(
          "option_type": option_type, "is_short": is_short, "collected": collected,
          "opened": opened,
          "grid": grid, "today": date.today(),
-         "expiry_label": expiration.strftime('%d %b')},
+         "expiry_label": expiration.strftime('%d %b'),
+         "early": early, "div": div},
     )
 
 

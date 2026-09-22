@@ -1241,3 +1241,109 @@ def test_a_run_without_a_recorded_spot_says_nothing_rather_than_guessing(tmp_pat
     runner.store.finish("j", "done", result=[_candidate("YELP").model_dump(mode="json")])
     body = _client(runner).get("/runs/j/candidates/YELP").text
     assert "when screened" not in body
+
+
+# --- the ex-dividend warning -------------------------------------------------------------
+
+def _with_dividend(c: CandidateResult, *, estimated: bool = False, spot: float = 100.0,
+                   amount: float = 1.0) -> CandidateResult:
+    from wheel_screener.core.models import Dividend
+
+    div = Dividend(ex_date=date(2026, 8, 5), amount=amount, frequency="quarterly",
+                   estimated=estimated)
+    return c.model_copy(update={
+        "dividends": [div], "dividends_checked": True, "underlying_price": spot,
+    })
+
+
+def test_candidate_card_warns_of_an_ex_dividend_and_explains_it(tmp_path) -> None:
+    """Strike 80 at spot 100 with a $1 dividend before the Aug 15 expiry: priced in, but the
+    cushion against the post-dividend price is what assignment is judged on."""
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _with_dividend(_candidate("AAA")))
+    body = _client(runner).get("/runs/j/candidates/AAA").text
+    assert "Ex-dividend 2026-08-05" in body and "badge--div" in body
+    assert "already priced into this put" in body
+    assert "20.0% out of the money" in body and "19.2% out of the money" in body
+    assert "Not announced yet" not in body
+
+
+def test_an_estimated_ex_dividend_says_so(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _with_dividend(_candidate("AAA"), estimated=True))
+    body = _client(runner).get("/runs/j/candidates/AAA").text
+    assert "~2026-08-05" in body and "Not announced yet" in body and "quarterly" in body
+
+
+def test_results_row_carries_an_ex_div_marker_with_its_own_numbers(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _with_dividend(_candidate("AAA")), _candidate("BBB"))
+    body = _client(runner).get("/runs/j/results").text
+    assert body.count("badge--div") == 1  # only the row that lives through one
+    tip = re.search(r'class="badge badge--div" title="([^"]*)"', body).group(1)
+    assert "20.0% out of the money to 19.2% out of the money" in tip
+    assert "\n" not in tip and "&amp;" not in tip  # one line, escaped once
+
+
+def test_a_failed_dividend_lookup_is_not_shown_as_no_dividend(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    unchecked = _candidate("AAA").model_copy(update={"dividends_checked": False})
+    legacy = _candidate("BBB").model_dump(mode="json")  # a run stored before the field existed
+    legacy.pop("dividends"), legacy.pop("dividends_checked")
+    runner.store.create("j", datetime.now(tz=UTC).isoformat())
+    runner.store.finish("j", "done", result=[unchecked.model_dump(mode="json"), legacy])
+    client = _client(runner)
+    assert "dividend dates unavailable" in client.get("/runs/j/candidates/AAA").text
+    legacy_body = client.get("/runs/j/candidates/BBB").text
+    assert legacy_body.count("dividend") == 0  # an old run says nothing either way
+
+
+def _vz_call(spot: float, bid: float) -> CandidateResult:
+    from wheel_screener.core.models import Dividend
+
+    contract = OptionContract(
+        underlying_symbol="VZ", option_symbol="VZ50C", option_type=OptionType.CALL,
+        expiration=date(2026, 10, 16), strike=50.0, dte=35, bid=bid, ask=bid + 0.05,
+        underlying_price=spot,
+    )
+    return CandidateResult(
+        symbol="VZ", contract=contract, premium=bid, underlying_price=spot,
+        dividends=[Dividend(ex_date=date(2026, 10, 9), amount=0.71, frequency="quarterly")],
+        dividends_checked=True,
+    )
+
+
+def test_search_calls_explain_early_assignment() -> None:
+    app.dependency_overrides[get_service] = lambda: _FakeService(
+        result=[_vz_call(spot=48.0, bid=0.60)]
+    )
+    try:
+        body = TestClient(app).post("/search", data={"ticker": "vz", "side": "call"}).text
+    finally:
+        app.dependency_overrides.clear()
+    assert "early assignment" in body and "2026-10-08" in body  # the day before the ex-date
+    assert "div-panel" in body and "badge--div" in body
+    assert "before 1 of these 1 expiry" in body
+    assert "already in the money" not in body  # out of the money: a risk, not a likelihood
+
+
+def test_search_flags_a_call_already_set_for_early_assignment() -> None:
+    """$50 call at $52 with $0.13 of time value against a $0.71 dividend."""
+    app.dependency_overrides[get_service] = lambda: _FakeService(
+        result=[_vz_call(spot=52.0, bid=2.13)]
+    )
+    try:
+        body = TestClient(app).post("/search", data={"ticker": "vz", "side": "call"}).text
+    finally:
+        app.dependency_overrides.clear()
+    assert "already in the money" in body and "early assignment is likely" in body
+
+
+def test_exports_carry_the_ex_dividend_columns(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _with_dividend(_candidate("AAA"), estimated=True), _candidate("BBB"))
+    lines = _client(runner).get("/runs/j/export.csv").text.splitlines()
+    header = lines[0].split(",")
+    assert header[-3:] == ["ex_dividend", "dividend", "dividend_estimated"]
+    assert lines[1].split(",")[-3:] == ["2026-08-05", "1.0", "True"]
+    assert lines[2].split(",")[-3:] == ["", "", ""]

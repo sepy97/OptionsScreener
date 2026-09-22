@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from wheel_screener.core.models import FundamentalMetrics, Underlying
+from wheel_screener.core.models import Dividend, FundamentalMetrics, Underlying
 
 
 def _num(value: Any) -> float | None:
@@ -72,6 +72,29 @@ def map_metrics(
         total_equity=_num(_pick(bal, "totalStockholdersEquity", "totalEquity")),
         ebitda=_num(_pick(inc, "ebitda")),
     )
+
+
+def map_dividends(rows: object) -> list[Dividend]:
+    """Map `/stable/dividends?symbol=` rows to ex-dividends, earliest first.
+
+    ``adjDividend`` is preferred over ``dividend``: it is restated for later splits, so a
+    pre-split payment is comparable with today's share price, and the two are equal on every
+    row since the last split. Rows without a date or a positive amount are dropped.
+    """
+    out: list[Dividend] = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            ex = datetime.strptime(str(row.get("date") or "")[:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        amount = _num(row.get("adjDividend")) or _num(row.get("dividend"))
+        if not amount or amount <= 0:
+            continue
+        freq = str(row.get("frequency") or "").strip().lower() or None
+        out.append(Dividend(ex_date=ex, amount=amount, frequency=freq))
+    return sorted(out, key=lambda d: d.ex_date)
 
 
 def map_earnings(rows: list[dict]) -> dict[str, date]:

@@ -258,10 +258,11 @@ def _write_candidates_csv(results, path: str) -> None:
         writer.writerow([
             "rank", "symbol", "strike", "expiration", "dte", "delta", "iv", "bid", "mid",
             "open_interest", "annualized_yield", "collateral", "strength", "peer_percentile",
-            "score",
+            "score", "ex_dividend", "dividend", "dividend_estimated",
         ])
         for i, r in enumerate(results, start=1):
             c = r.contract
+            divs = r.dividends
             writer.writerow([
                 i, r.symbol, c.strike, c.expiration.isoformat() if c.expiration else "", c.dte,
                 round(c.delta, 3) if c.delta is not None else "",
@@ -274,6 +275,9 @@ def _write_candidates_csv(results, path: str) -> None:
                 round(r.fundamental_score, 4) if r.fundamental_score is not None else "",
                 round(r.peer_percentile, 4) if r.peer_percentile is not None else "",
                 round(r.score, 4) if r.score is not None else "",
+                divs[0].ex_date.isoformat() if divs else "",
+                round(sum(d.amount for d in divs), 4) if divs else "",
+                any(d.estimated for d in divs) if divs else "",
             ])
 
 
@@ -388,9 +392,15 @@ def _print_search(r: object) -> None:
     is_call = r.side is OptionType.CALL
     noun = "covered call" if is_call else "put"
     spot = f" · spot {r.underlying_price:.2f}" if r.underlying_price else ""
+    nd = r.next_dividend
+    div = (
+        f" · next ex-div {'~' if nd.estimated else ''}{nd.ex_date} ${nd.amount:.2f}"
+        f"{' (estimated)' if nd.estimated else ''}"
+        if nd else ("" if r.dividends_known else " · dividend dates unavailable")
+    )
     typer.echo(
         f"{r.symbol}: {len(r.contracts)} sellable {noun}(s) · gate {fund}"
-        f"{strength}{peers}{spot}{earn}"
+        f"{strength}{peers}{spot}{earn}{div}"
     )
     if not r.contracts:
         typer.echo("  nothing in the DTE / delta / liquidity window.")
@@ -407,6 +417,14 @@ def _print_search(r: object) -> None:
         prem = c.premium or 0.0
         be = k.strike + prem if is_call else k.strike - prem
         flag = " <- earnings before exp" if c.earnings_status is EarningsStatus.SPANS else ""
+        if c.dividends:
+            # calls: the early-assignment date. puts: the drop is priced in; it's the cushion.
+            first = c.dividends[0]
+            flag += (
+                f" <- ex-div {'~' if first.estimated else ''}{first.ex_date} "
+                f"${sum(d.amount for d in c.dividends):.2f}"
+                + (" (early assignment if ITM)" if is_call else " (cushion smaller)")
+            )
         yld = f"{c.annualized_yield * 100:>5.1f}%" if c.annualized_yield is not None else "    -"
         typer.echo(
             f"  {k.strike:>7.2f} {k.expiration!s:>10} {k.dte:>4} {k.delta:>6.2f} {iv:>5} "
