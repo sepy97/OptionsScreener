@@ -902,7 +902,7 @@ def _position_key(p) -> tuple:
 
 
 def _latest_candidates(runner: JobRunner) -> tuple[list, dict | None]:
-    """The most recent screen's candidates, for the fallback yardstick and the suggestions."""
+    """The most recent screen's candidates, for the fallback and the suggestions."""
     latest = runner.store.latest_done()
     rows = (latest or {}).get("result") or []
     out = []

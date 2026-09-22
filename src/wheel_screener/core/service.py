@@ -676,7 +676,7 @@ class ScreenerService:
                     None, (), median_yield, self.swap_params,
                 )
                 return
-            same, ask = self._yardstick_and_ask(p, criteria, today)
+            same, ask = self._fresh_put_and_ask(p, criteria, today)
             others = [
                 s for s in sorted(
                     picks, key=lambda s: s.annualized_yield or 0.0, reverse=True
@@ -699,7 +699,7 @@ class ScreenerService:
             ", ".join(f"{p.underlying} {p.swap.action.value}" for p in open_puts if p.swap),
         )
 
-    def _yardstick_and_ask(
+    def _fresh_put_and_ask(
         self, position: Position, criteria: ScreenCriteria, today: date
     ) -> tuple[SwapSuggestion | None, float | None]:
         """``(the fresh same-ticker pick, the open put's ask)`` from ONE chain pull.
@@ -741,7 +741,7 @@ class ScreenerService:
             {position.underlying: earnings} if earnings else {}, today,
             buffer_days=criteria.earnings_buffer_days, policy=EarningsPolicy.EXCLUDE,
             # A per-symbol lookup vouches for no range, so an absent date is unknown rather than
-            # clean. Excluding on that would delete the yardstick for every name FMP is quiet
+            # clean. Excluding on that would delete the comparison for every name FMP is quiet
             # about, and the fallback median is the safer answer than no comparison at all.
             exclude_unknown=False,
         )

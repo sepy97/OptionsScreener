@@ -118,7 +118,7 @@ class SwapAction(StrEnum):
 
 
 class SwapSuggestion(BaseModel):
-    """One put the entry rules would open today — the yardstick, or something to swap into.
+    """One put the entry rules would open today — the fresh put, or something to swap into.
 
     A flattened copy of a screen candidate rather than the candidate itself: a review is read
     long after the run it came from, and carrying the whole object would imply it is still live.
@@ -133,7 +133,7 @@ class SwapSuggestion(BaseModel):
     annualized_yield: float | None = None
     collateral: float | None = None  # strike x 100, the cash it would lock up
     score: float | None = None  # the screen's blended score, when it came from a run
-    same_ticker: bool = False  # the yardstick itself, as opposed to another name on the list
+    same_ticker: bool = False  # the fresh put itself, as opposed to another name on the list
 
 
 class SwapReview(BaseModel):
@@ -147,8 +147,8 @@ class SwapReview(BaseModel):
     reason: str
     # None until the position clears the scope checks (in the money, expiring, unpriced)
     old_yield: float | None = None  # on the ASK: what it still pays to keep it open
-    yardstick: float | None = None  # on the BID: what a fresh put would pay
-    yardstick_source: str | None = None  # "same ticker" | "list median"
+    fresh_yield: float | None = None  # on the BID: what a fresh put would pay
+    fresh_source: str | None = None  # "same ticker" | "list median"
     extra_premium: float | None = None  # dollars the swap collects over the days left, net of cost
     cash: float | None = None  # strike x 100 x contracts
     days: int | None = None

@@ -29,8 +29,8 @@
         what the cash still earns if you keep it, priced at the ask (what buying it back costs).</dd>
 
       <dt>A fresh put</dt>
-      <dd><b>{{ sw.pct(r.yardstick) }}</b>/yr
-        {%- if r.yardstick_source == 'same ticker' %} on the same ticker &mdash; the one put the
+      <dd><b>{{ sw.pct(r.fresh_yield) }}</b>/yr
+        {%- if r.fresh_source == 'same ticker' %} on the same ticker &mdash; the one put the
         entry rules would open on {{ p.underlying }} today, priced at the bid
         {%- else %} &mdash; the <b>median</b> of the screen's picks, standing in because
         {{ p.underlying }} has no valid pick of its own today (off the screen, reporting before
@@ -38,7 +38,7 @@
 
       <dt>Rule 1</dt>
       <dd>{% if r.rule1_passed %}{{ icon.check() }}{% else %}{{ icon.close() }}{% endif %}
-        a fresh put pays <b>{{ "%.1f"|format(r.yardstick / r.old_yield) }}x</b> this one; the rule
+        a fresh put pays <b>{{ "%.1f"|format(r.fresh_yield / r.old_yield) }}x</b> this one; the rule
         asks for {{ "%g"|format(r.min_ratio) }}x.
         <span class="detail-note">Stops a swap right after opening, when the two are equal by
         construction.</span></dd>

@@ -219,7 +219,7 @@ the cash behind it earns almost nothing for the rest of its life. The **Close?**
 whether to buy it back and put that cash into a fresh put — **Yes** or **No**, and either one
 opens the reasoning.
 
-The verdict is two limits, both measured against a **yardstick**: the one put the entry rules
+The verdict is two limits, both measured against a **fresh_yield**: the one put the entry rules
 would open on the *same ticker* today, priced at the bid, versus the open put priced at its ask.
 
 | Rule | Default | What it stops |

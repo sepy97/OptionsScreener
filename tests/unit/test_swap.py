@@ -95,14 +95,14 @@ def test_the_limits_are_tunable() -> None:
         SwapAction.KEEP)
 
 
-# --- the yardstick ---------------------------------------------------------------------------
+# --- the fresh put ---------------------------------------------------------------------------
 
 def test_without_a_same_ticker_pick_the_list_median_stands_in() -> None:
     """Removing TER from the picks falls back to the median — never the best of the list, which
     would fire a swap constantly."""
     yields = [0.10, 0.219, 0.90]
     r = review(_open("TER", 290.0, 25, 0.069, 320.0), None, list_median=list_median_yield(yields))
-    assert r.yardstick == pytest.approx(0.219) and r.yardstick_source == "list median"
+    assert r.fresh_yield == pytest.approx(0.219) and r.fresh_source == "list median"
     assert r.action is SwapAction.SWAP
 
 

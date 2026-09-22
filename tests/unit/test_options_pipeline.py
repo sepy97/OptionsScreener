@@ -820,9 +820,9 @@ def test_a_used_up_put_is_flagged_for_a_swap_against_a_fresh_same_ticker_pick():
 
     r = position.swap
     assert r.action is SwapAction.SWAP and r.rule1_passed and r.rule2_passed
-    assert r.yardstick_source == "same ticker"
+    assert r.fresh_source == "same ticker"
     assert r.old_yield == pytest.approx(0.0579, abs=1e-3)
-    assert r.yardstick == pytest.approx(0.2454, abs=1e-3)
+    assert r.fresh_yield == pytest.approx(0.2454, abs=1e-3)
     assert r.extra_premium == pytest.approx(220.0, abs=5.0)
     # the same-ticker pick leads, then the rest of the screen by yield
     assert [s.symbol for s in r.suggestions] == ["AAA", "ZZZ"]
@@ -853,7 +853,7 @@ def test_an_in_the_money_put_is_out_of_scope_and_costs_no_chain_call():
 
 
 def test_a_ticker_that_fails_the_entry_rules_falls_back_to_the_list_median():
-    """AAA is off the screen (gated out), so its own board cannot set the yardstick — the median
+    """AAA is off the screen (gated out), so its own board cannot set the fresh put — the median
     of the screen's picks stands in, never the best of them."""
     chain = _chain([_put(90, -0.03, 25, 0.35), _put(85, -0.20, 35, 2.00)], underlying_price=110.0)
     bad = FundamentalMetrics(pe=5, ps=1, pb=1, roe=-0.2, roa=-0.1, ros=-0.1, roi=-0.1,
@@ -871,7 +871,7 @@ def test_a_ticker_that_fails_the_entry_rules_falls_back_to_the_list_median():
         _BASE,
     )
     r = position.swap
-    assert r.yardstick_source == "list median" and r.yardstick == pytest.approx(0.22)
+    assert r.fresh_source == "list median" and r.fresh_yield == pytest.approx(0.22)
     assert [s.symbol for s in r.suggestions] == ["D", "C", "B"]  # no same-ticker pick to lead
     assert not any(s.same_ticker for s in r.suggestions)
 

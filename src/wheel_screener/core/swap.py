@@ -34,7 +34,7 @@ from wheel_screener.core.models import SwapAction, SwapReview, SwapSuggestion
 class SwapParams:
     """The rule's limits. Starting values from the spec; none is backtested."""
 
-    min_ratio: float = 2.0  # rule 1: the yardstick must pay this many times the old put
+    min_ratio: float = 2.0  # rule 1: the fresh put must pay this many times the old put
     min_extra: float = 100.0  # rule 2: dollars of extra premium, after cost
     swap_cost: float = 10.0  # commission plus the bid/ask loss the prices don't already carry
     top_n: int = 3  # other-ticker suggestions to show
@@ -72,7 +72,7 @@ def review(
     """Keep or swap, for one open short put.
 
     ``same_ticker`` is the ONE put the entry rules would open on this ticker today — one fixed
-    pick, never the best of several, or the yardstick drifts to the riskiest strike the rules
+    pick, never the best of several, or the comparison drifts to the riskiest strike the rules
     allow. ``list_median`` is the median yield across the screen's picks, the fallback when this
     ticker has none (it dropped off the screen, reports before the new expiry, ...). The median
     and never the best: measuring against the best put on the list would fire constantly.
@@ -99,11 +99,11 @@ def review(
             reason="no ask for the open put, so the cost of buying it back is unknown",
         )
 
-    yardstick, source = (
+    fresh_yield, source = (
         (same_ticker.annualized_yield, "same ticker") if same_ticker is not None
         else (list_median, "list median")
     )
-    if yardstick is None:
+    if fresh_yield is None:
         return SwapReview(
             action=SwapAction.KEEP,
             reason="nothing passes the entry rules right now, so there is nothing to swap into",
@@ -113,18 +113,18 @@ def review(
     if old_yield is None:  # unreachable via the guards above; a belt on the arithmetic
         return SwapReview(action=SwapAction.NOT_APPLICABLE, reason="the open put cannot be priced")
     cash = old.strike * 100 * old.contracts
-    extra = (yardstick - old_yield) * cash * old.days / 365 - params.swap_cost
+    extra = (fresh_yield - old_yield) * cash * old.days / 365 - params.swap_cost
     common = {
-        "old_yield": old_yield, "yardstick": yardstick, "yardstick_source": source,
+        "old_yield": old_yield, "fresh_yield": fresh_yield, "fresh_source": source,
         "extra_premium": extra, "cash": cash, "days": old.days,
         "min_ratio": params.min_ratio, "min_extra": params.min_extra,
         "swap_cost": params.swap_cost,
     }
 
-    if yardstick < params.min_ratio * old_yield:
+    if fresh_yield < params.min_ratio * old_yield:
         return SwapReview(
             action=SwapAction.KEEP, rule1_passed=False,
-            reason=f"rule 1: a fresh put pays {yardstick / old_yield:.1f}x this one, under the "
+            reason=f"rule 1: a fresh put pays {fresh_yield / old_yield:.1f}x this one, under the "
                    f"{params.min_ratio:g}x the rule asks for",
             **common,
         )
@@ -146,6 +146,6 @@ def review(
 
 
 def list_median_yield(yields: Sequence[float]) -> float | None:
-    """The median of the screen's picks — the fallback yardstick. None when the list is empty."""
+    """The median of the screen's picks — the fallback. None when the list is empty."""
     usable = [y for y in yields if y is not None]
     return median(usable) if usable else None

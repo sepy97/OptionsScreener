@@ -1417,7 +1417,7 @@ def _swap_review(action: str, **kw):
     from wheel_screener.core.models import SwapReview, SwapSuggestion
 
     base = dict(
-        old_yield=0.0579, yardstick=0.2454, yardstick_source="same ticker",
+        old_yield=0.0579, fresh_yield=0.2454, fresh_source="same ticker",
         extra_premium=220.0, cash=18_000.0, days=25, rule1_passed=True, rule2_passed=True,
         min_ratio=2.0, min_extra=100.0, swap_cost=10.0,
         suggestions=[SwapSuggestion(

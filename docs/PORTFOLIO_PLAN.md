@@ -606,7 +606,7 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
       [PUT_SWAP_RULE.md](PUT_SWAP_RULE.md): for every open short put the stock has risen away
       from, is the cash behind it working hard enough? Yes/No in the table, both clickable, with
       the arithmetic, the two rules and the alternatives in a panel under the row. Decisions:
-      - **The yardstick is picked fresh, not read off the screen.** The chain pull that gives the
+      - **The fresh put is picked fresh, not read off the screen.** The chain pull that gives the
         open put's ASK is the same board `select_put` picks from, so the comparison is against a
         put this project would really sell on that ticker today — including when the name is
         outside the screen's price band or below its top-N cut. The screen supplies only the
