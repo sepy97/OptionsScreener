@@ -779,3 +779,111 @@ def test_the_exits_panel_judges_early_assignment_against_the_bid():
         "VZ", 50.0, exp, 2, today, option_type=OptionType.CALL, is_short=False
     )
     assert long_side[-1] is None  # a long option cannot be assigned
+
+
+# --- the put swap rule on held positions --------------------------------------------------
+
+def _open_put(symbol: str, strike: float, dte: int, spot: float, contracts: float = 2):
+    from wheel_screener.core.models import Position, PositionKind
+
+    return Position(
+        symbol=f"{symbol} P", underlying=symbol, kind=PositionKind.SHORT_PUT,
+        asset_type="OPTION", option_type=OptionType.PUT, quantity=contracts, strike=strike,
+        expiration=_BASE + timedelta(days=dte), dte=dte, underlying_price=spot,
+        collateral=strike * 100 * contracts,
+    )
+
+
+def _screen_candidate(symbol: str, yld: float, strike: float = 100.0):
+    return CandidateResult(
+        symbol=symbol, contract=OptionContract(
+            underlying_symbol=symbol, option_symbol=f"{symbol}P", option_type=OptionType.PUT,
+            expiration=_BASE + timedelta(days=30), strike=strike, dte=30, bid=1.0, ask=1.05,
+            delta=-0.2,
+        ),
+        annualized_yield=yld, collateral=strike * 100, premium=1.0,
+    )
+
+
+def test_a_used_up_put_is_flagged_for_a_swap_against_a_fresh_same_ticker_pick():
+    """The stock ran away from the strike: the old put pays ~6%/yr on its cash, while the put the
+    entry rules would open today pays ~25%. Both rules clear, so: swap."""
+    from wheel_screener.core.models import SwapAction
+
+    chain = _chain([
+        _put(90, -0.03, 25, 0.35),   # the open put: nearly worthless, far from the money
+        _put(85, -0.20, 35, 2.00),   # what the rules would open today
+    ], underlying_price=110.0)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
+    position = _open_put("AAA", 90.0, 25, spot=110.0)
+    service.swap_reviews([position], [_screen_candidate("ZZZ", 0.30)], _BASE)
+
+    r = position.swap
+    assert r.action is SwapAction.SWAP and r.rule1_passed and r.rule2_passed
+    assert r.fresh_source == "same ticker"
+    assert r.old_yield == pytest.approx(0.0579, abs=1e-3)
+    assert r.fresh_yield == pytest.approx(0.2454, abs=1e-3)
+    assert r.extra_premium == pytest.approx(220.0, abs=5.0)
+    # the same-ticker pick leads, then the rest of the screen by yield
+    assert [s.symbol for s in r.suggestions] == ["AAA", "ZZZ"]
+    assert r.suggestions[0].same_ticker and r.suggestions[0].strike == 85
+
+
+def test_a_healthy_put_keeps_and_says_which_rule_held_it():
+    chain = _chain([
+        _put(90, -0.20, 25, 1.60),   # still paying well: ~26%/yr
+        _put(85, -0.20, 35, 2.00),
+    ], underlying_price=95.0)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
+    position = _open_put("AAA", 90.0, 25, spot=95.0)
+    service.swap_reviews([position], [], _BASE)
+    assert position.swap.action.value == "keep" and position.swap.rule1_passed is False
+    assert "rule 1" in position.swap.reason
+
+
+def test_an_in_the_money_put_is_out_of_scope_and_costs_no_chain_call():
+    """It is the assignment question, not a swap — and the answer cannot depend on a chain, so
+    the call is not spent."""
+    chains = _FakeChains(_chain([_put(90, -0.20, 25, 1.0)]))
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    position = _open_put("AAA", 90.0, 25, spot=85.0)  # stock below the strike
+    service.swap_reviews([position], [], _BASE)
+    assert position.swap.action.value == "n/a" and "assignment" in position.swap.reason
+    assert chains.requested_types == []  # no chain pulled
+
+
+def test_a_ticker_that_fails_the_entry_rules_falls_back_to_the_list_median():
+    """AAA is off the screen (gated out), so its own board cannot set the fresh put — the median
+    of the screen's picks stands in, never the best of them."""
+    chain = _chain([_put(90, -0.03, 25, 0.35), _put(85, -0.20, 35, 2.00)], underlying_price=110.0)
+    bad = FundamentalMetrics(pe=5, ps=1, pb=1, roe=-0.2, roa=-0.1, ros=-0.1, roi=-0.1,
+                             debt_to_equity=3.0, eps=-1.0, total_equity=-500.0)
+
+    class _Gated(_FakeFundamentals):
+        def fetch_metrics(self, symbols):
+            return {"AAA": bad}
+
+    service = ScreenerService(fundamentals=_Gated(), chains=_FakeChains(chain))
+    position = _open_put("AAA", 90.0, 25, spot=110.0)
+    service.swap_reviews(
+        [position],
+        [_screen_candidate("B", 0.10), _screen_candidate("C", 0.22), _screen_candidate("D", 0.90)],
+        _BASE,
+    )
+    r = position.swap
+    assert r.fresh_source == "list median" and r.fresh_yield == pytest.approx(0.22)
+    assert [s.symbol for s in r.suggestions] == ["D", "C", "B"]  # no same-ticker pick to lead
+    assert not any(s.same_ticker for s in r.suggestions)
+
+
+def test_only_short_puts_are_reviewed():
+    from wheel_screener.core.models import Position, PositionKind
+
+    chains = _FakeChains(_chain([]))
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    call = Position(symbol="AAA C", underlying="AAA", kind=PositionKind.SHORT_CALL,
+                    option_type=OptionType.CALL, quantity=1, strike=120.0,
+                    expiration=_BASE + timedelta(days=25), underlying_price=110.0)
+    shares = Position(symbol="AAA", underlying="AAA", kind=PositionKind.SHARES, quantity=100)
+    service.swap_reviews([call, shares], [], _BASE)
+    assert call.swap is None and shares.swap is None and chains.requested_types == []

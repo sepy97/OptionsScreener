@@ -18,4 +18,12 @@ PATH=/usr/local/bin:/usr/bin:/bin
 # precompute a fresh screen through the market day (Mon–Fri) so the dashboard stays current.
 # (each run briefly double-loads the fundamentals store in a second process; fine with swap —
 #  the lazy-load issue would remove the double load.)
-0 10,12,14,16 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen >> $HOME/steadybull-cron.log 2>&1
+#
+# The first and last runs are placed around the two moments the Portfolio tab's Close? verdicts
+# are meant to be read: just after the open, and in time to act before the close. A run takes
+# 2-4 minutes, so the late one starts at 15:35 to be ready by 15:45 rather than at the bell.
+# The verdicts themselves are NOT precomputed — they are priced live when the tab is opened (a
+# chain pull per open put, cached ~10 min) — so this keeps the SUGGESTIONS fresh, not the flags.
+40 9 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen >> $HOME/steadybull-cron.log 2>&1
+0 12,14 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen >> $HOME/steadybull-cron.log 2>&1
+35 15 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen >> $HOME/steadybull-cron.log 2>&1

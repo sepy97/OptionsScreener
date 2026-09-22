@@ -1,0 +1,86 @@
+{# Why one open put should be kept or swapped. Inserted under its row, like the ways-out panel.
+
+   It shows the arithmetic rather than just the verdict, because the rule is a DRAFT: both limits
+   are starting values that have not been backtested against simply holding to expiry, so a
+   reader has to be able to see which threshold a verdict turned on and disagree with it. #}
+{% import "_icons.html" as icon %}
+{% import "_swap_bits.html" as sw %}
+{% set swap = r.action == 'swap' %}
+<tr class="detail swap-row">
+ <td colspan="10">
+  <article class="exits swap-panel">
+    <header class="results-head">
+      <strong>{{ p.underlying }} {{ p.strike|money }} put &middot;
+        {{ 'swap it' if swap else 'keep it' }}</strong>
+      <span class="badge {{ 'badge--neg' if swap else 'badge--ok' }}">{{ 'Yes' if swap else 'No' }}</span>
+      <span class="result-stats">
+        <span>{{ p.quantity | int }} contract{{ 's' if p.quantity != 1 else '' }}</span>
+        {% if r.days is not none %}<span>{{ r.days }} days left</span>{% endif %}
+        {% if p.underlying_price %}<span>Spot <b>{{ p.underlying_price|money }}</b></span>{% endif %}
+      </span>
+    </header>
+
+    <p class="div-explain {{ 'assign-likely' if swap else 'assign-low' }}">{{ r.reason|capitalize }}.</p>
+
+    {% if r.old_yield is not none %}
+    <dl class="card-grid">
+      <dt>This put</dt>
+      <dd><b>{{ sw.pct(r.old_yield) }}</b>/yr on the {{ r.cash|money }} it locks up &mdash;
+        what the cash still earns if you keep it, priced at the ask (what buying it back costs).</dd>
+
+      <dt>A fresh put</dt>
+      <dd><b>{{ sw.pct(r.fresh_yield) }}</b>/yr
+        {%- if r.fresh_source == 'same ticker' %} on the same ticker &mdash; the one put the
+        entry rules would open on {{ p.underlying }} today, priced at the bid
+        {%- else %} &mdash; the <b>median</b> of the screen's picks, standing in because
+        {{ p.underlying }} has no valid pick of its own today (off the screen, reporting before
+        the new expiry, or nothing liquid enough){% endif %}.</dd>
+
+      <dt>Rule 1</dt>
+      <dd>{% if r.rule1_passed %}{{ icon.check() }}{% else %}{{ icon.close() }}{% endif %}
+        a fresh put pays <b>{{ "%.1f"|format(r.fresh_yield / r.old_yield) }}x</b> this one; the rule
+        asks for {{ "%g"|format(r.min_ratio) }}x.
+        <span class="detail-note">Stops a swap right after opening, when the two are equal by
+        construction.</span></dd>
+
+      <dt>Rule 2</dt>
+      <dd>{% if r.rule2_passed %}{{ icon.check() }}{% elif r.rule1_passed %}{{ icon.close() }}{% else %}<span class="detail-note">not reached</span>{% endif %}
+        {% if r.extra_premium is not none %}<b>{{ r.extra_premium|money }}</b> of extra premium over
+        the {{ r.days }} days left, after the {{ r.swap_cost|money }} swap cost; the rule asks for
+        {{ r.min_extra|money }}.{% endif %}
+        <span class="detail-note">Stops swaps on small positions and on puts whose cash frees
+        itself soon anyway.</span></dd>
+    </dl>
+    {% endif %}
+
+    {% if r.suggestions %}
+    <h5 class="exit-after">{{ 'What to open instead' if swap else 'What it was measured against' }}</h5>
+    <figure>
+    <table class="swap-table">
+      <thead><tr>
+        <th>Ticker</th><th>Strike</th><th>Expiry</th><th>DTE</th><th>Delta</th><th>Bid</th>
+        <th>Yield</th><th>Collateral</th>
+      </tr></thead>
+      <tbody>
+        {% for s in r.suggestions %}{{ sw.suggestion(s, r.cash) }}{% endfor %}
+      </tbody>
+    </table>
+    </figure>
+    <p class="detail-note">
+      {%- if swap %}The same-ticker put leads because it is the comparison the decision was made
+      on; the others are the screen's best by yield, and they never affect WHETHER to swap, only
+      what to swap into. Closing this put frees {{ r.cash|money }}.
+      {%- else %}Shown for context. The decision was made against the same-ticker pick alone
+      &mdash; a higher yield elsewhere is not a reason to swap, or the rule would fire
+      constantly.{% endif %}
+      {% if swaps and not swaps.screen_missing %}Suggestions come from a screen run
+      {{ swaps.screen_age }}.{% endif %}
+    </p>
+    {% endif %}
+
+    <p class="detail-note"><b>Draft rule.</b> Both limits are starting values and have not been
+      backtested against simply holding to expiry, so this is a prompt to look, not a signal.
+      Highest yield usually means highest risk: the entry rules are the guard.</p>
+  </article>
+ </td>
+</tr>

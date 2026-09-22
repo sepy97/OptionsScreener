@@ -4,8 +4,8 @@
 part that goes stale fastest. Target release: **v2.0.0** — shipped; positions landed in v2.4.0.
 
 **Status:** live. Sign-in, balances and positions are running in production against a real Schwab
-account; P5 (ops) and P5a (the early-assignment watch, v2.12.0) are done. Remaining: P6
-(cross-links into the screener).
+account; P5 (ops), P5a (the early-assignment watch, v2.12.0) and P5b (the Close? swap column,
+v2.13.0) are done. Remaining: P6 (cross-links into the screener).
 
 | Decision | State |
 |---|---|
@@ -602,6 +602,26 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
         show them; the panel says so rather than implying the verdict covers everything.
       - The carry rate defaults to 4% (`PORTFOLIO__CARRY_RATE`). The verdict isn't sensitive to
         a point either way.
+- [x] **P5b — the Close? column (v2.13.0).** The put swap rule from
+      [PUT_SWAP_RULE.md](PUT_SWAP_RULE.md): for every open short put the stock has risen away
+      from, is the cash behind it working hard enough? Yes/No in the table, both clickable, with
+      the arithmetic, the two rules and the alternatives in a panel under the row. Decisions:
+      - **The fresh put is picked fresh, not read off the screen.** The chain pull that gives the
+        open put's ASK is the same board `select_put` picks from, so the comparison is against a
+        put this project would really sell on that ticker today — including when the name is
+        outside the screen's price band or below its top-N cut. The screen supplies only the
+        fallback median and the other-ticker suggestions, and never decides WHETHER to swap.
+      - **Live, not stored.** The verdicts are priced when the tab is opened (cached ~10 min per
+        position, Refresh clears it) rather than snapshotted by cron. Both cost the same handful
+        of requests — per-minute limits are the binding constraint, not a monthly quota — and
+        live means no account-derived data is written to disk, which keeps the read-only posture
+        of section 6 intact. Cron keeps the SUGGESTIONS fresh instead: screens at 9:40 and 15:35
+        ET, the second early enough to act on before the close.
+      - **An in-the-money put shows "—", and spends no chain call.** It is the assignment
+        question, which P4a already answers; nothing a chain could say would change that.
+      - **The panel shows its arithmetic** — both limits beside the values they judged — because
+        the rule is a draft nobody has backtested. A verdict that cannot be argued with would be
+        a worse thing to ship than no verdict.
 - [ ] **P6 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
 - [ ] *(later)* **A second broker**, to prove the abstraction is real rather than Schwab wearing a

@@ -47,7 +47,13 @@ from wheel_screener.core.errors import (
     ProviderUnavailableError,
     RateLimitedError,
 )
-from wheel_screener.core.models import Dividend, OptionType, ScreenCriteria
+from wheel_screener.core.models import (
+    CandidateResult,
+    Dividend,
+    OptionType,
+    PositionKind,
+    ScreenCriteria,
+)
 from wheel_screener.core.service import ScreenerService
 
 logger = logging.getLogger(__name__)
@@ -883,6 +889,69 @@ def _cached_balances(request: Request, service: ScreenerService):
     return accounts, None
 
 
+# A keep/swap verdict costs a chain pull per open put, so it is cached per POSITION rather than
+# per page: reopening the tab inside the window is free, and only a position the cache has never
+# seen (or one that has gone stale) spends a request. The Refresh button clears the lot.
+_SWAP_TTL_SECONDS = 600
+
+
+def _position_key(p) -> tuple:
+    """Identity of a held contract for caching. Contracts are part of it: the verdict's dollar
+    figures scale with size, so a position that grew is a different question."""
+    return (p.symbol, p.quantity, p.strike, p.expiration)
+
+
+def _latest_candidates(runner: JobRunner) -> tuple[list, dict | None]:
+    """The most recent screen's candidates, for the fallback and the suggestions."""
+    latest = runner.store.latest_done()
+    rows = (latest or {}).get("result") or []
+    out = []
+    for row in rows:
+        try:
+            out.append(CandidateResult.model_validate(row))
+        except ValidationError:  # a run stored by an older version: skip that row, not the lot
+            continue
+    return out, latest
+
+
+def _stamp_swaps(request: Request, service: ScreenerService, runner: JobRunner,
+                 accounts: list, *, force: bool = False) -> dict:
+    """Attach a keep/swap verdict to every open short put, and say how fresh the inputs are.
+
+    Never raises: the verdict is an opinion about a position, and the page showing the position
+    is worth more than the opinion.
+    """
+    cache = {} if force else (getattr(request.app.state, "swap_cache", None) or {})
+    now = time.monotonic()
+    puts = [p for a in accounts for p in a.positions if p.kind is PositionKind.SHORT_PUT]
+    todo = []
+    for p in puts:
+        hit = cache.get(_position_key(p))
+        if hit is not None and now - hit[0] < _SWAP_TTL_SECONDS:
+            p.swap = hit[1]
+        else:
+            todo.append(p)
+    candidates, latest = _latest_candidates(runner)
+    if todo:
+        try:
+            service.swap_reviews(todo, candidates, date.today())
+        except Exception as e:  # noqa: BLE001 - a verdict is never worth a dead tab
+            logger.warning("swap review failed: %s", e)
+        for p in todo:
+            if p.swap is not None:
+                cache[_position_key(p)] = (now, p.swap)
+    request.app.state.swap_cache = cache
+    screen_age, screen_stale = (
+        _humanize_age(latest["created_at"]) if latest else ("", True)
+    )
+    return {
+        "screen_age": screen_age,
+        "screen_stale": screen_stale,
+        "screen_missing": latest is None,
+        "checked": bool(puts),
+    }
+
+
 def _link_for(request: Request, broker: str):
     link = (getattr(request.app.state, "links", None) or {}).get(broker)
     if link is None:
@@ -973,6 +1042,7 @@ def portfolio_page(
     request: Request,
     settings: Settings = Depends(get_settings),
     service: ScreenerService = Depends(get_service),
+    runner: JobRunner = Depends(get_job_runner),
 ):
     """The Portfolio tab. Four states, each with a real rendering:
 
@@ -987,6 +1057,7 @@ def portfolio_page(
     status = {name: link.status() for name, link in links.items()}
     connected = session is not None and any(s.connected for s in status.values())
     accounts, error = _cached_balances(request, service) if connected else ([], None)
+    swaps = _stamp_swaps(request, service, runner, accounts) if accounts else {}
     return templates.TemplateResponse(
         request, "portfolio.html",
         {
@@ -996,6 +1067,7 @@ def portfolio_page(
             "connected": connected,
             "accounts": accounts,
             "balances_error": error,
+            "swaps": swaps,
         },
     )
 
@@ -1060,6 +1132,51 @@ def portfolio_disconnect(request: Request, broker: str, settings: Settings = Dep
     response = RedirectResponse("/portfolio", status_code=303)
     response.delete_cookie(settings.portfolio.cookie_name, path="/portfolio")
     return response
+
+
+@app.post("/portfolio/swaps/refresh")
+def portfolio_swaps_refresh(
+    request: Request,
+    service: ScreenerService = Depends(get_service),
+    runner: JobRunner = Depends(get_job_runner),
+):
+    """Re-price every open put against live quotes and the latest screen.
+
+    Balances are re-read too: the verdict's dollars are per contract, so a position that changed
+    since the cached read would be judged at the wrong size.
+    """
+    request.app.state.balances_cache = None
+    accounts, error = _cached_balances(request, service)
+    swaps = _stamp_swaps(request, service, runner, accounts, force=True)
+    return templates.TemplateResponse(
+        request, "_positions.html",
+        {"accounts": accounts, "balances_error": error, "swaps": swaps},
+    )
+
+
+@app.get("/portfolio/swap")
+def portfolio_swap_detail(
+    request: Request,
+    symbol: str,
+    service: ScreenerService = Depends(get_service),
+    runner: JobRunner = Depends(get_job_runner),
+):
+    """The reasoning behind one position's Close? verdict: the numbers, the rules, the
+    alternatives. Served from the cache the column was rendered from, so the panel can never
+    disagree with the cell that opened it."""
+    accounts, _error = _cached_balances(request, service)
+    swaps = _stamp_swaps(request, service, runner, accounts)
+    position = next(
+        (p for a in accounts for p in a.positions
+         if p.kind is PositionKind.SHORT_PUT and p.symbol == symbol), None,
+    )
+    if position is None or position.swap is None:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "unknown position"}, status_code=404
+        )
+    return templates.TemplateResponse(
+        request, "_swap.html", {"p": position, "r": position.swap, "swaps": swaps},
+    )
 
 
 @app.post("/runs")

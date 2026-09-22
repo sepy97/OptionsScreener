@@ -1,0 +1,40 @@
+{# Small pieces of the put swap rule shared by the positions table and the detail panel. #}
+{% import "_icons.html" as icon %}
+
+{%- macro pct(v) -%}{{ "%.1f%%"|format(v * 100) if v is not none else "—" }}{%- endmacro -%}
+
+{# The Close? cell. Yes and No both open the panel: the reasoning is the point, and a bare No
+   with no way to see why is the version of this that nobody would trust. #}
+{%- macro cell(p) -%}
+{%- set r = p.swap -%}
+{%- if r is none or r.action == 'n/a' -%}
+  <span class="detail-note" title="{{ r.reason if r else 'not reviewed' }}">&mdash;</span>
+{%- else -%}
+  <a href="#" class="close-link"
+     hx-get="/portfolio/swap?symbol={{ p.symbol|urlencode }}"
+     hx-target="closest tr" hx-swap="afterend" hx-trigger="click consume" hx-sync="this:drop"
+     hx-on::before-request="let d=this.closest('tr').nextElementSibling;
+       if(d){if(d.classList.contains('detail')){d.remove();event.preventDefault();}}"
+     title="{{ r.reason }}">
+    <span class="badge {{ 'badge--neg' if r.action == 'swap' else 'badge--ok' }}"
+      >{{ 'Yes' if r.action == 'swap' else 'No' }}</span></a>
+{%- endif -%}
+{%- endmacro -%}
+
+{# One suggestion row: a put the entry rules would open today. #}
+{%- macro suggestion(s, freed) -%}
+<tr>
+  <td><b>{{ s.symbol }}</b>{% if s.same_ticker %}
+    <span class="badge badge--ok" title="the same ticker as the put you hold: same company, same
+      risk, so the yield gap can only mean the open put is used up">same ticker</span>{% endif %}</td>
+  <td>{{ s.strike|money }}</td>
+  <td>{{ s.expiration }}</td>
+  <td>{{ s.dte }}</td>
+  <td>{{ "%.2f"|format(s.delta) if s.delta is not none else "—" }}</td>
+  <td>{{ s.bid|money }}</td>
+  <td class="{{ 'y-hi' if (s.annualized_yield or 0) >= 0.25 else ('y-mid' if (s.annualized_yield or 0) >= 0.15 else 'y-lo') }}">{{ pct(s.annualized_yield) }}</td>
+  <td>{{ s.collateral|money }}{% if freed is not none and s.collateral is not none and s.collateral > freed %}
+    <span class="detail-note" title="more than the {{ freed|money }} that closing this put frees;
+      the rest would have to come from cash you have spare">over</span>{% endif %}</td>
+</tr>
+{%- endmacro -%}

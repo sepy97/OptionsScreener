@@ -109,6 +109,57 @@ class EarlyAssignment(BaseModel):
     dividends: list[Dividend] = Field(default_factory=list)  # ex-dates inside the life
 
 
+class SwapAction(StrEnum):
+    """The verdict on an open short put: is the cash behind it working hard enough?"""
+
+    SWAP = "swap"  # both rules passed — buy it back and open a fresh one
+    KEEP = "keep"  # a rule failed, and which one is the interesting part
+    NOT_APPLICABLE = "n/a"  # out of scope: in the money, expiring today, or unpriceable
+
+
+class SwapSuggestion(BaseModel):
+    """One put the entry rules would open today — the fresh put, or something to swap into.
+
+    A flattened copy of a screen candidate rather than the candidate itself: a review is read
+    long after the run it came from, and carrying the whole object would imply it is still live.
+    """
+
+    symbol: str
+    strike: float
+    expiration: date
+    dte: int
+    delta: float | None = None
+    bid: float | None = None  # what selling it pays, per share — the yield is built on this
+    annualized_yield: float | None = None
+    collateral: float | None = None  # strike x 100, the cash it would lock up
+    score: float | None = None  # the screen's blended score, when it came from a run
+    same_ticker: bool = False  # the fresh put itself, as opposed to another name on the list
+
+
+class SwapReview(BaseModel):
+    """Why one open short put should be kept or swapped, with the numbers behind it.
+
+    Both limits are shown alongside the values they judged, because the rule is a draft: the
+    reader has to be able to see that a verdict turned on a threshold nobody has backtested yet.
+    """
+
+    action: SwapAction
+    reason: str
+    # None until the position clears the scope checks (in the money, expiring, unpriced)
+    old_yield: float | None = None  # on the ASK: what it still pays to keep it open
+    fresh_yield: float | None = None  # on the BID: what a fresh put would pay
+    fresh_source: str | None = None  # "same ticker" | "list median"
+    extra_premium: float | None = None  # dollars the swap collects over the days left, net of cost
+    cash: float | None = None  # strike x 100 x contracts
+    days: int | None = None
+    rule1_passed: bool | None = None
+    rule2_passed: bool | None = None
+    min_ratio: float | None = None
+    min_extra: float | None = None
+    swap_cost: float | None = None
+    suggestions: list[SwapSuggestion] = Field(default_factory=list)
+
+
 class ScreenCriteria(BaseModel):
     """Inputs to a screen run. Mirrors the target CSP/wheel trade profile."""
 
@@ -365,6 +416,8 @@ class Position(BaseModel):
     # and whether its holder is likely to exercise before expiry
     dividends: list[Dividend] = Field(default_factory=list)
     early_assignment: EarlyAssignment | None = None
+    # short puts only: whether the cash behind this one would work harder in a fresh put
+    swap: SwapReview | None = None
 
     @property
     def mark(self) -> float | None:

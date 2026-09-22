@@ -1389,3 +1389,155 @@ def test_no_verdict_no_section() -> None:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
     assert "assign-watch" not in body
+
+
+# ── the put swap rule: the Close? column ────────────────────────────────────────────────────
+
+def _swap_account(*verdicts):
+    """An account of open short puts, each carrying a prepared verdict."""
+    from datetime import date as _date
+
+    from wheel_screener.core.models import BrokerageAccount, Position, PositionKind
+
+    positions = []
+    for i, _ in enumerate(verdicts):
+        positions.append(Position(
+            symbol=f"SYM{i}  261016P00090000", underlying=f"SYM{i}",
+            kind=PositionKind.SHORT_PUT, asset_type="OPTION", option_type="put", quantity=2,
+            strike=90.0, expiration=_date(2026, 10, 16), dte=25, underlying_price=110.0,
+            collateral=18_000.0, market_value=-70.0,
+        ))
+    return BrokerageAccount(broker="schwab", account_id="s", display_name="...123",
+                            positions=positions)
+
+
+def _swap_review(action: str, **kw):
+    from datetime import date as _date
+
+    from wheel_screener.core.models import SwapReview, SwapSuggestion
+
+    base = dict(
+        old_yield=0.0579, fresh_yield=0.2454, fresh_source="same ticker",
+        extra_premium=220.0, cash=18_000.0, days=25, rule1_passed=True, rule2_passed=True,
+        min_ratio=2.0, min_extra=100.0, swap_cost=10.0,
+        suggestions=[SwapSuggestion(
+            symbol="SYM0", strike=85.0, expiration=_date(2026, 10, 30), dte=39, delta=-0.2,
+            bid=2.0, annualized_yield=0.2454, collateral=8_500.0, same_ticker=True,
+        )],
+    )
+    base.update(kw)
+    return SwapReview(action=action, reason=kw.pop("reason", "both rules passed"), **{
+        k: v for k, v in base.items() if k != "reason"})
+
+
+def _swap_client(account, reviews):
+    """A service whose swap_reviews stamps `reviews` (one per position) and counts its calls."""
+    from wheel_screener.api.deps import get_service
+
+    class _Svc:
+        calls = 0
+
+        def brokerage_accounts(self):
+            return [account]
+
+        def swap_reviews(self, positions, candidates, today, criteria=None):
+            type(self).calls += 1
+            for p, r in zip(positions, reviews, strict=False):
+                p.swap = r
+
+    _Svc.calls = 0
+    svc = _Svc()
+    c = _client()
+    app.dependency_overrides[get_service] = lambda: svc
+    _sign_in(c)
+    app.state.balances_cache = None
+    app.state.swap_cache = None
+    return c, svc
+
+
+def test_the_close_column_says_yes_or_no_and_opens_the_reasoning() -> None:
+    account = _swap_account("swap")
+    c, _ = _swap_client(account, [_swap_review("swap")])
+    try:
+        body = c.get("/portfolio").text
+        assert "Close?" in body and ">Yes<" in body
+        # the cell opens a panel of its own, and must not also trigger the row's ways-out panel
+        assert "/portfolio/swap?symbol=" in body and "click consume" in body
+        panel = c.get("/portfolio/swap", params={"symbol": account.positions[0].symbol}).text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+    assert "swap it" in panel and "Rule 1" in panel and "Rule 2" in panel
+    assert "4.2x" in panel  # 0.2454 / 0.0579, the ratio rule 1 turned on
+    assert "$220.00" in panel and "$100.00" in panel  # the extra, against the floor
+    assert "What to open instead" in panel and "same ticker" in panel
+    assert "Draft rule" in panel  # it has not been backtested; the panel says so
+
+
+def test_a_keep_verdict_still_opens_and_names_the_rule_that_held_it() -> None:
+    review = _swap_review(
+        "keep", reason="rule 1: a fresh put pays 1.2x this one, under the 2x the rule asks for",
+        rule1_passed=False, rule2_passed=None, extra_premium=None,
+    )
+    account = _swap_account("keep")
+    c, _ = _swap_client(account, [review])
+    try:
+        body = c.get("/portfolio").text
+        assert ">No<" in body
+        panel = c.get("/portfolio/swap", params={"symbol": account.positions[0].symbol}).text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+    assert "keep it" in panel and "under the 2x the rule asks for" in panel
+    assert "not reached" in panel  # rule 2 was never evaluated, and does not read as passed
+    assert "What it was measured against" in panel
+
+
+def test_an_out_of_scope_put_shows_a_dash_rather_than_a_verdict() -> None:
+    account = _swap_account("n/a")
+    review = _swap_review("n/a", reason="the stock is at or below the strike", old_yield=None)
+    c, _ = _swap_client(account, [review])
+    try:
+        body = c.get("/portfolio").text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+    assert ">Yes<" not in body and ">No<" not in body
+    assert "at or below the strike" in body  # as the cell's tooltip
+
+
+def test_verdicts_are_cached_between_page_loads_and_the_button_re_prices() -> None:
+    """A verdict costs a chain pull per put, so reopening the tab must not spend them again —
+    but the Refresh button has to, or it would be a no-op dressed as an action."""
+    account = _swap_account("swap")
+    c, svc = _swap_client(account, [_swap_review("swap")])
+    try:
+        c.get("/portfolio")
+        assert svc.calls == 1
+        app.state.balances_cache = None  # force a fresh broker read; the verdicts stay cached
+        c.get("/portfolio")
+        assert svc.calls == 1, "the second page load re-used the cached verdict"
+        refreshed = c.post("/portfolio/swaps/refresh")
+        assert refreshed.status_code == 200 and svc.calls == 2
+        assert "Close?" in refreshed.text and ">Yes<" in refreshed.text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_the_refresh_button_is_rate_limited() -> None:
+    from wheel_screener.api.ratelimit import is_expensive
+
+    assert is_expensive("POST", "/portfolio/swaps/refresh")
+    assert not is_expensive("GET", "/portfolio/swap")  # reads the cache; cheap
+
+
+def test_the_swap_endpoints_need_a_session() -> None:
+    c = _client()
+    try:
+        for method, path in (("GET", "/portfolio/swap?symbol=X"),
+                             ("POST", "/portfolio/swaps/refresh")):
+            r = c.request(method, path, follow_redirects=False)
+            assert r.status_code == 303 and r.headers["location"] == "/portfolio"
+    finally:
+        c.__exit__(None, None, None)
