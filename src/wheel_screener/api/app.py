@@ -1157,25 +1157,31 @@ def portfolio_swaps_refresh(
 @app.get("/portfolio/swap")
 def portfolio_swap_detail(
     request: Request,
-    symbol: str,
+    position: str,
     service: ScreenerService = Depends(get_service),
     runner: JobRunner = Depends(get_job_runner),
 ):
     """The reasoning behind one position's Close? verdict: the numbers, the rules, the
     alternatives. Served from the cache the column was rendered from, so the panel can never
-    disagree with the cell that opened it."""
+    disagree with the cell that opened it.
+
+    ``position`` is the contract's own symbol, and is deliberately NOT called ``symbol``: the
+    table row this link lives in carries hx-vals with a ``symbol`` of its own (the underlying,
+    for the ways-out panel), htmx merges an ancestor's hx-vals into the child's request, and the
+    duplicate that arrives last is the one Starlette hands over.
+    """
     accounts, _error = _cached_balances(request, service)
     swaps = _stamp_swaps(request, service, runner, accounts)
-    position = next(
+    held = next(
         (p for a in accounts for p in a.positions
-         if p.kind is PositionKind.SHORT_PUT and p.symbol == symbol), None,
+         if p.kind is PositionKind.SHORT_PUT and p.symbol == position), None,
     )
-    if position is None or position.swap is None:
+    if held is None or held.swap is None:
         return templates.TemplateResponse(
             request, "_error.html", {"message": "unknown position"}, status_code=404
         )
     return templates.TemplateResponse(
-        request, "_swap.html", {"p": position, "r": position.swap, "swaps": swaps},
+        request, "_swap.html", {"p": held, "r": held.swap, "swaps": swaps},
     )
 
 

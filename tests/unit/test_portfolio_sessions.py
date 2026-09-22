@@ -1462,8 +1462,8 @@ def test_the_close_column_says_yes_or_no_and_opens_the_reasoning() -> None:
         body = c.get("/portfolio").text
         assert "Close?" in body and ">Yes<" in body
         # the cell opens a panel of its own, and must not also trigger the row's ways-out panel
-        assert "/portfolio/swap?symbol=" in body and "click consume" in body
-        panel = c.get("/portfolio/swap", params={"symbol": account.positions[0].symbol}).text
+        assert "/portfolio/swap?position=" in body and "click consume" in body
+        panel = c.get("/portfolio/swap", params={"position": account.positions[0].symbol}).text
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -1484,7 +1484,7 @@ def test_a_keep_verdict_still_opens_and_names_the_rule_that_held_it() -> None:
     try:
         body = c.get("/portfolio").text
         assert ">No<" in body
-        panel = c.get("/portfolio/swap", params={"symbol": account.positions[0].symbol}).text
+        panel = c.get("/portfolio/swap", params={"position": account.positions[0].symbol}).text
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -1535,9 +1535,30 @@ def test_the_refresh_button_is_rate_limited() -> None:
 def test_the_swap_endpoints_need_a_session() -> None:
     c = _client()
     try:
-        for method, path in (("GET", "/portfolio/swap?symbol=X"),
+        for method, path in (("GET", "/portfolio/swap?position=X"),
                              ("POST", "/portfolio/swaps/refresh")):
             r = c.request(method, path, follow_redirects=False)
             assert r.status_code == 303 and r.headers["location"] == "/portfolio"
     finally:
         c.__exit__(None, None, None)
+
+
+def test_the_panel_survives_the_values_the_row_puts_on_every_request() -> None:
+    """The row this link sits in carries hx-vals for the ways-out panel, and htmx merges an
+    ancestor's hx-vals into the child's request. When the panel took a `symbol` parameter, the
+    row's own `symbol` (the underlying) arrived last and won, the lookup missed, and the 404
+    left htmx with nothing to swap — so clicking Yes did nothing at all.
+    """
+    account = _swap_account("swap")
+    osi = account.positions[0].symbol
+    c, _ = _swap_client(account, [_swap_review("swap")])
+    try:
+        c.get("/portfolio")
+        # exactly what htmx sends: the link's own parameter, then the row's inherited values
+        r = c.get(f"/portfolio/swap?position={osi.replace(' ', '%20')}"
+                  "&symbol=SYM0&strike=90.0&expiry=2026-10-16&contracts=2.0"
+                  "&option_type=put&is_short=true&collected=&opened=")
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+    assert r.status_code == 200 and "swap it" in r.text

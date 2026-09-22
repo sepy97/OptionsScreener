@@ -11,7 +11,11 @@
   <span class="detail-note" title="{{ r.reason if r else 'not reviewed' }}">&mdash;</span>
 {%- else -%}
   <a href="#" class="close-link"
-     hx-get="/portfolio/swap?symbol={{ p.symbol|urlencode }}"
+     {# `position`, not `symbol`: the row this link sits in carries hx-vals with its own
+        "symbol" (the underlying) for the ways-out panel, and htmx MERGES an ancestor's hx-vals
+        into a child's request. Two `symbol` params arrive, the last one wins, and the lookup
+        misses — a 404, which htmx does not swap, so the click did nothing at all. #}
+     hx-get="/portfolio/swap?position={{ p.symbol|urlencode }}"
      hx-target="closest tr" hx-swap="afterend" hx-trigger="click consume" hx-sync="this:drop"
      hx-on::before-request="let d=this.closest('tr').nextElementSibling;
        if(d){if(d.classList.contains('detail')){d.remove();event.preventDefault();}}"
