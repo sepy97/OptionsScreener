@@ -132,6 +132,7 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
         dividends=_build_dividends(settings, fundamentals),
         carry_rate=settings.portfolio.carry_rate,
         swap_params=SwapParams(
+            used_up_yield=settings.swap.used_up_yield,
             min_ratio=settings.swap.min_ratio, min_extra=settings.swap.min_extra,
             swap_cost=settings.swap.swap_cost, top_n=settings.swap.top_n,
         ),

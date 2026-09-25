@@ -30,14 +30,25 @@
 
       <dt>A fresh put</dt>
       <dd><b>{{ sw.pct(r.fresh_yield) }}</b>/yr
-        {%- if r.fresh_source == 'same ticker' %} on the same ticker &mdash; the one put the
-        entry rules would open on {{ p.underlying }} today, priced at the bid
+        {%- if r.fresh_source == 'same ticker' %} on the same ticker at about the same expiry
+        &mdash; the one put the entry rules would open on {{ p.underlying }} today, priced at the
+        bid. Matching the expiry matters: premium grows with the square root of time, so a
+        shorter put always shows a higher annual rate at the same risk, and comparing across
+        expiries would measure the calendar rather than this position
         {%- else %} &mdash; the <b>median</b> of the screen's picks, standing in because
         {{ p.underlying }} has no valid pick of its own today (off the screen, reporting before
         the new expiry, or nothing liquid enough){% endif %}.</dd>
 
+      <dt>Used up?</dt>
+      <dd>{% if r.used_up %}{{ icon.check() }}{% else %}{{ icon.close() }}{% endif %}
+        it pays <b>{{ sw.pct(r.old_yield) }}</b>/yr, {{ 'under' if r.used_up else 'at or above' }}
+        the {{ sw.pct(r.used_up_yield) }}/yr this rule treats as used up.
+        <span class="detail-note">A put still earning a decent rate is not idle cash, whatever
+        else is on offer &mdash; swapping it would be a decision to carry more risk, not to stop
+        idling.</span></dd>
+
       <dt>Rule 1</dt>
-      <dd>{% if r.rule1_passed %}{{ icon.check() }}{% else %}{{ icon.close() }}{% endif %}
+      <dd>{% if r.rule1_passed %}{{ icon.check() }}{% elif r.used_up %}{{ icon.close() }}{% else %}<span class="detail-note">not reached</span>{% endif %}
         a fresh put pays <b>{{ "%.1f"|format(r.fresh_yield / r.old_yield) }}x</b> this one; the rule
         asks for {{ "%g"|format(r.min_ratio) }}x.
         <span class="detail-note">Stops a swap right after opening, when the two are equal by
@@ -45,7 +56,7 @@
 
       <dt>Rule 2</dt>
       <dd>{% if r.rule2_passed %}{{ icon.check() }}{% elif r.rule1_passed %}{{ icon.close() }}{% else %}<span class="detail-note">not reached</span>{% endif %}
-        {% if r.extra_premium is not none %}<b>{{ r.extra_premium|money }}</b> of extra premium over
+        {% if r.rule1_passed and r.extra_premium is not none %}<b>{{ r.extra_premium|money }}</b> of extra premium over
         the {{ r.days }} days left, after the {{ r.swap_cost|money }} swap cost; the rule asks for
         {{ r.min_extra|money }}.{% endif %}
         <span class="detail-note">Stops swaps on small positions and on puts whose cash frees

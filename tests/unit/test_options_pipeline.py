@@ -806,39 +806,60 @@ def _screen_candidate(symbol: str, yld: float, strike: float = 100.0):
 
 
 def test_a_used_up_put_is_flagged_for_a_swap_against_a_fresh_same_ticker_pick():
-    """The stock ran away from the strike: the old put pays ~6%/yr on its cash, while the put the
-    entry rules would open today pays ~25%. Both rules clear, so: swap."""
+    """The stock ran away from the strike: the open put pays ~6%/yr on its cash, while the put
+    the entry rules would open at the SAME expiry pays ~27%. Both rules clear, so: swap."""
     from wheel_screener.core.models import SwapAction
 
     chain = _chain([
         _put(90, -0.03, 25, 0.35),   # the open put: nearly worthless, far from the money
-        _put(85, -0.20, 35, 2.00),   # what the rules would open today
+        _put(100, -0.20, 25, 1.85),  # what the rules would open on the same clock
+        _put(95, -0.20, 35, 3.00),   # richer, but only because it runs longer
     ], underlying_price=110.0)
     service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
     position = _open_put("AAA", 90.0, 25, spot=110.0)
     service.swap_reviews([position], [_screen_candidate("ZZZ", 0.30)], _BASE)
 
     r = position.swap
-    assert r.action is SwapAction.SWAP and r.rule1_passed and r.rule2_passed
+    assert r.action is SwapAction.SWAP and r.used_up and r.rule1_passed and r.rule2_passed
     assert r.fresh_source == "same ticker"
     assert r.old_yield == pytest.approx(0.0579, abs=1e-3)
-    assert r.fresh_yield == pytest.approx(0.2454, abs=1e-3)
-    assert r.extra_premium == pytest.approx(220.0, abs=5.0)
+    assert r.fresh_yield == pytest.approx(0.2701, abs=1e-3)  # the 25-day put, not the 35-day one
     # the same-ticker pick leads, then the rest of the screen by yield
     assert [s.symbol for s in r.suggestions] == ["AAA", "ZZZ"]
-    assert r.suggestions[0].same_ticker and r.suggestions[0].strike == 85
+    assert r.suggestions[0].same_ticker and r.suggestions[0].strike == 100
 
 
-def test_a_healthy_put_keeps_and_says_which_rule_held_it():
+def test_the_comparison_is_made_at_the_open_puts_own_tenor():
+    """Premium grows with the square root of time, so a shorter expiry always shows a higher
+    ANNUAL rate at the same delta. Comparing across tenors measures the calendar: it flagged a
+    put sold the same week (MRVL, 21 Sep 2026). The fresh put is taken at the open put's clock.
+    """
     chain = _chain([
-        _put(90, -0.20, 25, 1.60),   # still paying well: ~26%/yr
-        _put(85, -0.20, 35, 2.00),
+        _put(90, -0.03, 39, 0.60),   # the open put, 39 days out
+        _put(100, -0.20, 39, 2.90),  # same clock: ~27%/yr
+        _put(105, -0.20, 18, 2.40),  # far richer annualised (~49%/yr) purely for being shorter
+    ], underlying_price=115.0)
+    chains = _FakeChains(chain)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    position = _open_put("AAA", 90.0, 39, spot=115.0)
+    service.swap_reviews([position], [], _BASE)
+
+    r = position.swap
+    assert r.fresh_yield == pytest.approx(2.90 / 100 * 365 / 39, abs=1e-3)  # the 39-day put
+    assert r.suggestions[0].dte == 39 and r.suggestions[0].strike == 100
+
+
+def test_a_put_that_still_pays_well_is_kept_before_any_comparison_runs():
+    chain = _chain([
+        _put(90, -0.20, 25, 1.60),   # the open put, still paying ~26%/yr
+        _put(95, -0.25, 25, 3.00),
     ], underlying_price=95.0)
     service = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(chain))
     position = _open_put("AAA", 90.0, 25, spot=95.0)
     service.swap_reviews([position], [], _BASE)
-    assert position.swap.action.value == "keep" and position.swap.rule1_passed is False
-    assert "rule 1" in position.swap.reason
+    r = position.swap
+    assert r.action.value == "keep" and r.used_up is False
+    assert r.rule1_passed is None and "used up" in r.reason
 
 
 def test_an_in_the_money_put_is_out_of_scope_and_costs_no_chain_call():
