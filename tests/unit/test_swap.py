@@ -35,22 +35,25 @@ def test_yield_is_the_yearly_rate_on_the_locked_cash() -> None:
 # --- the spec's worked example, line by line -------------------------------------------------
 
 @pytest.mark.parametrize(
-    ("symbol", "strike", "days", "old_yield", "spot", "action", "extra"),
+    ("symbol", "strike", "days", "old_yield", "spot", "action", "extra", "stopped_by"),
     [
-        ("CRDO", 130.0, 25, 0.062, 145.0, SwapAction.SWAP, 130.0),
-        ("TER", 290.0, 25, 0.069, 320.0, SwapAction.SWAP, 288.0),
-        ("SCCO", 170.0, 25, 0.125, 180.0, SwapAction.KEEP, None),   # rule 1
-        ("LRCX", 270.0, 4, 0.184, 290.0, SwapAction.KEEP, None),    # rule 1
+        ("CRDO", 130.0, 25, 0.062, 145.0, SwapAction.SWAP, 130.0, None),
+        ("TER", 290.0, 25, 0.069, 320.0, SwapAction.SWAP, 288.0, None),
+        ("SCCO", 170.0, 25, 0.125, 180.0, SwapAction.KEEP, None, "rule 1"),
+        # the spec's example stops this one on rule 1 too; with the used-up floor it never gets
+        # that far, because a put paying 18%/yr is not a put whose cash is idle
+        ("LRCX", 270.0, 4, 0.184, 290.0, SwapAction.KEEP, None, "used up"),
     ],
 )
-def test_the_worked_example(symbol, strike, days, old_yield, spot, action, extra) -> None:
+def test_the_worked_example(symbol, strike, days, old_yield, spot, action, extra,
+                            stopped_by) -> None:
     r = review(_open(symbol, strike, days, old_yield, spot), _pick(symbol, YARDSTICK))
     assert r.action is action, r.reason
     assert r.old_yield == pytest.approx(old_yield, abs=5e-4)
     if extra is not None:
         assert r.extra_premium == pytest.approx(extra, abs=1.0)
     else:
-        assert "rule 1" in r.reason  # both keeps in the example fail on the ratio
+        assert stopped_by in r.reason
 
 
 def test_a_put_the_stock_has_fallen_below_is_the_assignment_question() -> None:
@@ -61,11 +64,31 @@ def test_a_put_the_stock_has_fallen_below_is_the_assignment_question() -> None:
 
 # --- the two rules ---------------------------------------------------------------------------
 
-def test_rule_1_stops_a_swap_right_after_opening() -> None:
-    """On day one a put pays about what a fresh one pays, so nothing can be twice as good."""
-    fresh = review(_open("X", 100.0, 30, YARDSTICK, 110.0), _pick("X", YARDSTICK))
-    assert fresh.action is SwapAction.KEEP and fresh.rule1_passed is False
-    assert "1.0x" in fresh.reason
+def test_rule_1_needs_the_fresh_put_to_be_twice_as_good() -> None:
+    """A quiet put whose replacement pays no more is not worth the trade."""
+    quiet = review(_open("X", 100.0, 30, 0.08, 110.0), _pick("X", 0.09))
+    assert quiet.action is SwapAction.KEEP and quiet.used_up and quiet.rule1_passed is False
+    assert "1.1x" in quiet.reason
+
+
+def test_a_put_that_still_pays_well_is_never_a_candidate() -> None:
+    """MRVL, 21 Sep 2026, the case that prompted the floor: a put sold days earlier, 39 days
+    left, still paying 22%/yr on its cash. A fresh put at the same expiry paid 27.8%. Nothing
+    about that position is idle, so the rest of the rule never runs."""
+    r = review(_open("MRVL", 210.0, 39, 0.219, 310.0), _pick("MRVL", 0.278))
+    assert r.action is SwapAction.KEEP and r.used_up is False
+    assert r.rule1_passed is None and r.rule2_passed is None  # never reached
+    assert "22%/yr" in r.reason and "15%/yr" in r.reason
+
+
+def test_the_floor_is_tunable() -> None:
+    """A put at 14%/yr is just under the default floor, so the rest of the rule runs. Lowering
+    the floor is what makes the rule quieter: fewer puts count as used up."""
+    eligible = review(_open("X", 100.0, 30, 0.14, 130.0), _pick("X", 0.40))
+    assert eligible.action is SwapAction.SWAP and eligible.used_up
+    stricter = review(_open("X", 100.0, 30, 0.14, 130.0), _pick("X", 0.40),
+                      params=SwapParams(used_up_yield=0.10))
+    assert stricter.action is SwapAction.KEEP and stricter.used_up is False
 
 
 def test_rule_2_stops_small_and_nearly_expired_positions() -> None:
@@ -87,7 +110,7 @@ def test_the_extra_is_net_of_the_swap_cost() -> None:
     assert free.extra_premium - charged.extra_premium == pytest.approx(10.0)
 
 
-def test_the_limits_are_tunable() -> None:
+def test_the_ratio_and_extra_limits_are_tunable() -> None:
     put = _open("X", 130.0, 25, 0.062, 145.0)
     assert review(put, _pick("X", YARDSTICK), params=SwapParams(min_ratio=4.0)).action is (
         SwapAction.KEEP)

@@ -152,6 +152,9 @@ class SwapReview(BaseModel):
     extra_premium: float | None = None  # dollars the swap collects over the days left, net of cost
     cash: float | None = None  # strike x 100 x contracts
     days: int | None = None
+    # False when the put still pays well enough that the rest of the rule never runs
+    used_up: bool | None = None
+    used_up_yield: float | None = None
     rule1_passed: bool | None = None
     rule2_passed: bool | None = None
     min_ratio: float | None = None

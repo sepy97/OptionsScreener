@@ -13,6 +13,14 @@ somewhere paying more — so two limits stand between "a better put exists" and 
 2. the extra premium over the old put's remaining days must clear ``min_extra`` after costs, which
    rules out small positions and puts with days left that would free the cash anyway.
 
+The fresh put must sit at roughly the SAME TENOR as the open one, and the service picks it that
+way. Annualized yields are only comparable at equal time: premium grows with the square root of
+time, so at an identical delta a short-dated put always shows the higher annual rate (MRVL, 21 Sep
+2026: 44%/yr at 18 days against 28%/yr at 39 days). Comparing across tenors measured the calendar
+and flagged a position sold the same week. The higher rate is also not free money — Cboe's
+weekly PutWrite index collected 39.3%/yr in premium against the monthly index's 24.1% and
+compounded 5.6% against 6.6% (Bondarenko, 2006-2015).
+
 Prices are taken from the side each trade actually crosses — the ASK to buy the old put back, the
 BID to sell the new one — so most of the trading cost is inside the comparison, and a thinly
 traded contract correctly looks worse than a liquid one.
@@ -34,6 +42,11 @@ from wheel_screener.core.models import SwapAction, SwapReview, SwapSuggestion
 class SwapParams:
     """The rule's limits. Starting values from the spec; none is backtested."""
 
+    # A put still paying this much is not used up, whatever else the market offers. Without it
+    # the ratio test also fires on healthy positions, because at a common expiry a 2x yield gap
+    # is roughly a 2-3x delta gap — which is a decision to take more risk, not to stop idling.
+    # 0.15 is the screen's own `yield_satisfactory` bar, so the two agree on what "decent" means.
+    used_up_yield: float = 0.15
     min_ratio: float = 2.0  # rule 1: the fresh put must pay this many times the old put
     min_extra: float = 100.0  # rule 2: dollars of extra premium, after cost
     swap_cost: float = 10.0  # commission plus the bid/ask loss the prices don't already carry
@@ -118,19 +131,28 @@ def review(
         "old_yield": old_yield, "fresh_yield": fresh_yield, "fresh_source": source,
         "extra_premium": extra, "cash": cash, "days": old.days,
         "min_ratio": params.min_ratio, "min_extra": params.min_extra,
-        "swap_cost": params.swap_cost,
+        "swap_cost": params.swap_cost, "used_up_yield": params.used_up_yield,
     }
 
+    # Is it used up at all? Asked first, because a put that still pays well is not a candidate
+    # however good the alternative is: swapping it would be a decision to carry more risk.
+    if old_yield >= params.used_up_yield:
+        return SwapReview(
+            action=SwapAction.KEEP, used_up=False,
+            reason=f"it still pays {old_yield:.0%}/yr on its cash, at or above the "
+                   f"{params.used_up_yield:.0%}/yr this rule treats as used up",
+            **common,
+        )
     if fresh_yield < params.min_ratio * old_yield:
         return SwapReview(
-            action=SwapAction.KEEP, rule1_passed=False,
+            action=SwapAction.KEEP, used_up=True, rule1_passed=False,
             reason=f"rule 1: a fresh put pays {fresh_yield / old_yield:.1f}x this one, under the "
                    f"{params.min_ratio:g}x the rule asks for",
             **common,
         )
     if extra < params.min_extra:
         return SwapReview(
-            action=SwapAction.KEEP, rule1_passed=True, rule2_passed=False,
+            action=SwapAction.KEEP, used_up=True, rule1_passed=True, rule2_passed=False,
             reason=f"rule 2: the swap would collect ${extra:,.0f} more over the {old.days} days "
                    f"left, under the ${params.min_extra:,.0f} the rule asks for",
             **common,
@@ -138,7 +160,7 @@ def review(
 
     suggestions = ([same_ticker] if same_ticker is not None else []) + list(others)[: params.top_n]
     return SwapReview(
-        action=SwapAction.SWAP, rule1_passed=True, rule2_passed=True,
+        action=SwapAction.SWAP, used_up=True, rule1_passed=True, rule2_passed=True,
         reason="both rules passed: the cash behind this put would work materially harder "
                "somewhere else",
         suggestions=suggestions, **common,

@@ -5,7 +5,7 @@ part that goes stale fastest. Target release: **v2.0.0** — shipped; positions 
 
 **Status:** live. Sign-in, balances and positions are running in production against a real Schwab
 account; P5 (ops), P5a (the early-assignment watch, v2.12.0) and P5b (the Close? swap column,
-v2.13.0) are done. Remaining: P6 (cross-links into the screener).
+v2.13.0, corrected in v2.14.0) are done. Remaining: P6 (cross-links into the screener).
 
 | Decision | State |
 |---|---|
@@ -622,6 +622,29 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
       - **The panel shows its arithmetic** — both limits beside the values they judged — because
         the rule is a draft nobody has backtested. A verdict that cannot be argued with would be
         a worse thing to ship than no verdict.
+- [x] **P5b-1 — the rule, corrected (v2.14.0).** In its first days live the rule flagged an MRVL
+      $210 put sold the same week. Two defects, both found by decomposing that verdict:
+      - **Comparing across tenors measured the calendar.** The fresh put was the best-paying
+        expiry in the 14-45 window, which by the square-root-of-time relation is almost always
+        the shortest one: MRVL paid 44%/yr at 18 days against 28%/yr at 39, at an identical
+        delta. Of the 2.00x that tripped rule 1, 1.58x was the clock and only 1.27x was the
+        position. The comparison is now made at the expiry nearest the open put's own remaining
+        life, clamped into the entry window, so both sides run to about the same date. The old
+        `extra` figure was also crediting the short-dated rate over the OLD put's full remaining
+        life, which silently assumed a re-sale.
+      - **Nothing tested whether the put was used up.** The rules only asked whether something
+        better existed, and something better always exists. A put must now be paying under
+        `USED_UP_YIELD` (15%/yr, the screen's own `yield_satisfactory` bar) before the rest of
+        the rule runs. The reason to have both: at a common expiry a 2x yield gap is roughly a
+        2-3x delta gap, so the ratio test on its own recommends carrying more risk, not
+        redeploying idle cash.
+
+      Evidence for keeping the short-dated rate out of the decision: Cboe's weekly PutWrite
+      index (WPUT) collected 39.3%/yr in gross premium against the monthly PUT index's 24.1%
+      and compounded 5.6% against 6.6%, Sharpe 0.50 against 0.52 (Bondarenko, Feb 2006-Dec
+      2015). More premium collected, less money kept. Note also that `MIN_RATIO = 2.0` measured
+      at a common expiry is the forward-looking equivalent of the "close at 50% of max profit"
+      convention, which is the most-backtested threshold in this space.
 - [ ] **P6 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
 - [ ] *(later)* **A second broker**, to prove the abstraction is real rather than Schwab wearing a

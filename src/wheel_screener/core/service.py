@@ -335,6 +335,35 @@ class ScreenerService:
             self._stamp_dividends(ranked, today, histories)
         return ranked
 
+    def _tenor_matched_put(self, snapshot, criteria, guard, held_days: int):
+        """The put the entry rules would open at roughly the OPEN PUT'S OWN CLOCK.
+
+        Not the best-paying expiry in the entry window, which is what the screen picks and which
+        is almost always the shortest one on offer: premium grows with the square root of time,
+        so an identical delta shows a far higher ANNUAL rate over fewer days (MRVL on 21 Sep
+        2026: 44%/yr at 18 days against 28%/yr at 39). Comparing across tenors therefore
+        measures the calendar rather than the position, and flagged a put sold days earlier.
+
+        So the expiry nearest the open put's remaining life is used, clamped into the entry
+        window — the rules would not sell a 5-day put, so nothing is compared against one — and
+        the nearest in-window expiry that actually yields a pick wins, since the held expiry may
+        have nothing liquid at the target delta.
+        """
+        target = min(max(held_days, criteria.min_dte), criteria.max_dte)
+        lo, hi = criteria.min_dte, criteria.max_dte + criteria.dte_tolerance
+        options = sorted(
+            {c.dte for c in snapshot.contracts if lo <= c.dte <= hi},
+            key=lambda d: (abs(d - target), d),
+        )
+        for dte in options:
+            narrowed = criteria.model_copy(
+                update={"min_dte": dte, "max_dte": dte, "dte_tolerance": 0}
+            )
+            pick = select_put(snapshot, narrowed, guard)
+            if pick is not None:
+                return pick
+        return None
+
     def _dividend_histories(self, symbols: list[str]) -> dict[str, list[Dividend]] | None:
         """Dividend histories for the names being shown, or None when there is no source or it
         failed. Never raises: a missing flag costs a line of context, and must not take a screen
@@ -706,7 +735,9 @@ class ScreenerService:
 
         The window has to cover both the held expiry and the entry window, because they are
         different questions asked of the same board: what this put costs to close, and what the
-        rules would open instead. Returns ``(None, ask)`` when the ticker has no valid pick today
+        rules would open instead. The comparison is TENOR-MATCHED (see ``_tenor_matched_put``).
+
+        Returns ``(None, ask)`` when the ticker has no valid pick today
         — it fails the fundamental gate, reports before every candidate expiry, or has nothing
         liquid enough — which is exactly when the list median stands in.
         """
@@ -745,7 +776,7 @@ class ScreenerService:
             # about, and the fallback median is the safer answer than no comparison at all.
             exclude_unknown=False,
         )
-        pick = select_put(snapshot, criteria, guard)
+        pick = self._tenor_matched_put(snapshot, criteria, guard, held_days)
         if pick is None:
             return None, ask
         fresh = _suggestion(self._candidate(position.underlying, pick))

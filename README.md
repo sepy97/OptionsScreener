@@ -222,10 +222,20 @@ opens the reasoning.
 The verdict is two limits, both measured against a **fresh_yield**: the one put the entry rules
 would open on the *same ticker* today, priced at the bid, versus the open put priced at its ask.
 
-| Rule | Default | What it stops |
+| Test | Default | What it stops |
 |---|---|---|
-| A fresh put must pay `MIN_RATIO`x the open one | 2.0 | Swapping right after opening, when the two are equal by construction |
+| The open put must pay less than `USED_UP_YIELD` | 15%/yr | Swapping a put that is still earning. At a common expiry a 2x yield gap is roughly a 2-3x delta gap, so without this the rule recommends *more risk* rather than *less idle cash*. 15% is the `yield_satisfactory` bar the screen already grades by |
+| A fresh put must pay `MIN_RATIO`x the open one | 2.0 | Swapping for a marginal gain. Measured forward against the market, this is the equivalent of the widely-used "close at 50% of max profit" convention |
 | The extra premium over the days left, after cost, must clear `MIN_EXTRA` | $100 | Swaps on small positions, and on puts whose cash frees itself soon anyway |
+
+**The comparison is made at the open put's own tenor**, not at the best-paying expiry in the
+entry window. Premium grows with the square root of time, so at an identical delta a shorter put
+always shows a higher *annual* rate — MRVL on 2026-09-21 paid 44%/yr at 18 days against 28%/yr at
+39. Comparing across tenors measures the calendar rather than the position, and flagged a put
+sold days earlier. The higher short-dated rate is also not free money: Cboe's weekly PutWrite
+index collected 39.3%/yr in premium against the monthly index's 24.1% and compounded 5.6%
+against 6.6% (Bondarenko, 2006-2015). Shorter expiries still appear among the suggestions; they
+just do not decide the verdict.
 
 Same ticker on purpose: same company, same risk, so a yield gap can only mean the open put is
 used up — a jumpy stock elsewhere on the list cannot drag a good position out from under you.
@@ -239,7 +249,8 @@ Verdicts are priced **live** when the tab loads — one chain pull per open put,
 screen, which cron refreshes just after the open and at 15:35 ET so they are current before the
 close; the panel shows that run's age.
 
-Limits are settings (`SWAP__MIN_RATIO`, `SWAP__MIN_EXTRA`, `SWAP__SWAP_COST`, `SWAP__TOP_N`)
+Limits are settings (`SWAP__USED_UP_YIELD`, `SWAP__MIN_RATIO`, `SWAP__MIN_EXTRA`,
+`SWAP__SWAP_COST`, `SWAP__TOP_N`)
 because the rule is a **draft**: see [docs/PUT_SWAP_RULE.md](docs/PUT_SWAP_RULE.md). It has not
 been backtested against simply holding to expiry, so it is a prompt to look, not a signal.
 
