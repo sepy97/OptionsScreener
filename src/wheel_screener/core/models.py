@@ -114,6 +114,10 @@ class SwapAction(StrEnum):
 
     SWAP = "swap"  # both rules passed — buy it back and open a fresh one
     KEEP = "keep"  # a rule failed, and which one is the interesting part
+    # covered calls only, and deliberately not a recommendation: the call has stopped earning,
+    # so the shares behind it are working for almost nothing. What to do about that needs a view
+    # on the stock (a closer strike buys premium by capping upside), which is the holder's call.
+    IDLE = "idle"
     NOT_APPLICABLE = "n/a"  # out of scope: in the money, expiring today, or unpriceable
 
 
@@ -509,10 +513,19 @@ class Position(BaseModel):
 
     @property
     def in_the_money(self) -> bool | None:
-        """For a short put: is spot below the strike? None when spot is unknown."""
-        if self.kind is not PositionKind.SHORT_PUT or self.underlying_price is None:
+        """Is this short option in the money? None when spot is unknown, or it cannot be assigned.
+
+        It means opposite things by side, which is why the display words them differently: a put
+        in the money is cash about to be spent, a call in the money is shares about to be sold at
+        the strike — the outcome a covered call was written for, not a loss.
+        """
+        if self.underlying_price is None or not self.strike:
             return None
-        return self.underlying_price < (self.strike or 0.0)
+        if self.kind is PositionKind.SHORT_PUT:
+            return self.underlying_price < self.strike
+        if self.kind is PositionKind.SHORT_CALL:
+            return self.underlying_price > self.strike
+        return None  # a long option is exercised by choice; shares are not assigned
 
 
 class BrokerageAccount(BaseModel):

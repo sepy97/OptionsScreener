@@ -923,7 +923,11 @@ def _stamp_swaps(request: Request, service: ScreenerService, runner: JobRunner,
     """
     cache = {} if force else (getattr(request.app.state, "swap_cache", None) or {})
     now = time.monotonic()
-    puts = [p for a in accounts for p in a.positions if p.kind is PositionKind.SHORT_PUT]
+    # BOTH short sides: puts get the keep-or-swap verdict, calls the cheaper "are these shares
+    # still earning" one. Passing only puts here left every call's cell empty on the live page
+    # while the service was perfectly able to answer for them.
+    short = (PositionKind.SHORT_PUT, PositionKind.SHORT_CALL)
+    puts = [p for a in accounts for p in a.positions if p.kind in short]
     todo = []
     for p in puts:
         hit = cache.get(_position_key(p))
@@ -1174,7 +1178,8 @@ def portfolio_swap_detail(
     swaps = _stamp_swaps(request, service, runner, accounts)
     held = next(
         (p for a in accounts for p in a.positions
-         if p.kind is PositionKind.SHORT_PUT and p.symbol == position), None,
+         if p.kind in (PositionKind.SHORT_PUT, PositionKind.SHORT_CALL)
+         and p.symbol == position), None,
     )
     if held is None or held.swap is None:
         return templates.TemplateResponse(

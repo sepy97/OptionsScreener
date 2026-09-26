@@ -58,7 +58,13 @@ from wheel_screener.core.ports import (  # noqa: F401 - EtfUniverseProvider is a
     FundamentalReportProvider,
     FundamentalsProvider,
 )
-from wheel_screener.core.swap import OpenPut, SwapParams, list_median_yield
+from wheel_screener.core.swap import (
+    OpenCall,
+    OpenPut,
+    SwapParams,
+    list_median_yield,
+    review_covered_call,
+)
 from wheel_screener.core.swap import review as swap_review
 
 logger = logging.getLogger(__name__)
@@ -668,7 +674,8 @@ class ScreenerService:
         today: date,
         criteria: ScreenCriteria | None = None,
     ) -> None:
-        """Stamp each open short put with a keep-or-swap verdict (see ``core.swap``).
+        """Stamp each open short option: puts with a keep-or-swap verdict, calls with whether
+        the shares behind them are still earning (see ``core.swap``).
 
         One chain pull per held put does double duty: it carries the ASK that says what buying
         the put back costs, and the board the YARDSTICK is chosen from — the one put the entry
@@ -687,6 +694,19 @@ class ScreenerService:
             p for p in positions
             if p.kind is PositionKind.SHORT_PUT and p.strike and p.expiration
         ]
+        # Covered calls get the cheaper question — are the shares still earning? — which needs
+        # no chain at all: the broker's own mark says what the call is worth. See
+        # ``review_covered_call`` for why it is not the put rule with the sides swapped.
+        for c in positions:
+            if c.kind is PositionKind.SHORT_CALL and c.strike and c.expiration:
+                c.swap = review_covered_call(
+                    OpenCall(
+                        symbol=c.underlying, strike=c.strike,
+                        days=(c.expiration - today).days, contracts=c.quantity,
+                        spot=c.underlying_price, price=c.mark,
+                    ),
+                    self.swap_params,
+                )
         if not open_puts:
             return
 

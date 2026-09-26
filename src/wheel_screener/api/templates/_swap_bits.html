@@ -7,7 +7,8 @@
    with no way to see why is the version of this that nobody would trust. #}
 {%- macro cell(p) -%}
 {%- set r = p.swap -%}
-{%- if r is none or r.action == 'n/a' -%}
+{%- if r is none or r.action == 'n/a' or (r.action == 'keep' and p.kind == 'short_call') -%}
+  {# a covered call that is still earning has nothing to report here; only a dead one does #}
   <span class="detail-note" title="{{ r.reason if r else 'not reviewed' }}">&mdash;</span>
 {%- else -%}
   <a href="#" class="close-link"
@@ -20,8 +21,8 @@
      hx-on::before-request="let d=this.closest('tr').nextElementSibling;
        if(d){if(d.classList.contains('detail')){d.remove();event.preventDefault();}}"
      title="{{ r.reason }}">
-    <span class="badge {{ 'badge--neg' if r.action == 'swap' else 'badge--ok' }}"
-      >{{ 'Yes' if r.action == 'swap' else 'No' }}</span></a>
+    <span class="badge {{ 'badge--neg' if r.action == 'swap' else ('' if r.action == 'idle' else 'badge--ok') }}"
+      >{{ 'Yes' if r.action == 'swap' else ('idle' if r.action == 'idle' else 'No') }}</span></a>
 {%- endif -%}
 {%- endmacro -%}
 

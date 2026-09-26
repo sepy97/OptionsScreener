@@ -1562,3 +1562,54 @@ def test_the_panel_survives_the_values_the_row_puts_on_every_request() -> None:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
     assert r.status_code == 200 and "swap it" in r.text
+
+
+def test_a_covered_calls_verdict_reaches_the_page_and_its_panel_opens() -> None:
+    """Both were app-layer filters that said SHORT_PUT: the service could answer for calls, but
+    the web layer never passed them in, and the panel could not find one to render."""
+    from datetime import date as _date
+
+    from wheel_screener.api.deps import get_service
+    from wheel_screener.core.models import (
+        BrokerageAccount,
+        OptionType,
+        Position,
+        PositionKind,
+        SwapAction,
+    )
+    from wheel_screener.core.swap import OpenCall, review_covered_call
+
+    call = Position(
+        symbol="KO    261030C00075000", underlying="KO", kind=PositionKind.SHORT_CALL,
+        asset_type="OPTION", option_type=OptionType.CALL, quantity=1, strike=75.0,
+        expiration=_date(2026, 10, 30), dte=30, underlying_price=66.20, market_value=-5.0,
+    )
+    account = BrokerageAccount(broker="schwab", account_id="a", display_name="...1",
+                               positions=[call])
+    verdict = review_covered_call(OpenCall("KO", 75.0, 30, 1, 66.20, 0.05))
+    assert verdict.action is SwapAction.IDLE
+
+    class _Svc:
+        def brokerage_accounts(self):
+            return [account]
+
+        def swap_reviews(self, positions, candidates, today, criteria=None):
+            assert [p.symbol for p in positions] == [call.symbol], "the call must reach the service"
+            for p in positions:
+                p.swap = verdict
+
+    c = _client()
+    app.dependency_overrides[get_service] = lambda: _Svc()
+    try:
+        _sign_in(c)
+        app.state.balances_cache = None
+        app.state.swap_cache = None
+        body = c.get("/portfolio").text
+        assert ">idle<" in body and "OTM &middot; $66.20" in body
+        panel = c.get("/portfolio/swap", params={"position": call.symbol}).text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+    assert "unknown position" not in panel
+    assert "earning almost nothing" in panel and "Not a recommendation" in panel
+    assert "frees no capital" in panel  # why it is not the put rule with the sides swapped

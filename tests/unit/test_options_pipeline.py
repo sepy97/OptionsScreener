@@ -897,14 +897,24 @@ def test_a_ticker_that_fails_the_entry_rules_falls_back_to_the_list_median():
     assert not any(s.same_ticker for s in r.suggestions)
 
 
-def test_only_short_puts_are_reviewed():
-    from wheel_screener.core.models import Position, PositionKind
+def test_a_covered_call_is_asked_the_cheaper_question_and_costs_no_chain_call():
+    """Calls get "are these shares still earning?", not the put rule with the sides swapped:
+    closing a call frees nothing, so there is no capital decision to make. The broker's own mark
+    answers it, so no chain is pulled."""
+    from wheel_screener.core.models import Position, PositionKind, SwapAction
 
     chains = _FakeChains(_chain([]))
     service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
-    call = Position(symbol="AAA C", underlying="AAA", kind=PositionKind.SHORT_CALL,
+    dead = Position(symbol="AAA C", underlying="AAA", kind=PositionKind.SHORT_CALL,
                     option_type=OptionType.CALL, quantity=1, strike=120.0,
-                    expiration=_BASE + timedelta(days=25), underlying_price=110.0)
+                    expiration=_BASE + timedelta(days=25), underlying_price=110.0,
+                    market_value=-5.0)  # 5c of premium against $11,000 of shares
+    earning = dead.model_copy(update={"market_value": -150.0})  # $1.50: ~20%/yr on the shares
     shares = Position(symbol="AAA", underlying="AAA", kind=PositionKind.SHARES, quantity=100)
-    service.swap_reviews([call, shares], [], _BASE)
-    assert call.swap is None and shares.swap is None and chains.requested_types == []
+    service.swap_reviews([dead, earning, shares], [], _BASE)
+
+    assert dead.swap.action is SwapAction.IDLE and dead.swap.used_up
+    assert "earning almost nothing" in dead.swap.reason
+    assert earning.swap.action is SwapAction.KEEP and earning.swap.used_up is False
+    assert shares.swap is None
+    assert chains.requested_types == []  # the mark answers it; no chain pulled
