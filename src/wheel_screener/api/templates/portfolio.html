@@ -2,22 +2,17 @@
 {% import "_icons.html" as icon %}
 {% block content %}
   <article>
+    {# Signing out ends the site session only; the broker link is untouched and waits for next time. #}
+    <div class="signed-in-as">
+      {% if user.is_admin %}<a href="/portfolio/invites"><small>Invite people</small></a>{% endif %}
+      <small>Signed in as <b>{{ user.name }}</b></small>
+      <form method="post" action="/auth/logout">
+        <button type="submit" class="secondary outline">Sign out</button>
+      </form>
+    </div>
     <h2>Portfolio</h2>
     {% set schwab = links.get('schwab') %}
-    {% if not session and not (schwab and schwab.configured) %}
-      {# Nothing to sign in to. Offering a button that errors is worse than saying so. #}
-      <p class="tab-lede">No brokerage is set up on this deployment yet, so there is nothing to
-        connect to. Once one is configured, signing in happens here in one click.</p>
-    {% elif not session %}
-      {# No session: the only thing this page may show is a way in. #}
-      <p class="tab-lede">Connect a brokerage account to see what it holds. You sign in at the
-        broker &mdash; this site never sees your credentials, and only ever reads.</p>
-      <form method="get" action="/portfolio/oauth/schwab/connect">
-        <button type="submit" class="run-btn">Sign in with Schwab</button>
-      </form>
-      <p class="detail-note">Schwab authorisations last 7 days, so this is a weekly click rather
-        than a one-off setup.</p>
-    {% elif schwab and schwab.connected %}
+    {% if schwab and schwab.connected %}
       <header class="results-head">
         <strong>Connected</strong>
         <span class="result-stats">
@@ -31,18 +26,32 @@
       <div id="positions">{% include "_positions.html" %}</div>
 
       <form method="post" action="/portfolio/oauth/schwab/disconnect">
-        <button type="submit" class="secondary">Disconnect</button>
+        <button type="submit" class="secondary">Disconnect Schwab</button>
       </form>
-    {% else %}
-      {# Session outlived the broker authorisation: the normal weekly condition, not an error. #}
+    {% elif schwab %}
+      {# Their link, past its 7 days: the normal weekly condition, not an error. #}
       <header class="results-head">
         <strong>{{ icon.warning() }}Authorisation expired</strong>
       </header>
-      <p class="tab-lede">Schwab authorisations last 7 days. Reconnecting takes one click and
-        signs you back in at the same time.</p>
+      <p class="tab-lede">Schwab authorisations last 7 days. Reconnecting takes one click.</p>
       <form method="get" action="/portfolio/oauth/schwab/connect">
         <button type="submit" class="run-btn">Reconnect Schwab</button>
       </form>
+    {% elif user.is_admin and configured.get('schwab') %}
+      <p class="tab-lede">Connect a brokerage account to see what it holds. You sign in at the
+        broker &mdash; this site never sees your broker credentials, and only ever reads.</p>
+      <form method="get" action="/portfolio/oauth/schwab/connect">
+        <button type="submit" class="run-btn">Connect Schwab</button>
+      </form>
+      <p class="detail-note">Schwab authorisations last 7 days, so this is a weekly click rather
+        than a one-off setup.</p>
+    {% elif user.is_admin %}
+      {# Nothing to connect to. Offering a button that errors is worse than saying so. #}
+      <p class="tab-lede">No brokerage is set up on this deployment yet, so there is nothing to
+        connect to.</p>
+    {% else %}
+      <p class="tab-lede">No brokerage account is linked to your sign-in yet. Linking your own is
+        coming; until then the screener, search and fundamentals are all yours to use.</p>
     {% endif %}
   </article>
 {% endblock %}

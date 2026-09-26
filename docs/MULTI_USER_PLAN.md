@@ -11,8 +11,8 @@ codebase* assumes one person, and in what order to take it apart. It also record
 against the vendors rather than assumed.
 
 **Status:** **Phase 0 shipped as v3.0.0** (the password covers /portfolio only — §1). **Phase 2
-mostly shipped** — the per-user seam and the caches in v3.1.0 (§2.2), the canonical screen in
-v3.2.0 (§8); what is left of it needs the user ids Phase 1 brings. Phases 1, 3 and 4 not started. Supersedes the line in
+shipped** across v3.1.0 and v3.2.0 (§2.2, §8). **Phase 1 built as v3.3.0** — passkeys, invites,
+users — not yet deployed (§8). Phases 3 and 4 not started. Supersedes the line in
 [`PORTFOLIO_PLAN.md`](PORTFOLIO_PLAN.md) §1b — "Multi-user is explicitly out of scope: one
 operator, one session at a time, no user table."
 
@@ -20,7 +20,10 @@ operator, one session at a time, no user table."
 |---|---|
 | Audience | **friends now, decide later** — build on SQLite, accept a Postgres migration if it goes public (§6) |
 | Phase 0 posture | **decided and built: gate /portfolio only, screener stays public** (§1) |
-| Login | passkeys + invite links, per the brief (§4) |
+| Login | **built: passkeys + invite links** (§8, Phase 1) |
+| Lost device | an admin re-invites the same account; a passkey is added, the old ones keep working |
+| Who creates invites | **admins, on the Invites page**; the first admin from the CLI |
+| Who may link a broker | admins only, while there is one Schwab token per deployment |
 | Broker linking | SnapTrade, keeping the direct Schwab adapter for the owner (§3) |
 | Database | SQLite, with one choke point and a two-user leak test in place of row-level security (§5) |
 | Release label | v3.0.0 ships Phase 0; phases 1–4 are 3.x |
@@ -384,23 +387,71 @@ go out.
 **Phase 0 — close the slot. Shipped, v3.0.0.** `AUTH__SCOPE=portfolio` plus `AUTH__PASSWORD` in
 the droplet's `.env`. See §1.
 
-**Phase 1 — identity.** `users`, `invites`, `credentials`, `user_id` on `sessions`; passkey
-registration and login; the password gate over `/portfolio` replaced by a passkey session. No broker
-change: the owner's Schwab link keeps working, now owned by user #1.
+**Phase 1 — identity. Built as v3.3.0.** Passkeys via py_webauthn, invites from the CLI
+(`wheel-screener invite`, `users`), and sessions that belong to a person rather than to a broker
+sign-in. The runbook is in [`DEPLOY.md`](DEPLOY.md) → *Signing in*.
 
-Phase 0's scoped gate makes this smaller than the investigation first assumed. Because the screener
-stays public, the passkey session only ever has to cover `/portfolio` — which is a prefix that
-already has a deny-by-default gate with a tested exempt list. The risky part of §4, rewriting a
-site-wide middleware, largely goes away: the gate keeps its shape and the password it checks becomes
-a passkey session.
+What changed, in the order that matters:
+
+* **The broker sign-in no longer signs anyone in.** Every route under `/portfolio` now needs a
+  session, with no exceptions — the connect and callback routes used to be exempt because the broker
+  sign-in *was* the site sign-in, which is precisely how the v3.0.0 slot could be claimed. The
+  callback now only records which signed-in person the link belongs to.
+* **Ownership replaces "a link exists".** The Schwab token does not know whose it is, so
+  `broker_links` records who connected it, and both the page and `get_portfolio` check it. A
+  signed-in person who is not the owner is shown no account and handed no credential; each check
+  was mutated away separately and the test fails for either one.
+* **Only admins can link**, because a second person linking would replace the owner's token.
+* **`revoke_broker` is gone**, which settles the first "waiting on Phase 1" item below: ending one
+  person's sessions (`end_sessions_for`) no longer touches anyone else's, and a relink ends none.
+* **Sessions last 90 days** on their own clock, independent of Schwab's 7.
+
+Decisions taken without a separate answer, each easy to reverse: recovery is a re-invite that adds a
+passkey to the same account; accounts may hold several passkeys; invites come from the CLI; the old
+`sessions` table is left in place rather than migrated, so rolling back to v3.2.0 is safe (checked
+against the released code, not assumed).
+
+How it was verified:
+
+* The ceremonies run against **real signatures** from a software authenticator in the tests
+  (`tests/unit/_softkey.py`), not a mocked verifier — a mocked one passes code that accepts anything.
+  Every refusal (another site's origin, a replay, a stolen credential id signed with the wrong key,
+  a passkey not unlocked) builds a response a real authenticator would not, and the two checks most
+  likely to be quietly weakened were mutated to confirm the tests catch them.
+* One of those mutations corrected a test's claim: the check that a passkey's named account matches
+  its record is required by the spec, but it is **not** what stops one person becoming another —
+  the account always comes from the passkey's own record. The test now says so.
+* **A real browser** ran the whole thing: headless Chrome with its virtual authenticator, through
+  invite → passkey → portfolio → sign out → sign in with no username → an htmx request after the
+  session ended → a dead invite → an unlock that was refused. That run is where the htmx case was
+  confirmed: a fragment request with no session gets a 401 with `HX-Redirect` rather than a 303,
+  because the browser's XHR would follow a redirect invisibly and htmx would swap the whole sign-in
+  page into a table cell.
+* The new dependencies install from prebuilt Linux wheels for the image's Python 3.12, so the
+  Docker build has nothing to compile.
+
+**Added on review, in the same release:**
+
+* **An Invites page** (Portfolio → *Invite people*, admins only): make a link, shown once with a
+  Copy button; cancel ones not yet used; a *New passkey link* per person for a lost or second
+  device. Pending invites are listed and cancelled by a separate non-secret reference, so reloading
+  the page never prints a live link again. The first admin still comes from the CLI.
+* **The password on `/portfolio` is gone.** It was the browser's grey pop-up, and it was never a
+  way in if passkeys failed — only a second lock on the same door. Compose blanks it explicitly,
+  because `.env` still holds one.
+
+Both were run in headless Chrome as well: an admin makes an invite in the page, a visitor with no
+cookies opens it and saves a passkey, and lands as a member who sees no account, no invite link,
+and a refusal on the Invites page. Copy fell back to selecting the link there — headless Chrome
+refuses clipboard writes — so the fallback is verified and the normal path is not.
 
 **Phase 2 — the seam. Mostly built; see §2.2.** Done: `PortfolioService` per request,
 `ScreenerService` with no user-bound field, both caches partitioned by user and bounded, and the
 two-session leak test. **Waiting on Phase 1's user ids:**
 
-* `revoke_broker` narrowed to one person. Today it deletes every session for a broker, which is
-  correct with one credential and signs everybody out with more than one.
-* Ownership and a TTL on job results (#64).
+* ~~`revoke_broker` narrowed to one person~~ — done in Phase 1, by removing it.
+* Ownership and a TTL on job results (#64). Still open: screens are shared, so this protects only
+  the criteria someone typed, and it needs deciding whether a hand-run screen should be private.
 
 **The precomputed screen made canonical — done, v3.2.0.** It turned out to be a present-day bug
 rather than a multi-user one, and a public one: the Run button is open to every visitor on the

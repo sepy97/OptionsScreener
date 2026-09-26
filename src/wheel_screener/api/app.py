@@ -20,8 +20,9 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, HTTPException, Request, Response
+from fastapi import Body, Depends, FastAPI, Form, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -31,6 +32,7 @@ from pydantic import BaseModel, ValidationError
 from wheel_screener import __version__
 from wheel_screener.adapters.schwab.link import SchwabOAuthLink
 from wheel_screener.api.deps import (
+    current_session,
     get_job_runner,
     get_portfolio,
     get_service,
@@ -38,10 +40,11 @@ from wheel_screener.api.deps import (
 )
 from wheel_screener.api.expiries import DTE_HORIZON_DAYS, expiry_ladder, next_monthly
 from wheel_screener.api.jobs import SOURCE_REFRESH, JobBusyError, JobRunner, JobStore
+from wheel_screener.api.passkeys import PasskeyError, Passkeys
 from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
-from wheel_screener.api.sessions import SessionStore
 from wheel_screener.api.usercache import PerUserCache
+from wheel_screener.api.users import UserStore
 from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.dividends import DividendImpact
@@ -62,6 +65,7 @@ from wheel_screener.core.models import (
 )
 from wheel_screener.core.portfolio import PortfolioService
 from wheel_screener.core.service import ScreenerService
+from wheel_screener.logging_config import redact_access_log
 
 logger = logging.getLogger(__name__)
 
@@ -167,11 +171,17 @@ async def lifespan(app: FastAPI):
     # credentialed connections, built once: a probe owns an HTTP client
     app.state.probes = build_probes(settings, service)
     app.state.probe_cache = {}
-    # Portfolio: one session store, and the brokers that can authenticate a human.
-    app.state.sessions = SessionStore(settings.portfolio.sessions_db_path)
+    # Portfolio: who may use it (users, passkeys, sessions), and the brokers they can link.
+    app.state.users = UserStore(settings.portfolio.sessions_db_path)
+    app.state.passkeys = Passkeys(
+        app.state.users, settings.passkeys.rp_id, settings.passkeys.rp_name,
+        settings.passkeys.origin,
+    )
     app.state.links = {SchwabOAuthLink(settings.schwab).broker: SchwabOAuthLink(settings.schwab)}
     # let pipeline INFO logs through so background jobs can capture stage progress
     logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
+    # invite tokens and OAuth codes travel in URLs; keep them out of the request log
+    redact_access_log()
     warm = getattr(service.fundamentals, "known_symbols", None)
     if warm is not None:
         try:
@@ -184,24 +194,22 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Wheel Screener API", version=__version__, lifespan=lifespan)
 
 
-# Everything the Portfolio owns lives under /portfolio, so ONE rule gates it. The rule denies by
-# default: only the entry points a visitor needs *before* having a session are exempt, and they are
-# matched exactly rather than by prefix. An exempt-by-prefix rule is how the callback — which
-# carries the authorization code — ends up unprotected by accident.
-_PORTFOLIO_OPEN = re.compile(r"^/portfolio$|^/portfolio/oauth/[a-z0-9_-]+/(connect|callback)$")
-
-
+# Everything the Portfolio owns lives under /portfolio, so ONE rule gates it, and it has no
+# exceptions. There used to be three — the tab itself and the broker's connect and callback routes —
+# because the broker sign-in WAS the site sign-in, so a visitor had to reach them without a session.
+# That is exactly what let any visitor with a Schwab account of their own claim the deployment's
+# broker slot. Signing in is a passkey now, on routes outside this prefix, so linking a broker is
+# something only a signed-in person can start.
 def _needs_portfolio_session(path: str) -> bool:
-    return _under_portfolio(path) and not _PORTFOLIO_OPEN.match(path)
+    return _under_portfolio(path)
 
 
-def current_session(request: Request):
-    """The live session for this request, or None. Never raises."""
-    store = getattr(request.app.state, "sessions", None)
-    settings = getattr(request.app.state, "settings", None)
-    if store is None or settings is None:
-        return None
-    return store.get(request.cookies.get(settings.portfolio.cookie_name))
+def _safe_next(raw: str | None) -> str:
+    """Where to go after signing in. Only a path on THIS site: "//evil.example" is a URL to a
+    browser, and an open redirect on a sign-in page is a phishing kit's favourite part."""
+    if raw and raw.startswith("/") and not raw.startswith(("//", "/\\")):
+        return raw
+    return "/portfolio"
 
 
 # Registered BEFORE the password gate on purpose. Starlette runs the last-added middleware
@@ -209,9 +217,18 @@ def current_session(request: Request):
 # request is challenged rather than redirected, and never reaches the session store.
 @app.middleware("http")
 async def _portfolio_session_gate(request: Request, call_next):
-    """No session, no account data."""
+    """No session, no account data — and no broker link either."""
     if _needs_portfolio_session(request.url.path) and current_session(request) is None:
-        return RedirectResponse("/portfolio", status_code=303)
+        if request.headers.get("HX-Request") == "true":
+            # A fragment request (Refresh, a Close? cell) from a page whose session has since
+            # ended. A 303 would be followed invisibly by the browser's XHR, and htmx would swap
+            # the whole sign-in page into a table cell. HX-Redirect navigates the page instead —
+            # and back to the tab, not to a fragment that makes no sense on its own.
+            return Response(status_code=401, headers={"HX-Redirect": "/login?next=/portfolio"})
+        target = "/portfolio"
+        if request.method == "GET":
+            target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+        return RedirectResponse(f"/login?next={quote(target, safe='/')}", status_code=303)
     return await call_next(request)
 
 
@@ -915,15 +932,15 @@ _BALANCES_TTL_SECONDS = 30.0
 
 
 def _cache_user(request: Request) -> str | None:
-    """Whose cache partition this request reads. The session token, which is nobody else's.
+    """Whose cache partition this request reads: the signed-in user's.
 
-    The session is the strongest identity this app has until there are user accounts, and it is the
-    right one either way: it changes on a relink, which is exactly when a cached balance stops
-    describing the account it was read from. Routes never pass this themselves — every caller gets
-    it from here, so a route cannot reach another partition by spelling a key.
+    The user rather than the session, so the same person on a phone and a laptop shares one cache.
+    A relink clears the partition explicitly (see the callback), which is what the session token
+    used to do implicitly by changing. Routes never pass this themselves — every caller gets it
+    from here, so a route cannot reach another partition by spelling a key.
     """
     session = current_session(request)
-    return session.token if session is not None else None
+    return session.user.id if session is not None else None
 
 
 def _balances_cache(request: Request) -> PerUserCache:
@@ -1121,26 +1138,33 @@ def portfolio_page(
     portfolio: PortfolioService = Depends(get_portfolio),
     runner: JobRunner = Depends(get_job_runner),
 ):
-    """The Portfolio tab. Four states, each with a real rendering:
+    """The Portfolio tab, for a signed-in person (the gate guarantees one). What it shows turns
+    on whether THEY own the broker link — never merely on whether one exists:
 
-    no session -> connect · session + healthy link -> the account ·
-    session + expired link -> reconnect · session + no link -> connect.
+    their link, healthy -> the account · their link, expired -> reconnect ·
+    no link of theirs -> connect (admins) or "nothing linked yet" (everyone else).
 
-    Session and link expire independently, so all four are reachable. "Link expired" in particular
-    is the normal weekly condition, not an error.
+    While a deployment has one Schwab token, a friend who signs in sees no account at all rather
+    than the owner's: the token file does not know whose it is, so ownership is recorded
+    separately and checked here and in ``get_portfolio``.
     """
     session = current_session(request)
+    users = request.app.state.users
     links = getattr(request.app.state, "links", {}) or {}
-    status = {name: link.status() for name, link in links.items()}
-    connected = session is not None and any(s.connected for s in status.values())
+    mine = {name: link.status() for name, link in links.items()
+            if users.link_owner(name) == session.user.id}
+    connected = any(s.connected for s in mine.values())
     accounts, error = _cached_balances(request, portfolio) if connected else ([], None)
     swaps = _stamp_swaps(request, portfolio, runner, accounts) if accounts else {}
+    configured = {name: link.status().configured for name, link in links.items()}
     return templates.TemplateResponse(
         request, "portfolio.html",
         {
             "active_tab": "portfolio",
             "session": session,
-            "links": status,
+            "user": session.user,
+            "links": mine,
+            "configured": configured,
             "connected": connected,
             "accounts": accounts,
             "balances_error": error,
@@ -1149,11 +1173,30 @@ def portfolio_page(
     )
 
 
+def _admin_only(
+    request: Request, message: str = "Linking a brokerage is not available on your account yet."
+):
+    """The rendered refusal for a non-admin, or None when this person is an admin.
+
+    Linking a broker is admin-only because there is still one Schwab token per deployment: letting
+    anyone else link would overwrite the owner's — the slot problem v3.0.0 closed, reopened for
+    friends. Inviting is admin-only because an invite is an account.
+    """
+    session = current_session(request)
+    if session is not None and session.user.is_admin:
+        return None
+    return templates.TemplateResponse(
+        request, "_error.html", {"message": message}, status_code=403,
+    )
+
+
 @app.get("/portfolio/oauth/{broker}/connect")
 def portfolio_connect(request: Request, broker: str, settings: Settings = Depends(get_settings)):
     """Send the browser to the broker. The `state` is ours, recorded server-side and single-use."""
     link = _link_for(request, broker)
-    state = request.app.state.sessions.issue_state(broker, settings.portfolio.state_ttl_seconds)
+    if (refused := _admin_only(request)) is not None:
+        return refused
+    state = request.app.state.users.issue_state(broker, settings.portfolio.state_ttl_seconds)
     try:
         url = link.authorize_url(state)
     except ProviderError as e:
@@ -1163,12 +1206,16 @@ def portfolio_connect(request: Request, broker: str, settings: Settings = Depend
 
 @app.get("/portfolio/oauth/{broker}/callback")
 def portfolio_callback(request: Request, broker: str, settings: Settings = Depends(get_settings)):
-    """Exchange the code and mint the session.
+    """Exchange the code, store the credential, and record that it is THIS person's.
 
-    The incoming URL carries the authorization code, so it is never logged or echoed back.
+    It no longer signs anybody in — that is the passkey's job — so it cannot be used to get a
+    session, only to link a broker to the session that already exists. The incoming URL carries
+    the authorization code, so it is never logged or echoed back.
     """
     link = _link_for(request, broker)
-    store = request.app.state.sessions
+    if (refused := _admin_only(request)) is not None:
+        return refused
+    store = request.app.state.users
     if store.consume_state(request.query_params.get("state")) != broker:
         # unknown, expired, replayed, or issued for a different broker
         return templates.TemplateResponse(
@@ -1177,42 +1224,211 @@ def portfolio_callback(request: Request, broker: str, settings: Settings = Depen
             status_code=400,
         )
     try:
-        status = link.complete(str(request.url), state=request.query_params.get("state") or "")
+        link.complete(str(request.url), state=request.query_params.get("state") or "")
     except ProviderError as e:
         return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
 
-    # A relink may be a different account, so previous sessions for this broker are ended first —
-    # cheaper and more certain than re-checking an account fingerprint on every later request.
-    store.revoke_broker(broker)
-    # A relink may be a different account. The cache is keyed by session token and the token is
-    # about to change, so the old partition is already unreachable; clearing it just frees it.
-    _balances_cache(request).clear(_cache_user(request))
-    _swap_cache(request).clear(_cache_user(request))
-    expires = status.expires_at or (datetime.now(tz=UTC) + timedelta(days=1))
-    token = store.create(broker, status.account_fingerprint or "unknown", expires)
-
-    response = RedirectResponse("/portfolio", status_code=303)
-    response.set_cookie(
-        settings.portfolio.cookie_name, token,
-        httponly=True, secure=settings.portfolio.cookie_secure, samesite="lax",
-        path="/portfolio", expires=expires,
-    )
-    return response
+    previous = store.link_owner(broker)
+    store.set_link_owner(broker, current_session(request).user.id)
+    # A relink may be a different account, so nothing cached from before it may be shown after —
+    # for this person, or for whoever owned the link until a moment ago.
+    for user in {_cache_user(request), previous} - {None}:
+        _balances_cache(request).clear(user)
+        _swap_cache(request).clear(user)
+    return RedirectResponse("/portfolio", status_code=303)
 
 
 @app.post("/portfolio/oauth/{broker}/disconnect")
 def portfolio_disconnect(request: Request, broker: str, settings: Settings = Depends(get_settings)):
-    """End the session AND delete the credential. Either alone would leave a way back in."""
+    """Unlink the broker: delete the credential and the record of whose it was.
+
+    The person stays signed in — ending the link and ending the session are separate now, and
+    signing out has its own button. Only the link's owner may do this; anyone else is shown the
+    same refusal as for a link that does not exist, so the page says nothing about whose it is.
+    """
     link = _link_for(request, broker)
-    store = request.app.state.sessions
-    user = _cache_user(request)  # read BEFORE the session is revoked, or there is no partition
-    store.revoke(request.cookies.get(settings.portfolio.cookie_name))
-    store.revoke_broker(broker)
+    store = request.app.state.users
+    user = _cache_user(request)
+    if store.link_owner(broker) != user:
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "There is no linked brokerage to disconnect."},
+            status_code=404,
+        )
+    link.revoke()
+    store.clear_link_owner(broker)
     _balances_cache(request).clear(user)
     _swap_cache(request).clear(user)
-    link.revoke()
-    response = RedirectResponse("/portfolio", status_code=303)
-    response.delete_cookie(settings.portfolio.cookie_name, path="/portfolio")
+    return RedirectResponse("/portfolio", status_code=303)
+
+
+# --- Invites: the admin page -------------------------------------------------------------------
+# Under /portfolio, so the session gate covers it; admins only on top of that. A new link is shown
+# exactly once, in the response that made it — the pending list shows each invite's non-secret
+# `ref`, so reloading the page never prints a live token again.
+
+
+def _invites_context(request: Request, created: dict | None = None, error: str | None = None):
+    users = request.app.state.users
+    people = [(u, len(users.credentials_for(u.id))) for u in users.users()]
+    names = {u.id: u.name for u, _ in people}
+    return {
+        "active_tab": "portfolio",
+        "user": current_session(request).user,
+        "pending": users.pending_invites(),
+        "people": people,
+        "names": names,
+        "created": created,
+        "error": error,
+    }
+
+
+@app.get("/portfolio/invites")
+def invites_page(request: Request):
+    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
+        return refused
+    return templates.TemplateResponse(request, "invites.html", _invites_context(request))
+
+
+@app.post("/portfolio/invites")
+def invites_create(
+    request: Request,
+    name: str = Form(""),
+    admin: str = Form(""),
+    for_user: str = Form(""),
+):
+    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
+        return refused
+    users = request.app.state.users
+    settings = request.app.state.settings
+    target = users.user(for_user) if for_user else None
+    if for_user and target is None:
+        return templates.TemplateResponse(
+            request, "_invites.html",
+            _invites_context(request, error="That account no longer exists."),
+        )
+    name = (target.name if target else name).strip()
+    if not name or len(name) > 60:
+        return templates.TemplateResponse(
+            request, "_invites.html",
+            _invites_context(request, error="Give the invite a name, up to 60 characters."),
+        )
+    token = users.create_invite(
+        name, is_admin=bool(admin) and target is None,
+        for_user=target.id if target else None,
+        ttl=timedelta(hours=settings.passkeys.invite_hours),
+        created_by=current_session(request).user.id,
+    )
+    created = {
+        "name": name,
+        "link": f"{settings.passkeys.origin.rstrip('/')}/invite/{token}",
+        "for_user": target is not None,
+        "admin": bool(admin) and target is None,
+        "hours": settings.passkeys.invite_hours,
+    }
+    return templates.TemplateResponse(
+        request, "_invites.html", _invites_context(request, created=created)
+    )
+
+
+@app.post("/portfolio/invites/cancel")
+def invites_cancel(request: Request, ref: str = Form("")):
+    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
+        return refused
+    request.app.state.users.cancel_invite(ref)
+    return templates.TemplateResponse(request, "_invites.html", _invites_context(request))
+
+
+# --- Signing in: passkeys --------------------------------------------------------------------
+# The pages are plain; the ceremony runs in /static/passkey.js, which fetches options from one
+# endpoint, hands them to the browser's passkey prompt, and posts the result to the other. Every
+# one of these routes is outside /portfolio on purpose — they are how a visitor gets a session.
+
+
+def _start_session(request: Request, user, response: Response) -> None:
+    settings = request.app.state.settings
+    token, expires = request.app.state.users.create_session(
+        user.id, timedelta(days=settings.portfolio.session_days)
+    )
+    response.set_cookie(
+        settings.portfolio.cookie_name, token, expires=expires, path="/",
+        httponly=True, secure=settings.portfolio.cookie_secure, samesite="lax",
+    )
+
+
+def _refusal(message: str, status_code: int = 400) -> JSONResponse:
+    return JSONResponse({"error": message}, status_code=status_code)
+
+
+@app.get("/login")
+def login_page(request: Request, next: str = "/portfolio"):  # noqa: A002 - the query param's name
+    target = _safe_next(next)
+    if current_session(request) is not None:
+        return RedirectResponse(target, status_code=303)
+    return templates.TemplateResponse(
+        request, "login.html", {"active_tab": "portfolio", "next": target}
+    )
+
+
+@app.get("/invite/{token}")
+def invite_page(request: Request, token: str):
+    """Where an invite link lands. Showing the page does not use the invite up — only a passkey
+    that is actually registered does, so a link opened on the wrong device still works later."""
+    invite = request.app.state.users.invite(token)
+    return templates.TemplateResponse(
+        request, "invite.html",
+        {"active_tab": "portfolio", "invite": invite, "token": token},
+        status_code=200 if invite is not None else 404,
+    )
+
+
+@app.post("/auth/register/options")
+def register_options(request: Request, payload: dict = Body(...)):
+    try:
+        options = request.app.state.passkeys.registration_options(str(payload.get("invite", "")))
+    except PasskeyError as e:
+        return _refusal(str(e))
+    return Response(options, media_type="application/json")
+
+
+@app.post("/auth/register/verify")
+def register_verify(request: Request, payload: dict = Body(...)):
+    credential = payload.get("credential")
+    if not isinstance(credential, dict):
+        return _refusal("The passkey could not be verified. Please try again.")
+    try:
+        user = request.app.state.passkeys.register(credential)
+    except PasskeyError as e:
+        return _refusal(str(e))
+    response = JSONResponse({"redirect": "/portfolio"})
+    _start_session(request, user, response)
+    return response
+
+
+@app.post("/auth/login/options")
+def login_options(request: Request):
+    return Response(request.app.state.passkeys.login_options(), media_type="application/json")
+
+
+@app.post("/auth/login/verify")
+def login_verify(request: Request, payload: dict = Body(...)):
+    credential = payload.get("credential")
+    if not isinstance(credential, dict):
+        return _refusal("That passkey was not recognised. Please try again.")
+    try:
+        user = request.app.state.passkeys.login(credential)
+    except PasskeyError as e:
+        return _refusal(str(e))
+    response = JSONResponse({"redirect": _safe_next(payload.get("next"))})
+    _start_session(request, user, response)
+    return response
+
+
+@app.post("/auth/logout")
+def logout(request: Request):
+    settings = request.app.state.settings
+    request.app.state.users.end_session(request.cookies.get(settings.portfolio.cookie_name))
+    response = RedirectResponse("/", status_code=303)
+    response.delete_cookie(settings.portfolio.cookie_name, path="/")
     return response
 
 

@@ -125,9 +125,10 @@ manual migration step. (A GitHub Action to deploy automatically on a `vX.Y.Z` ta
 
 ## Portfolio tab (optional)
 
-The tab appears for everyone, but it can only connect a broker once Schwab credentials are on the
-droplet. Without them, clicking *Sign in with Schwab* shows a configuration error and nothing else
-in the app is affected.
+The tab appears for everyone, but only signed-in people get past it (see **Signing in** below),
+and only an admin can connect a broker — which needs Schwab credentials on the droplet. Without
+them the tab tells the admin there is nothing to connect to, and nothing else in the app is
+affected.
 
 ```
 # /srv/steadybull/.env
@@ -145,9 +146,10 @@ sudo mkdir -p /srv/steadybull/data/links
 sudo chown -R 10001:10001 /srv/steadybull/data/links
 ```
 
-The session store and the broker token are written to the mounted volume (`compose` sets
-`PORTFOLIO__SESSIONS_DB_PATH` and `SCHWAB__TOKEN_PATH`) — a deploy replaces the container, so
-anything left inside it would be destroyed on every release.
+The users, passkeys and sessions, and the broker token, are written to the mounted volume
+(`compose` sets `PORTFOLIO__SESSIONS_DB_PATH` and `SCHWAB__TOKEN_PATH`) — a deploy replaces the
+container, so anything left inside it would be destroyed on every release. **Back that file up**:
+losing it loses every account, and a passkey cannot be re-issued from the server side (#66).
 
 The Schwab app must also have the **Accounts and Trading** product and must register
 `https://steadybull.net/portfolio/oauth/schwab/callback` as a callback URL.
@@ -172,7 +174,53 @@ can sit on disk, unexpired, and be useless — authorising anywhere else revokes
 and a token written in the wrong shape loads without complaint and fails every request. Both look
 healthy to a presence check.
 
-Reconnecting is one click on the Portfolio tab and doubles as the login.
+Reconnecting is one click on the Portfolio tab. It no longer signs you in — the passkey does
+that, on its own 90-day clock — so the two expire independently.
+
+### Signing in: passkeys and invites
+
+Nobody signs up; an admin invites them. **The first admin has to come from the droplet** — a site
+where the first visitor becomes admin is a well-known way to lose one:
+
+```bash
+docker compose exec -T app wheel-screener invite "Sam" --admin
+```
+
+After that, invites are made on the site: **Portfolio → Invite people** (admins only). The page
+makes a link and shows it once with a Copy button, lists invites not yet used (with Cancel), and
+lists everyone with a *New passkey link* button. The CLI does the same things (`invite`, `invite
+--for-user <id>`, `users`) if the site is ever unreachable.
+
+A link works once, for 72 hours (`PASSKEYS__INVITE_HOURS`). Opening it and pressing *Save a
+passkey* creates the account and signs the person in; there is no password anywhere. Send it
+privately — until it is used, whoever holds it can claim it.
+
+**A lost device, or a second one:** *New passkey link* on that person's row makes a link that adds
+a passkey to their account instead of creating one. Old passkeys keep working.
+
+Only admins can connect a broker, because there is still one Schwab token per deployment: anyone
+else linking would replace the owner's. A signed-in non-admin sees no account at all — the token
+does not know whose it is, so who linked it is recorded separately and checked on every request.
+
+`PASSKEYS__RP_ID` and `PASSKEYS__ORIGIN` are set by `docker-compose.yml` to `steadybull.net`. A
+passkey is bound to that hostname, so it will not work on the droplet's IP or any other name.
+
+#### First deploy of passkeys (v3.3.0)
+
+The password that v3.0.0 put in front of `/portfolio` is switched off in the same release: the
+passkey sign-in page is the only way in. (Compose blanks `AUTH__PASSWORD`, since `.env` still has
+one.) Until step 2, **nobody can reach the Portfolio**, you included.
+
+1. Deploy.
+2. `docker compose exec -T app wheel-screener invite "<you>" --admin`, and open the link.
+3. Save a passkey. You land on the Portfolio.
+4. **Reconnect Schwab once.** The token on disk has no recorded owner — it predates owners — so
+   the tab offers *Connect Schwab* rather than guessing it is yours.
+5. Make a *New passkey link* for yourself on **Invite people** and open it on your other devices,
+   unless your passkey already syncs to them through iCloud Keychain or Google Password Manager.
+
+Rolling back to v3.2.0 is safe: this release only adds tables. The old release finds its own
+session table untouched and goes back to signing in with Schwab.
 
 ## Diagnosing a broken data connection
 

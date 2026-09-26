@@ -9,7 +9,7 @@ v2.13.0, corrected in v2.14.0, extended to calls in v2.15.0) are done. Remaining
 
 | Decision | State |
 |---|---|
-| Auth posture for account data | **built: Sign in with Schwab** (section 1a) |
+| Auth posture for account data | **superseded in v3.3.0 by passkeys** — see [`MULTI_USER_PLAN.md`](MULTI_USER_PLAN.md) §8. "Sign in with Schwab" (section 1a) is kept below as history. |
 | Multi-broker support | designed for from day one, Schwab implemented first (section 1b) |
 | Schwab app has **Accounts and Trading** entitlement | **YES — live 2026-08-29**, working even while the app shows *Modification Pending* |
 | Callback URL | chosen: `https://steadybull.net/portfolio/oauth/schwab/callback` — not yet registered |

@@ -1,73 +1,80 @@
-"""Sessions, OAuth state, and the gate that stands between a stranger and an account."""
+"""Users, sessions, OAuth state, and the gates between a visitor and an account."""
 
 from __future__ import annotations
 
 import pathlib
+import tempfile
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from _softkey import SoftKey
 
-from wheel_screener.api.sessions import SessionStore
+from wheel_screener.api.users import UserStore
 
 
-def _store(tmp_path) -> SessionStore:
-    return SessionStore(str(tmp_path / "sessions.sqlite"))
+def _store(tmp_path) -> UserStore:
+    return UserStore(str(tmp_path / "users.sqlite"))
 
 
 def _later(days=7) -> datetime:
     return datetime.now(tz=UTC) + timedelta(days=days)
 
 
-# --- the store ------------------------------------------------------------------------------
+# --- sessions -------------------------------------------------------------------------------
 
-def test_a_session_round_trips(tmp_path) -> None:
+def test_a_session_round_trips_to_its_user(tmp_path) -> None:
     s = _store(tmp_path)
-    token = s.create("schwab", "fp", _later())
-    got = s.get(token)
-    assert got is not None and got.broker == "schwab" and got.account_fingerprint == "fp"
+    sam = s.create_user("Sam", is_admin=True)
+    token, _ = s.create_session(sam.id, timedelta(days=1))
+    got = s.session(token)
+    assert got is not None and got.user.id == sam.id and got.user.is_admin
 
 
 def test_the_cookie_value_is_unguessable(tmp_path) -> None:
     """No signing secret is used, so the id itself has to be the security property."""
     s = _store(tmp_path)
-    tokens = {s.create("schwab", "fp", _later()) for _ in range(50)}
+    sam = s.create_user("Sam")
+    tokens = {s.create_session(sam.id, timedelta(days=1))[0] for _ in range(50)}
     assert len(tokens) == 50
     assert all(len(t) >= 40 for t in tokens)  # 256 bits, url-safe
 
 
 def test_an_expired_session_is_refused_and_dropped(tmp_path) -> None:
     s = _store(tmp_path)
-    token = s.create("schwab", "fp", datetime.now(tz=UTC) - timedelta(seconds=1))
-    assert s.get(token) is None
-    assert s.get(token) is None  # and stays gone
+    token, _ = s.create_session(s.create_user("Sam").id, timedelta(seconds=-1))
+    assert s.session(token) is None
+    assert s.session(token) is None  # and stays gone
 
 
 def test_unknown_and_empty_tokens_are_refused(tmp_path) -> None:
     s = _store(tmp_path)
-    assert s.get("nope") is None and s.get(None) is None and s.get("") is None
+    assert s.session("nope") is None and s.session(None) is None and s.session("") is None
 
 
-def test_revoke_ends_the_session_immediately(tmp_path) -> None:
-    """The point of a server-side store: Disconnect must actually end it, not wait for expiry."""
+def test_ending_a_session_ends_it_immediately(tmp_path) -> None:
+    """The point of a server-side store: signing out must actually end it, not wait for expiry."""
     s = _store(tmp_path)
-    token = s.create("schwab", "fp", _later())
-    s.revoke(token)
-    assert s.get(token) is None
+    token, _ = s.create_session(s.create_user("Sam").id, timedelta(days=1))
+    s.end_session(token)
+    assert s.session(token) is None
 
 
-def test_revoking_a_broker_ends_all_of_its_sessions(tmp_path) -> None:
+def test_ending_one_persons_sessions_leaves_everyone_elses(tmp_path) -> None:
+    """What `revoke_broker` could not do: it ended every session a broker had minted, which with
+    more than one person would sign everybody out when one of them relinked."""
     s = _store(tmp_path)
-    a, b = s.create("schwab", "fp", _later()), s.create("schwab", "fp", _later())
-    other = s.create("tastytrade", "fp", _later())
-    s.revoke_broker("schwab")
-    assert s.get(a) is None and s.get(b) is None
-    assert s.get(other) is not None, "another broker's sessions are untouched"
+    sam, alex = s.create_user("Sam"), s.create_user("Alex")
+    phone, laptop = (s.create_session(sam.id, timedelta(days=1))[0] for _ in range(2))
+    theirs, _ = s.create_session(alex.id, timedelta(days=1))
+    s.end_sessions_for(sam.id)
+    assert s.session(phone) is None and s.session(laptop) is None
+    assert s.session(theirs) is not None
 
 
 # --- OAuth state ----------------------------------------------------------------------------
 
 def test_state_is_single_use(tmp_path) -> None:
-    """A replayed redirect — the same callback URL opened twice — must not mint a second session."""
+    """A replayed redirect — the same callback URL opened twice — must not link twice."""
     s = _store(tmp_path)
     state = s.issue_state("schwab")
     assert s.consume_state(state) == "schwab"
@@ -89,39 +96,67 @@ def test_state_is_bound_to_its_broker(tmp_path) -> None:
     assert s.consume_state(s.issue_state("tastytrade")) == "tastytrade"
 
 
+# --- who owns a link ------------------------------------------------------------------------
+
+def test_a_link_has_one_owner_and_can_change_hands(tmp_path) -> None:
+    s = _store(tmp_path)
+    sam, alex = s.create_user("Sam"), s.create_user("Alex")
+    assert s.link_owner("schwab") is None
+    s.set_link_owner("schwab", sam.id)
+    s.set_link_owner("schwab", alex.id)
+    assert s.link_owner("schwab") == alex.id
+    s.clear_link_owner("schwab")
+    assert s.link_owner("schwab") is None
+
+
 # --- the gate -------------------------------------------------------------------------------
 
 pytest.importorskip("fastapi")
 
-from wheel_screener.api.app import _needs_portfolio_session  # noqa: E402
+from wheel_screener.api.app import _needs_portfolio_session, _safe_next  # noqa: E402
 
 
 @pytest.mark.parametrize("path", [
-    "/portfolio/positions", "/portfolio/oauth/schwab/disconnect", "/portfolio/",
-    "/portfolio/anything/else",
+    "/portfolio", "/portfolio/", "/portfolio/positions", "/portfolio/anything/else",
+    "/portfolio/oauth/schwab/connect", "/portfolio/oauth/schwab/callback",
+    "/portfolio/oauth/schwab/disconnect",
 ])
-def test_portfolio_routes_are_gated_by_default(path: str) -> None:
-    """Deny by default. An exempt-by-prefix rule is how the callback ends up unprotected."""
+def test_every_portfolio_route_needs_a_session(path: str) -> None:
+    """No exceptions any more. The connect and callback routes used to be open because the broker
+    sign-in WAS the site sign-in — which is how any visitor with a Schwab account could claim the
+    deployment's broker slot."""
     assert _needs_portfolio_session(path) is True
 
 
 @pytest.mark.parametrize("path", [
-    "/portfolio", "/portfolio/oauth/schwab/connect", "/portfolio/oauth/schwab/callback",
+    "/", "/search", "/fundamentals", "/health", "/portfoliox", "/login", "/invite/x",
 ])
-def test_only_the_entry_points_are_open(path: str) -> None:
-    assert _needs_portfolio_session(path) is False
-
-
-@pytest.mark.parametrize("path", ["/", "/search", "/fundamentals", "/health", "/portfoliox"])
 def test_the_rest_of_the_site_is_untouched(path: str) -> None:
     assert _needs_portfolio_session(path) is False
 
 
-def test_the_callback_is_rate_limited() -> None:
+def test_the_broker_and_sign_in_routes_are_rate_limited() -> None:
     from wheel_screener.api.ratelimit import is_expensive
 
     assert is_expensive("GET", "/portfolio/oauth/schwab/callback")
     assert is_expensive("GET", "/portfolio/oauth/schwab/connect")
+    for path in ("/auth/login/options", "/auth/login/verify", "/auth/register/options",
+                 "/auth/register/verify"):
+        assert is_expensive("POST", path), path
+    assert is_expensive("GET", "/invite/sometoken")
+
+
+@pytest.mark.parametrize("raw, expected", [
+    ("/portfolio/swap?position=X", "/portfolio/swap?position=X"),
+    ("/search", "/search"),
+    ("//evil.example/steal", "/portfolio"),  # a URL to another host, to a browser
+    ("/\\evil.example", "/portfolio"),  # browsers read a backslash as a slash here
+    ("https://evil.example", "/portfolio"),
+    ("", "/portfolio"),
+    (None, "/portfolio"),
+])
+def test_after_signing_in_you_only_ever_land_on_this_site(raw, expected) -> None:
+    assert _safe_next(raw) == expected
 
 
 # --- the routes -----------------------------------------------------------------------------
@@ -130,14 +165,17 @@ def test_the_callback_is_rate_limited() -> None:
 from fastapi.testclient import TestClient  # noqa: E402
 
 from wheel_screener.api.app import app  # noqa: E402
+from wheel_screener.api.passkeys import Passkeys  # noqa: E402
 from wheel_screener.core.models import BrokerLinkStatus  # noqa: E402
+
+ORIGIN = "http://testserver"  # what TestClient's requests present as their origin
 
 
 class _FakeLink:
     broker = "schwab"
 
     def __init__(self, connected=True):
-        self.connected, self.revoked = connected, False
+        self.connected, self.revoked, self.completed = connected, False, 0
 
     def status(self):
         return BrokerLinkStatus(
@@ -149,6 +187,8 @@ class _FakeLink:
         return f"https://schwab.example/authorize?state={state}"
 
     def complete(self, received_url, state):
+        self.completed += 1
+        self.connected = True
         return self.status()
 
     def revoke(self):
@@ -156,78 +196,189 @@ class _FakeLink:
 
 
 def _client(link=None):
+    """A client over the real app, with its OWN user store: the lifespan would otherwise open the
+    repo's data/sessions.sqlite, and users and link owners would leak between tests."""
     c = TestClient(app)
     c.__enter__()
-    app.state.settings.portfolio.cookie_secure = False  # TestClient speaks http
+    settings = app.state.settings
+    settings.portfolio.cookie_secure = False  # TestClient speaks http
     app.state.links = {"schwab": link or _FakeLink()}
+    app.state.users = UserStore(tempfile.mkdtemp() + "/users.sqlite")
+    app.state.passkeys = Passkeys(app.state.users, "testserver", "Steady Bull", ORIGIN)
     return c
 
 
-def _sign_in(c) -> str:
+def _as(c, name="Sam", *, admin=True, owns_link=True):
+    """Sign `c` in as a new user, straight through the store (the passkey ceremony has tests of
+    its own below). Returns the user."""
+    store = app.state.users
+    user = store.create_user(name, is_admin=admin)
+    token, _ = store.create_session(user.id, timedelta(days=1))
+    c.cookies.set(app.state.settings.portfolio.cookie_name, token)
+    if owns_link:
+        store.set_link_owner("schwab", user.id)
+    return user
+
+
+def _sign_in(c):
+    """Signed in as an admin who has linked Schwab — the state every account-display test needs."""
+    return _as(c)
+
+
+def _link_through_the_broker(c):
+    """Link Schwab the way a person does: connect, then the broker's redirect back."""
     loc = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).headers["location"]
     state = loc.split("state=")[-1]
     c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}", follow_redirects=False)
     return state
 
 
-def test_a_stranger_sees_a_way_in_and_nothing_else() -> None:
+def test_a_stranger_is_sent_to_sign_in() -> None:
     c = _client()
     try:
+        r = c.get("/portfolio", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/login?next=/portfolio"
         body = c.get("/portfolio").text
-        assert "Sign in with Schwab" in body
-        assert "Disconnect" not in body and "Connected" not in body
+        assert "Sign in with a passkey" in body
+        assert "Connect Schwab" not in body and "Connected" not in body
     finally:
         c.__exit__(None, None, None)
 
 
-def test_signing_in_grants_access_and_signing_out_removes_it() -> None:
+def test_a_stranger_cannot_start_or_finish_a_broker_link() -> None:
+    """The v3.0.0 hole, closed at the source: these two routes are what claimed the slot."""
+    link = _FakeLink(connected=False)
+    c = _client(link)
+    try:
+        start = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False)
+        assert start.status_code == 303 and start.headers["location"].startswith("/login")
+        state = app.state.users.issue_state("schwab")  # even holding a genuine state
+        finish = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}",
+                       follow_redirects=False)
+        assert finish.status_code == 303 and finish.headers["location"].startswith("/login")
+        assert link.completed == 0 and app.state.users.link_owner("schwab") is None
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_an_admin_links_the_broker_and_it_is_recorded_as_theirs() -> None:
+    link = _FakeLink(connected=False)
+    c = _client(link)
+    try:
+        sam = _as(c, owns_link=False)
+        assert "Connect Schwab" in c.get("/portfolio").text
+        _link_through_the_broker(c)
+        assert link.completed == 1 and app.state.users.link_owner("schwab") == sam.id
+        assert "Connected" in c.get("/portfolio").text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_the_callback_signs_nobody_in() -> None:
+    """It used to mint the session. Now it only links a broker to the session that exists."""
+    c = _client(_FakeLink(connected=False))
+    try:
+        _as(c, owns_link=False)
+        loc = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).headers["location"]
+        r = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={loc.split('state=')[-1]}",
+                  follow_redirects=False)
+        assert "set-cookie" not in r.headers
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_forged_or_replayed_callback_links_nothing() -> None:
+    link = _FakeLink(connected=False)
+    c = _client(link)
+    try:
+        _as(c, owns_link=False)
+        r = c.get("/portfolio/oauth/schwab/callback?code=X&state=forged", follow_redirects=False)
+        assert r.status_code == 400 and link.completed == 0
+        state = _link_through_the_broker(c)
+        replay = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}",
+                       follow_redirects=False)
+        assert replay.status_code == 400 and link.completed == 1, "state is single use"
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_friend_is_never_shown_the_owners_account(monkeypatch) -> None:
+    """The rule that stands in for per-user credentials until Phase 3. The deployment's Schwab
+    token does not know whose it is; the recorded owner does, and nobody else gets the account —
+    neither on the page, nor from the dependency the account routes are built on."""
+    import wheel_screener.api.deps as deps
+    from wheel_screener.api.deps import get_portfolio
+
+    built = []
+    real = deps.build_portfolio
+
+    def spy(settings, service, *, linked=True):
+        built.append(linked)
+        return real(settings, service, linked=linked)
+
+    monkeypatch.setattr(deps, "build_portfolio", spy)
+    c = _client()
+    try:
+        _as(c, "Sam")  # the owner links Schwab…
+        _as(c, "Alex", admin=False, owns_link=False)  # …then a friend signs in on this client
+        body = c.get("/portfolio").text
+        assert "Connected" not in body and "Disconnect" not in body
+        assert "No brokerage account is linked to your sign-in" in body
+        assert built and not any(built), "the friend's request was built with the credential"
+
+        class _Req:
+            app = c.app
+            cookies = {app.state.settings.portfolio.cookie_name:
+                       c.cookies.get(app.state.settings.portfolio.cookie_name)}
+
+        assert get_portfolio(_Req()).accounts is None
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_friend_can_neither_link_nor_unlink_the_broker() -> None:
+    link = _FakeLink()
+    c = _client(link)
+    try:
+        _as(c, "Sam")  # owns the link
+        _as(c, "Alex", admin=False, owns_link=False)
+        assert c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).status_code == 403
+        state = app.state.users.issue_state("schwab")
+        r = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}", follow_redirects=False)
+        assert r.status_code == 403 and link.completed == 0
+        assert c.post("/portfolio/oauth/schwab/disconnect",
+                      follow_redirects=False).status_code == 404
+        assert not link.revoked and app.state.users.link_owner("schwab") is not None
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_disconnecting_unlinks_the_broker_but_keeps_you_signed_in() -> None:
     link = _FakeLink()
     c = _client(link)
     try:
         _sign_in(c)
         assert "Connected" in c.get("/portfolio").text
         c.post("/portfolio/oauth/schwab/disconnect", follow_redirects=False)
-        assert link.revoked, "disconnect must delete the credential, not just the session"
-        assert "Sign in with Schwab" in c.get("/portfolio").text
+        assert link.revoked, "disconnect must delete the credential"
+        assert app.state.users.link_owner("schwab") is None
+        body = c.get("/portfolio").text
+        assert "Connect Schwab" in body and "Signed in as" in body
     finally:
         c.__exit__(None, None, None)
 
 
-def test_a_forged_or_replayed_callback_mints_nothing() -> None:
-    c = _client()
+def test_signing_out_ends_the_session_and_leaves_the_link() -> None:
+    link = _FakeLink()
+    c = _client(link)
     try:
-        r = c.get("/portfolio/oauth/schwab/callback?code=X&state=forged", follow_redirects=False)
-        assert r.status_code == 400 and "ws_portfolio" not in r.headers.get("set-cookie", "")
-        state = _sign_in(c)
-        replay = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}",
-                       follow_redirects=False)
-        assert replay.status_code == 400, "state is single use"
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_the_session_cookie_is_locked_down() -> None:
-    c = _client()
-    try:
-        loc = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).headers["location"]
-        r = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={loc.split('state=')[-1]}",
-                  follow_redirects=False)
-        cookie = r.headers["set-cookie"]
-        assert "HttpOnly" in cookie, "script must not be able to read the session"
-        assert "SameSite=lax" in cookie, "Lax, not Strict: the callback is a cross-site redirect"
-        assert "Path=/portfolio" in cookie, "scoped to the feature that needs it"
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_relinking_ends_the_previous_session() -> None:
-    """A relink may be a different account, so old sessions must not survive it."""
-    c = _client()
-    try:
-        _sign_in(c)
-        first = c.cookies.get("ws_portfolio")
-        _sign_in(c)
-        assert app.state.sessions.get(first) is None
+        sam = _sign_in(c)
+        token = c.cookies.get(app.state.settings.portfolio.cookie_name)
+        r = c.post("/auth/logout", follow_redirects=False)
+        assert r.status_code == 303 and app.state.users.session(token) is None
+        assert not link.revoked and app.state.users.link_owner("schwab") == sam.id
+        c.cookies.clear()
+        assert c.get("/portfolio", follow_redirects=False).status_code == 303
     finally:
         c.__exit__(None, None, None)
 
@@ -240,6 +391,100 @@ def test_an_expired_link_offers_reconnect_rather_than_an_error() -> None:
         link.connected = False  # the weekly condition
         body = c.get("/portfolio").text
         assert "Reconnect" in body and "expired" in body.lower()
+    finally:
+        c.__exit__(None, None, None)
+
+
+# --- the passkey ceremony, over HTTP --------------------------------------------------------
+# The ceremony's own rules are tested in test_passkeys.py; these check the routes around it — the
+# JSON in and out, and above all the cookie that comes back.
+
+
+def _register_over_http(c, token: str, key: SoftKey | None = None):
+    key = key or SoftKey(ORIGIN)
+    options = c.post("/auth/register/options", json={"invite": token}).json()
+    r = c.post("/auth/register/verify", json={"credential": key.create(options)})
+    return r, key
+
+
+def test_an_invite_link_signs_you_in_with_a_new_passkey() -> None:
+    c = _client()
+    try:
+        token = app.state.users.create_invite("Sam", is_admin=True)
+        page = c.get(f"/invite/{token}")
+        assert page.status_code == 200 and "Welcome, Sam" in page.text
+        assert 'data-passkey="register"' in page.text and "/static/passkey.js" in page.text
+        r, _ = _register_over_http(c, token)
+        assert r.status_code == 200 and r.json() == {"redirect": "/portfolio"}
+        assert "Signed in as <b>Sam</b>" in c.get("/portfolio").text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_the_session_cookie_is_locked_down() -> None:
+    c = _client()
+    try:
+        r, _ = _register_over_http(c, app.state.users.create_invite("Sam"))
+        cookie = r.headers["set-cookie"]
+        assert "HttpOnly" in cookie, "script must not be able to read the session"
+        assert "SameSite=lax" in cookie, "Lax: the broker's redirect back is cross-site"
+        assert "Path=/" in cookie and "Path=/portfolio" not in cookie
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_used_or_unknown_invite_shows_a_dead_end_not_a_button() -> None:
+    c = _client()
+    try:
+        token = app.state.users.create_invite("Sam")
+        _register_over_http(c, token)
+        c.cookies.clear()
+        for t in (token, "made-up"):
+            page = c.get(f"/invite/{t}")
+            assert page.status_code == 404 and "expired" in page.text
+            assert "data-passkey" not in page.text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_signing_in_with_a_passkey_lands_where_you_were_going() -> None:
+    c = _client()
+    try:
+        _, key = _register_over_http(c, app.state.users.create_invite("Sam", is_admin=True))
+        c.cookies.clear()
+        options = c.post("/auth/login/options").json()
+        r = c.post("/auth/login/verify",
+                   json={"credential": key.get(options), "next": "/portfolio/swap?position=X"})
+        assert r.status_code == 200 and r.json() == {"redirect": "/portfolio/swap?position=X"}
+        assert "Signed in as" in c.get("/portfolio").text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_refused_passkey_sets_no_cookie_and_says_why() -> None:
+    c = _client()
+    try:
+        _, key = _register_over_http(c, app.state.users.create_invite("Sam"))
+        c.cookies.clear()
+        options = c.post("/auth/login/options").json()
+        r = c.post("/auth/login/verify",
+                   json={"credential": key.get(options, origin="https://evil.example")})
+        assert r.status_code == 400 and "not recognised" in r.json()["error"]
+        assert "set-cookie" not in r.headers
+        garbled = c.post("/auth/login/verify", json={"credential": "nope"})
+        assert garbled.status_code == 400
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_the_sign_in_page_sends_you_on_if_you_are_already_signed_in() -> None:
+    c = _client()
+    try:
+        _sign_in(c)
+        r = c.get("/login?next=/portfolio", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/portfolio"
+        evil = c.get("/login?next=//evil.example", follow_redirects=False)
+        assert evil.headers["location"] == "/portfolio"
     finally:
         c.__exit__(None, None, None)
 
@@ -381,12 +626,13 @@ class _UnconfiguredLink(_FakeLink):
 
 
 def test_an_unconfigured_deployment_says_so_instead_of_offering_a_dead_button() -> None:
-    """'Nobody has signed in' and 'there is nothing to sign in to' are different answers, and only
-    the second is the operator's problem — so the visitor is told rather than handed a failure."""
+    """'Nothing is linked' and 'there is nothing to link to' are different answers, and only the
+    second is the operator's problem — so the admin is told rather than handed a failure."""
     c = _client(_UnconfiguredLink())
     try:
+        _as(c, owns_link=False)
         body = c.get("/portfolio").text
-        assert "Sign in with Schwab" not in body
+        assert "Connect Schwab" not in body
         assert "nothing to" in body
         assert "SCHWAB__CLIENT_ID" not in body, "server config names are not for visitors"
     finally:
@@ -396,6 +642,7 @@ def test_an_unconfigured_deployment_says_so_instead_of_offering_a_dead_button() 
 def test_connecting_anyway_fails_without_naming_environment_variables() -> None:
     c = _client(_UnconfiguredLink())
     try:
+        _as(c, owns_link=False)
         body = c.get("/portfolio/oauth/schwab/connect").text
         assert "no Schwab application configured" in body
         assert "SCHWAB__CLIENT_SECRET" not in body
@@ -406,7 +653,8 @@ def test_connecting_anyway_fails_without_naming_environment_variables() -> None:
 def test_a_configured_deployment_still_offers_the_button() -> None:
     c = _client(_FakeLink(connected=False))
     try:
-        assert "Sign in with Schwab" in c.get("/portfolio").text
+        _as(c, owns_link=False)
+        assert "Connect Schwab" in c.get("/portfolio").text
     finally:
         c.__exit__(None, None, None)
 
@@ -1558,10 +1806,26 @@ def test_the_refresh_button_is_rate_limited() -> None:
 def test_the_swap_endpoints_need_a_session() -> None:
     c = _client()
     try:
-        for method, path in (("GET", "/portfolio/swap?position=X"),
-                             ("POST", "/portfolio/swaps/refresh")):
-            r = c.request(method, path, follow_redirects=False)
-            assert r.status_code == 303 and r.headers["location"] == "/portfolio"
+        page = c.get("/portfolio/swap?position=X", follow_redirects=False)
+        assert page.status_code == 303
+        assert page.headers["location"] == "/login?next=/portfolio/swap%3Fposition%3DX"
+        post = c.post("/portfolio/swaps/refresh", follow_redirects=False)
+        assert post.status_code == 303 and post.headers["location"] == "/login?next=/portfolio"
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_fragment_request_after_the_session_ends_moves_the_whole_page() -> None:
+    """Refresh or a Close? cell, clicked on a page whose session has since ended. A redirect would
+    be followed invisibly by the browser's XHR and htmx would swap the entire sign-in page into a
+    table cell; HX-Redirect makes it navigate instead."""
+    c = _client()
+    try:
+        for method, path in (("POST", "/portfolio/swaps/refresh"),
+                             ("GET", "/portfolio/swap?position=X")):
+            r = c.request(method, path, headers={"HX-Request": "true"}, follow_redirects=False)
+            assert r.status_code == 401 and r.headers["HX-Redirect"] == "/login?next=/portfolio"
+            assert "location" not in r.headers
     finally:
         c.__exit__(None, None, None)
 
@@ -1675,18 +1939,33 @@ def test_the_password_gate_can_cover_the_portfolio_alone() -> None:
 
 
 # --- keeping two people apart ---------------------------------------------------------------
-# The leak this seam exists to close. Two live sessions cannot be made through the OAuth flow
-# today — a callback revokes the previous ones, because the deployment has one credential — so
-# they are minted straight into the store, which is what a passkey login will do in Phase 1.
+# The leak the per-user caches exist to close. With one Schwab token per deployment only one person
+# can see an account at a time — which is itself the stronger protection — so these tests hand the
+# link from one person to the other between page loads. That is a real scenario (an admin relinking
+# as someone else), and exactly when a cache keyed by anything but the person would leak: the
+# account on the other side of the hand-over is a different one, and the old numbers are still warm.
+# The owner is set straight in the store, deliberately bypassing the callback, whose clearing of
+# the previous owner's entries would otherwise hide a partition that does not work.
 
 
-def _two_sessions() -> tuple[str, str]:
-    expires = _later()
-    return (app.state.sessions.create("schwab", "A", expires),
-            app.state.sessions.create("schwab", "B", expires))
+def _two_people() -> tuple[tuple, tuple]:
+    store = app.state.users
+    people = []
+    for name in ("Alice", "Bob"):
+        user = store.create_user(name, is_admin=True)
+        token, _ = store.create_session(user.id, timedelta(days=1))
+        people.append((user, token))
+    return people[0], people[1]
 
 
-def test_one_session_is_never_served_another_sessions_balances() -> None:
+def _be(c, person) -> None:
+    """Use the page as this person, who now holds the broker link."""
+    user, token = person
+    c.cookies.set(app.state.settings.portfolio.cookie_name, token)
+    app.state.users.set_link_owner("schwab", user.id)
+
+
+def test_one_person_is_never_served_another_persons_balances() -> None:
     """Before the partition, the balances cache was a single 30-second entry with no key at all:
     whoever loaded the tab second inside the window was handed the first one's account."""
     class _TwoPeople:
@@ -1707,20 +1986,19 @@ def test_one_session_is_never_served_another_sessions_balances() -> None:
     app.dependency_overrides[get_service] = lambda: people
     app.dependency_overrides[get_portfolio] = lambda: people
     _reset_caches()
-    a, b = _two_sessions()
-    cookie = app.state.settings.portfolio.cookie_name
+    a, b = _two_people()
     try:
-        c.cookies.set(cookie, a)
+        _be(c, a)
         assert "••••AAAA" in c.get("/portfolio").text
         assert people.calls == 1
 
-        c.cookies.set(cookie, b)
+        _be(c, b)
         second = c.get("/portfolio").text
-        assert "••••AAAA" not in second, "the second session was served the first one's balances"
+        assert "••••AAAA" not in second, "the second person was served the first one's balances"
         assert "••••BBBB" in second
-        assert people.calls == 2, "the second session must cost its own upstream read"
+        assert people.calls == 2, "the second person must cost their own upstream read"
 
-        c.cookies.set(cookie, a)
+        _be(c, a)
         assert "••••AAAA" in c.get("/portfolio").text  # its own partition, still warm
         assert people.calls == 2
     finally:
@@ -1728,7 +2006,7 @@ def test_one_session_is_never_served_another_sessions_balances() -> None:
         c.__exit__(None, None, None)
 
 
-def test_one_session_is_never_served_another_sessions_verdict() -> None:
+def test_one_person_is_never_served_another_persons_verdict() -> None:
     """Same story for the Close? column, whose key was the contract and the size — identical for
     two people holding the same put, so they shared an entry."""
     account = _swap_account("swap")
@@ -1753,16 +2031,15 @@ def test_one_session_is_never_served_another_sessions_verdict() -> None:
     app.dependency_overrides[get_service] = lambda: svc
     app.dependency_overrides[get_portfolio] = lambda: svc
     _reset_caches()
-    a, b = _two_sessions()
-    cookie = app.state.settings.portfolio.cookie_name
+    a, b = _two_people()
     try:
-        c.cookies.set(cookie, a)
+        _be(c, a)
         assert ">Yes<" in c.get("/portfolio").text
         assert svc.calls == 1
 
-        c.cookies.set(cookie, b)
+        _be(c, b)
         second = c.get("/portfolio").text
-        assert ">No<" in second, "the second session was served the first one's verdict"
+        assert ">No<" in second, "the second person was served the first one's verdict"
         assert ">Yes<" not in second
         assert svc.calls == 2
     finally:
@@ -1791,23 +2068,190 @@ def test_one_persons_refresh_does_not_cost_everybody_their_cache() -> None:
     app.dependency_overrides[get_service] = lambda: svc
     app.dependency_overrides[get_portfolio] = lambda: svc
     _reset_caches()
-    a, b = _two_sessions()
-    cookie = app.state.settings.portfolio.cookie_name
+    a, b = _two_people()
     try:
-        c.cookies.set(cookie, a)
+        _be(c, a)
         c.get("/portfolio")
-        c.cookies.set(cookie, b)
+        _be(c, b)
         c.get("/portfolio")
         assert svc.reads == 2 and len(app.state.balances_cache) == 2
 
-        c.cookies.set(cookie, b)
+        _be(c, b)
         c.post("/portfolio/swaps/refresh")
         assert len(app.state.balances_cache) == 2, "A's partition survived B pressing Refresh"
 
         before = svc.reads
-        c.cookies.set(cookie, a)
+        _be(c, a)
         c.get("/portfolio")
         assert svc.reads == before, "A's balances were still cached"
     finally:
         app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_production_passkeys_name_the_site_people_actually_use() -> None:
+    """A passkey is bound to a hostname and checked against the exact origin. Deployed with the
+    localhost defaults, every sign-in would be refused — and nothing would say why until someone
+    tried. The broker's callback already names the production site, so the two must agree."""
+    compose = (pathlib.Path(__file__).parents[2] / "docker-compose.yml").read_text()
+    env = dict(
+        line.strip().split(": ", 1) for line in compose.splitlines()
+        if line.strip().startswith(("PASSKEYS__", "SCHWAB__CALLBACK_URL"))
+    )
+    assert env["PASSKEYS__RP_ID"] == "steadybull.net"
+    assert env["PASSKEYS__ORIGIN"] == "https://steadybull.net"
+    assert env["SCHWAB__CALLBACK_URL"].startswith(env["PASSKEYS__ORIGIN"] + "/")
+
+
+def test_the_www_name_redirects_rather_than_serving_the_site() -> None:
+    """A passkey ceremony on www reports origin https://www.steadybull.net, which is refused, and a
+    session cookie set there does not reach the bare domain. So www must only ever redirect."""
+    caddy = (pathlib.Path(__file__).parents[2] / "Caddyfile").read_text()
+    blocks = {}
+    for chunk in caddy.split("\n}\n"):
+        header = next((ln for ln in chunk.splitlines() if ln.rstrip().endswith("{")
+                       and not ln.startswith(("\t", " "))), None)
+        if header:
+            blocks[header.rstrip(" {")] = chunk
+    assert set(blocks) == {"www.steadybull.net", "steadybull.net"}, blocks.keys()
+    assert "redir https://steadybull.net{uri} permanent" in blocks["www.steadybull.net"]
+    assert "reverse_proxy" not in blocks["www.steadybull.net"]
+    assert "reverse_proxy app:8000" in blocks["steadybull.net"]
+
+
+def test_production_has_no_password_prompt_in_front_of_the_portfolio() -> None:
+    """The passkey sign-in page is the only way in. The Basic-Auth gate put there in v3.0.0 was
+    the browser's grey pop-up, and it offered no way in of its own if passkeys failed. .env still
+    holds a password, so compose must blank it explicitly or the prompt comes back on deploy."""
+    compose = (pathlib.Path(__file__).parents[2] / "docker-compose.yml").read_text()
+    env = dict(
+        line.strip().split(": ", 1) for line in compose.splitlines()
+        if line.strip().startswith("AUTH__")
+    )
+    assert env == {"AUTH__REQUIRED": '"false"', "AUTH__PASSWORD": '""'}
+
+
+# --- the invites page ------------------------------------------------------------------------
+
+def _link_in(html: str) -> str:
+    import re
+
+    found = re.search(r'value="(http://[^"]+/invite/[^"]+)"', html)
+    assert found, "no invite link on the page"
+    return found.group(1)
+
+
+def test_an_admin_makes_an_invite_and_the_link_creates_a_working_account() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        page = c.get("/portfolio/invites")
+        assert page.status_code == 200 and "Create invite link" in page.text
+        made = c.post("/portfolio/invites", data={"name": "Alex"})
+        link = _link_in(made.text)
+        token = link.rsplit("/", 1)[-1]
+        assert "Invite for Alex" in made.text and "only time it is shown" in made.text
+
+        c.cookies.clear()  # Alex, on their own device
+        r, _ = _register_over_http(c, token)
+        assert r.status_code == 200
+        alex = next(u for u in app.state.users.users() if u.name == "Alex")
+        assert not alex.is_admin, "an admin only when the box is ticked"
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_ticking_admin_makes_an_admin() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        token = _link_in(c.post("/portfolio/invites", data={"name": "Pat", "admin": "1"}).text)
+        c.cookies.clear()
+        _register_over_http(c, token.rsplit("/", 1)[-1])
+        assert next(u for u in app.state.users.users() if u.name == "Pat").is_admin
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_link_is_shown_once_and_never_again() -> None:
+    """The pending list works by a non-secret reference, so reloading the page cannot re-print
+    a live token for someone looking over a shoulder, or a screenshot, to use."""
+    c = _client()
+    try:
+        _as(c, "Sam")
+        token = _link_in(c.post("/portfolio/invites", data={"name": "Alex"}).text).rsplit("/")[-1]
+        later = c.get("/portfolio/invites").text
+        assert "Alex" in later and "creates an account" in later
+        assert token not in later
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_cancelling_an_invite_kills_the_link() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        token = _link_in(c.post("/portfolio/invites", data={"name": "Alex"}).text).rsplit("/")[-1]
+        (pending,) = app.state.users.pending_invites()
+        after = c.post("/portfolio/invites/cancel", data={"ref": pending.ref}).text
+        assert "No invites outstanding" in after
+        assert c.get(f"/invite/{token}").status_code == 404
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_new_passkey_link_adds_to_the_same_account() -> None:
+    c = _client()
+    try:
+        sam = _as(c, "Sam")
+        made = c.post("/portfolio/invites", data={"for_user": sam.id}).text
+        assert "New passkey link for Sam" in made
+        token = _link_in(made).rsplit("/", 1)[-1]
+        c.cookies.clear()
+        assert "Add a passkey" in c.get(f"/invite/{token}").text
+        r, _ = _register_over_http(c, token)
+        assert r.status_code == 200 and len(app.state.users.users()) == 1
+        assert len(app.state.users.credentials_for(sam.id)) == 1
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_an_invite_needs_a_name() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        for name in ("", "   ", "x" * 61):
+            r = c.post("/portfolio/invites", data={"name": name})
+            assert "Give the invite a name" in r.text
+        assert app.state.users.pending_invites() == []
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_only_an_admin_can_invite() -> None:
+    c = _client()
+    try:
+        _as(c, "Alex", admin=False, owns_link=False)
+        assert c.get("/portfolio/invites").status_code == 403
+        assert c.post("/portfolio/invites", data={"name": "Mallory"}).status_code == 403
+        assert c.post("/portfolio/invites", data={"name": "M", "admin": "1"}).status_code == 403
+        assert app.state.users.pending_invites() == []
+        assert "Invite people" not in c.get("/portfolio").text
+        c.cookies.clear()
+        stranger = c.get("/portfolio/invites", follow_redirects=False)
+        assert stranger.status_code == 303 and stranger.headers["location"].startswith("/login")
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_member_cannot_cancel_invites_either() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        c.post("/portfolio/invites", data={"name": "Alex"})
+        (pending,) = app.state.users.pending_invites()
+        _as(c, "Eve", admin=False, owns_link=False)
+        assert c.post("/portfolio/invites/cancel", data={"ref": pending.ref}).status_code == 403
+        assert len(app.state.users.pending_invites()) == 1
+    finally:
         c.__exit__(None, None, None)

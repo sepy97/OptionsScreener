@@ -1,0 +1,77 @@
+{# Re-rendered in place after every create or cancel. #}
+{% if error %}
+  <p class="passkey-error" role="alert">{{ error }}</p>
+{% endif %}
+
+{% if created %}
+  {# Shown once. Nothing on this page prints a live link again. #}
+  <section class="invite-created" aria-live="polite">
+    <strong>
+      {% if created.for_user %}New passkey link for {{ created.name }}
+      {% elif created.admin %}Admin invite for {{ created.name }}
+      {% else %}Invite for {{ created.name }}{% endif %}
+    </strong>
+    <div class="invite-link">
+      <input type="text" id="invite-link" value="{{ created.link }}" readonly
+             aria-label="Invite link" onfocus="this.select()">
+      <button type="button" class="secondary" data-copy="invite-link">Copy</button>
+    </div>
+    <p class="detail-note">
+      {% if created.for_user %}Opening it adds a passkey to {{ created.name }}'s account; their
+      existing ones keep working.{% else %}Opening it and saving a passkey creates the account.{% endif %}
+      It works once, for {{ created.hours }} hours. Send it privately &mdash; until it is used,
+      whoever holds it can claim it. This is the only time it is shown.
+    </p>
+  </section>
+{% endif %}
+
+<h4>Waiting to be used</h4>
+{% if pending %}
+  <figure>
+  <table class="invite-table">
+    <thead><tr><th>Name</th><th>What it does</th><th>Expires</th><th></th></tr></thead>
+    <tbody>
+      {% for i in pending %}
+        <tr>
+          <td>{{ i.name }}</td>
+          <td>{% if i.for_user %}adds a passkey to {{ names.get(i.for_user, "an account") }}
+              {% elif i.is_admin %}creates an admin{% else %}creates an account{% endif %}</td>
+          <td>{{ i.expires_at.strftime('%d %b %H:%M') }} UTC</td>
+          <td>
+            <button type="button" class="secondary outline"
+                    hx-post="/portfolio/invites/cancel" hx-vals='{"ref": "{{ i.ref }}"}'
+                    hx-target="#invites" hx-swap="innerHTML"
+                    hx-confirm="Cancel the invite for {{ i.name }}? The link will stop working.">
+              Cancel</button>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </figure>
+{% else %}
+  <p class="detail-note">No invites outstanding.</p>
+{% endif %}
+
+<h4>People</h4>
+<figure>
+<table class="invite-table">
+  <thead><tr><th>Name</th><th>Role</th><th>Passkeys</th><th></th></tr></thead>
+  <tbody>
+    {% for person, keys in people %}
+      <tr>
+        <td>{{ person.name }}{% if person.id == user.id %} <small>(you)</small>{% endif %}</td>
+        <td>{{ "admin" if person.is_admin else "member" }}</td>
+        <td>{{ keys }}</td>
+        <td>
+          <button type="button" class="secondary outline"
+                  hx-post="/portfolio/invites" hx-vals='{"for_user": "{{ person.id }}"}'
+                  hx-target="#invites" hx-swap="innerHTML"
+                  title="For a lost device, or a second one: a link that adds a passkey to this account">
+            New passkey link</button>
+        </td>
+      </tr>
+    {% endfor %}
+  </tbody>
+</table>
+</figure>

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block scripts %}{% if invite %}<script src="/static/passkey.js" defer></script>{% endif %}{% endblock %}
+{% block content %}
+  <article>
+    {% if invite %}
+      {% if invite.for_user %}
+        <h2>Add a passkey</h2>
+        <p class="tab-lede">This link adds a passkey on this device to the account for
+          <b>{{ invite.name }}</b>. Your existing passkeys keep working.</p>
+      {% else %}
+        <h2>Welcome, {{ invite.name }}</h2>
+        <p class="tab-lede">Save a passkey to create your account. There is no password:
+          your device keeps the passkey and unlocks it with Face ID, Touch ID or its PIN, and it
+          syncs to your other devices through iCloud Keychain or Google Password Manager.</p>
+      {% endif %}
+      <button type="button" class="run-btn" data-passkey="register" data-invite="{{ token }}">
+        Save a passkey</button>
+      <p id="passkey-status" class="detail-note" role="status" aria-live="polite"></p>
+      <p class="detail-note">This link works once, and until
+        {{ invite.expires_at.strftime('%d %b %H:%M') }} UTC.</p>
+    {% else %}
+      <h2>This invite has expired</h2>
+      <p class="tab-lede">The link was already used or is too old. Ask for a new one &mdash;
+        if you already have an account, <a href="/login">sign in</a> instead.</p>
+    {% endif %}
+  </article>
+{% endblock %}

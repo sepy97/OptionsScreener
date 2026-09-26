@@ -147,8 +147,15 @@ class PortfolioSettings(BaseModel):
     """
 
     enabled: bool = True
+    # users, passkeys, invites and sessions. The name predates user accounts; the path on the
+    # droplet's volume is kept rather than moved, so a deploy needs no file shuffling.
     sessions_db_path: str = "data/sessions.sqlite"
-    cookie_name: str = "ws_portfolio"
+    # A new name for the passkey session, deliberately: the old cookie was scoped to /portfolio and
+    # minted by the broker sign-in. Browsers still holding one simply ignore it until it expires.
+    cookie_name: str = "ws_session"
+    # Long, because signing in again is one Face ID tap and the session no longer rides on the
+    # broker's 7-day authorisation — the two expire independently now.
+    session_days: int = 90
     # Set false only for local http development; a Secure cookie is never sent over plain HTTP,
     # so leaving it on would make the session silently fail to stick.
     cookie_secure: bool = True
@@ -156,6 +163,22 @@ class PortfolioSettings(BaseModel):
     # The short-term interest rate a put holder earns on the strike cash by exercising early —
     # the early-assignment test for short puts. The verdict isn't sensitive to a point either way.
     carry_rate: float = 0.04
+
+
+class PasskeySettings(BaseModel):
+    """Signing in to the Portfolio with a passkey.
+
+    A passkey is bound to the site's hostname (``rp_id``) and the browser reports the exact
+    ``origin`` it was used on; both are checked on every sign-in. So they must name the address
+    people actually type — a passkey registered on steadybull.net does not work on an IP address
+    or a differently-named host. The defaults suit local development, where browsers treat
+    ``localhost`` as secure even over plain http.
+    """
+
+    rp_id: str = "localhost"
+    rp_name: str = "Steady Bull"  # what the browser's passkey prompt calls this site
+    origin: str = "http://localhost:8000"
+    invite_hours: int = 72  # an invite link is a bearer credential: short-lived and single use
 
 
 class SwapSettings(BaseModel):
@@ -203,6 +226,7 @@ class Settings(BaseSettings):
     auth: AuthSettings = Field(default_factory=AuthSettings)
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     portfolio: PortfolioSettings = Field(default_factory=PortfolioSettings)
+    passkeys: PasskeySettings = Field(default_factory=PasskeySettings)
     swap: SwapSettings = Field(default_factory=SwapSettings)
 
     # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)

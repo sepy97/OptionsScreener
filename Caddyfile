@@ -1,15 +1,25 @@
 # Auto-TLS reverse proxy. Caddy fetches + renews a Let's Encrypt cert for BOTH names on its own,
 # provided each has a DNS A record pointing here and ports 80/443 are open. Add an email under a
 # global block (`{ email you@example.com }`) to get expiry notices.
-steadybull.net, www.steadybull.net {
+# One canonical host. Passkeys are checked against the exact origin the browser reports, and the
+# session cookie belongs to one host, so a sign-in on www would be refused ("not recognised") and
+# even a working one would not carry over. www still gets its certificate — it is a site block —
+# and only ever redirects.
+www.steadybull.net {
+	redir https://steadybull.net{uri} permanent
+}
+
+steadybull.net {
 	encode zstd gzip
 	request_body {
 		max_size 1MB
 	}
-	# The OAuth callback carries a live authorization code in its query string, and the access log
-	# records request URIs — so a credential would land in the log. Skip logging that path only.
-	@oauth_callback path_regexp ^/portfolio/oauth/[^/]+/callback$
-	log_skip @oauth_callback
+	# Two kinds of URL carry a live credential: the OAuth callback (an authorization code in the
+	# query) and an invite link (the token is the path). Caddy keeps no access log unless a `log`
+	# directive is added, so today this skips nothing — it is here so that adding one later does not
+	# start recording credentials. The app redacts the same paths from its own request log.
+	@secret_urls path_regexp ^/portfolio/oauth/[^/]+/callback$|^/invite/
+	log_skip @secret_urls
 
 	# retry a failed dial for up to 20s so a request during the app's cold-start store-warm
 	# waits and succeeds instead of returning a 502 (the app binds :8000 only after warming).
