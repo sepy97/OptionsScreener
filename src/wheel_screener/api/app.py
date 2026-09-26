@@ -37,7 +37,7 @@ from wheel_screener.api.deps import (
     get_settings,
 )
 from wheel_screener.api.expiries import DTE_HORIZON_DAYS, expiry_ladder, next_monthly
-from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
+from wheel_screener.api.jobs import SOURCE_REFRESH, JobBusyError, JobRunner, JobStore
 from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
 from wheel_screener.api.sessions import SessionStore
@@ -750,7 +750,12 @@ def cancel_screen(
 @app.get("/")
 def screener_page(request: Request, runner: JobRunner = Depends(get_job_runner)):
     """The Screener tab (home): the run form + the latest precomputed results."""
-    latest = runner.store.latest_done()
+    # The precomputed screen, not whatever ran last: the Run button is open to every visitor, and
+    # one of them trying a 3-day, 0.50-delta screen should not become what everyone else sees as
+    # "the latest results". Falls back to any finished run only when no refresh has ever been
+    # stored — a fresh install, or local development — so the tab is never needlessly empty.
+    latest = (runner.store.latest_done(source=SOURCE_REFRESH)
+              or runner.store.latest_done())
     age, stale = _humanize_age(latest["created_at"]) if latest else ("", False)
     return templates.TemplateResponse(
         request, "screener.html",
@@ -963,8 +968,14 @@ def _position_key(p) -> tuple:
 
 
 def _latest_candidates(runner: JobRunner) -> tuple[list, dict | None]:
-    """The most recent screen's candidates, for the fallback and the suggestions."""
-    latest = runner.store.latest_done()
+    """The latest PRECOMPUTED screen's candidates, for the fallback and the suggestions.
+
+    Only a refresh run counts, with no fallback. The Run button is open to any visitor, so "the
+    most recent screen" could be a stranger's odd criteria — and this list supplies the other
+    tickers the Close? panel suggests and the median a ticker without a pick of its own is judged
+    against. With no refresh stored the column says so ("no screen yet") rather than borrowing one.
+    """
+    latest = runner.store.latest_done(source=SOURCE_REFRESH)
     rows = (latest or {}).get("result") or []
     out = []
     for row in rows:

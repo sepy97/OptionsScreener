@@ -11,8 +11,8 @@ codebase* assumes one person, and in what order to take it apart. It also record
 against the vendors rather than assumed.
 
 **Status:** **Phase 0 shipped as v3.0.0** (the password covers /portfolio only — §1). **Phase 2
-mostly built** — the per-user seam and the caches (§2.1); what is left of it needs the user ids
-Phase 1 brings. Phases 1, 3 and 4 not started. Supersedes the line in
+mostly shipped** — the per-user seam and the caches in v3.1.0 (§2.2), the canonical screen in
+v3.2.0 (§8); what is left of it needs the user ids Phase 1 brings. Phases 1, 3 and 4 not started. Supersedes the line in
 [`PORTFOLIO_PLAN.md`](PORTFOLIO_PLAN.md) §1b — "Multi-user is explicitly out of scope: one
 operator, one session at a time, no user table."
 
@@ -402,11 +402,27 @@ two-session leak test. **Waiting on Phase 1's user ids:**
   correct with one credential and signs everybody out with more than one.
 * Ownership and a TTL on job results (#64).
 
-**Waiting on a jobs-DB migration (#78):** the scheduled screen made canonical for the Close?
-column. `latest_done()` is global, and telling a cron run from an ad-hoc one needs a `source`
-column — which `CREATE TABLE IF NOT EXISTS` will not add to the table already on the droplet. Worth
-doing on its own, because it is wrong for the single user too: a screen you run by hand with an odd
-DTE window silently becomes what every open put is compared against.
+**The precomputed screen made canonical — done, v3.2.0.** It turned out to be a present-day bug
+rather than a multi-user one, and a public one: the Run button is open to every visitor on the
+public screener, so the newest screen could be a stranger's, with any DTE window and delta — and it
+became both the dashboard everyone saw and the list the Close? column drew its suggestions and
+fallback median from.
+
+Each run now records who started it (`refresh` for the refresh-screen command, `web` for the Run
+button). The Close? column reads only refresh screens, with no fallback — no screen is better than
+someone else's. The dashboard prefers them and falls back to any finished run only when no refresh
+has ever been stored, so a fresh install or local development is not left empty.
+
+The column needed the migration mechanism #78 asked for: `PRAGMA user_version` and an append-only
+list of changes, applied under `BEGIN IMMEDIATE` so the web app and a cron'd screen opening the
+file in the same second cannot both try to add the column. Rows from before are left with an
+unknown origin rather than guessed at, which means **after the deploy there is no refresh screen
+until the next scheduled one runs** — the Close? column shows no suggestions until then. The column
+is nullable, so rolling back to the previous release still works against the migrated file.
+
+Found along the way and left alone: several stores opening a *brand-new* database at once collide
+on switching it to WAL mode. Only a first-ever start can hit it — the mode is stored in the file —
+so the droplet cannot.
 
 **Phase 3 — SnapTrade.** `adapters/snaptrade/` behind `BrokerageAccountProvider`, the encrypted
 `broker_links` table, connect/reconnect/disconnect routes, the `CONNECTION_BROKEN` webhook.
