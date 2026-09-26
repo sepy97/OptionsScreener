@@ -15,6 +15,7 @@ last-resort handler won't double-emit.
 from __future__ import annotations
 
 import logging
+import re
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
@@ -65,3 +66,43 @@ def _file_handler(settings: LogSettings) -> logging.Handler | None:
         )
     )
     return handler
+
+
+# --- secrets in request lines ----------------------------------------------------------------
+# uvicorn's access log records every request's full path, query string included. Two kinds of URL
+# here carry a live credential: an invite link (the token IS the path, a bearer credential until
+# used) and the broker's OAuth callback (a one-time authorization code in the query). Both are
+# redacted rather than the log turned off, because it is the only request log the app keeps.
+_SECRET_PATHS = (
+    # (pattern, replacement) applied to the path as logged
+    (re.compile(r"^(/invite/)[^/?#]+"), r"\1<redacted>"),
+    (re.compile(r"^(/portfolio/oauth/[^/?#]+/callback)\?.*$"), r"\1?<redacted>"),
+)
+
+
+def redact_path(path: str) -> str:
+    for pattern, replacement in _SECRET_PATHS:
+        path = pattern.sub(replacement, path)
+    return path
+
+
+class RedactSecretsFilter(logging.Filter):
+    """Rewrites uvicorn access-log records so no credential in a URL reaches the log.
+
+    uvicorn passes the path as the third positional argument —
+    ``(client_addr, method, full_path, http_version, status_code)`` — and formats it late, so the
+    argument is rewritten before any handler sees it.
+    """
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) >= 3 and isinstance(args[2], str):
+            record.args = (*args[:2], redact_path(args[2]), *args[3:])
+        return True
+
+
+def redact_access_log() -> None:
+    """Install the filter on uvicorn's access logger. Idempotent."""
+    access = logging.getLogger("uvicorn.access")
+    if not any(isinstance(f, RedactSecretsFilter) for f in access.filters):
+        access.addFilter(RedactSecretsFilter())

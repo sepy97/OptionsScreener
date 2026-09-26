@@ -35,6 +35,12 @@ services:
       # deploy cannot inherit the default.
       SCHWAB__CALLBACK_URL: https://steadybull.net/portfolio/oauth/schwab/callback
       PORTFOLIO__SESSIONS_DB_PATH: /data/sessions.sqlite
+      # Passkeys are bound to the hostname and the browser reports the exact origin on every
+      # sign-in; both are checked. The defaults are for local development (localhost), so they are
+      # set here rather than in .env — a deploy that inherited them would refuse every passkey.
+      # These also make `wheel-screener invite` print links for the right site.
+      PASSKEYS__RP_ID: steadybull.net
+      PASSKEYS__ORIGIN: https://steadybull.net
       SCHWAB__TOKEN_PATH: /data/links/schwab_token.json
     volumes:
       # host ./data holds the slim store (fundamentals/), jobs DB, logs.

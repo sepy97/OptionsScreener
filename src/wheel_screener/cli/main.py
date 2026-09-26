@@ -460,6 +460,54 @@ def refresh_screen(
     typer.echo(f"Stored screen ({job['status']}, {n} candidates) — the dashboard now shows it.")
 
 
+@app.command("invite")
+def invite(
+    name: str = typer.Argument(..., help="Who it is for — shown on their Portfolio tab."),
+    admin: bool = typer.Option(False, help="May link the deployment's brokerage account."),
+    for_user: str = typer.Option(
+        None, "--for-user",
+        help="An existing account's id (see `users`): adds a passkey to it instead of creating "
+             "one. This is how a lost phone is recovered, or a second device added.",
+    ),
+) -> None:
+    """Print a one-time invite link. Opening it and saving a passkey creates the account."""
+    from datetime import timedelta
+
+    from wheel_screener.api.users import UserStore
+
+    settings = Settings()
+    store = UserStore(settings.portfolio.sessions_db_path)
+    try:
+        token = store.create_invite(
+            name, is_admin=admin, for_user=for_user,
+            ttl=timedelta(hours=settings.passkeys.invite_hours),
+        )
+    except ValueError as e:
+        typer.echo(f"error: {e}. Run `wheel-screener users` for the ids.")
+        raise typer.Exit(1) from None
+    what = "adds a passkey to that account" if for_user else (
+        "creates an ADMIN account" if admin else "creates an account")
+    typer.echo(f"{settings.passkeys.origin.rstrip('/')}/invite/{token}")
+    typer.echo(f"  single use, {what}, expires in {settings.passkeys.invite_hours}h.")
+    typer.echo("  Send it privately: until it is used, whoever holds it can claim it.")
+
+
+@app.command("users")
+def users() -> None:
+    """List the accounts that can sign in, with how many passkeys each holds."""
+    from wheel_screener.api.users import UserStore
+
+    store = UserStore(Settings().portfolio.sessions_db_path)
+    people = store.users()
+    if not people:
+        typer.echo("No accounts yet. `wheel-screener invite NAME --admin` makes the first.")
+        return
+    for u in people:
+        keys = len(store.credentials_for(u.id))
+        role = "admin" if u.is_admin else "user "
+        typer.echo(f"  {u.id}  {role}  {keys} passkey{'s' if keys != 1 else ''}  {u.name}")
+
+
 @app.command("auth-login")
 def auth_login() -> None:
     """Run the Schwab OAuth login in your browser (refresh token expires every 7 days)."""

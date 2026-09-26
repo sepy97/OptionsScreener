@@ -59,6 +59,10 @@ def is_expensive(method: str, path: str) -> bool:
         return True  # each one reaches the broker; also a brake on redirect abuse
     if method == "POST" and path == "/portfolio/swaps/refresh":
         return True  # re-prices every open put: a chain pull each, plus the broker
+    if method == "POST" and path.startswith("/auth/"):
+        return True  # every passkey step writes a challenge or a session; a brake on hammering
+    if path.startswith("/invite/"):
+        return True  # an invite token is a bearer credential — don't let anyone guess at them fast
     return method == "GET" and path == "/search/export.csv"  # a fresh search behind a download
 
 

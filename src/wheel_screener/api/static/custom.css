@@ -496,3 +496,12 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 .swap-panel > p, .swap-panel figure { max-width: 72rem; }
 .swap-table { table-layout: auto; }
 .swap-table th:first-child, .swap-table td:first-child { width: 18%; text-align: left; }
+
+/* passkey sign-in: the status line under the button turns into a readable error */
+#passkey-status:empty { display: none; }
+#passkey-status.passkey-error { color: var(--pico-del-color, #b71c1c); }
+.signed-in-as { display: flex; gap: 0.75rem; align-items: center; justify-content: flex-end;
+  margin-bottom: 0.5rem; }
+.signed-in-as form { margin: 0; }
+.signed-in-as button { width: auto; margin: 0; padding: 0.25rem 0.75rem; }
+

@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block scripts %}<script src="/static/passkey.js" defer></script>{% endblock %}
+{% block content %}
+  <article>
+    <h2>Sign in</h2>
+    <p class="tab-lede">The Portfolio is private. Sign in with the passkey you saved when you
+      accepted your invite &mdash; your browser will offer it, and Face ID, Touch ID or your
+      device PIN unlocks it.</p>
+    <button type="button" class="run-btn" data-passkey="login" data-next="{{ next }}">
+      Sign in with a passkey</button>
+    <p id="passkey-status" class="detail-note" role="status" aria-live="polite"></p>
+    <p class="detail-note">No passkey on this device? Sign in on the device that has one, or ask
+      for a new invite to add this device to your account.</p>
+  </article>
+{% endblock %}
