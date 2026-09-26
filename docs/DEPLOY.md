@@ -237,20 +237,64 @@ Schwab is OAuth and is refreshed with `auth-login`.
 
 ## Rollback & backups
 
-- **Rollback:** `git checkout v<previous>` and `docker compose up -d --build`.
-- **Back up:** `data/jobs.sqlite` and `data/fundamentals/overlay_metrics.csv` — the only state
-  that is neither re-derivable nor re-authorisable. Droplet snapshots cover the rest.
+- **Rollback:** `git checkout v<previous>` and `docker compose up -d --build` — or run the Deploy
+  workflow by hand against an older tag.
 
-**Do not back up the broker token or the session store**, and this is a decision rather than an
-omission:
+### What is backed up, and how
+
+`wheel-screener backup` runs nightly from cron (04:30 New York) and writes a dated folder under
+`/data/backups`, keeping the newest 14 (`BACKUP_KEEP`):
+
+| File | What it holds | Why it is copied |
+|---|---|---|
+| `accounts.sqlite` | who can sign in, their passkeys' **public** keys, who owns the broker link | Losing it loses every account: people would need new invites, and their old passkeys would be orphaned on their phones |
+| `jobs.sqlite` | past screens, including the precomputed ones | Screens are rebuilt four times a day, but the history is not |
+| `overlay_metrics.csv` | fundamentals refreshed after earnings | The bulk store does not have them |
+
+Each copy is taken with SQLite's online backup from a read-only connection, so it is consistent
+while the app is writing and cannot disturb it; each is integrity-checked; a backup is assembled
+under a temporary name and renamed only when complete.
+
+**What the accounts copy deliberately leaves out:** live sessions, invite links, sign-in
+challenges and OAuth state. Each is a bearer credential or worthless in minutes, and a backup
+should not be a way into the site. The rule is a list of tables to *keep*, so a table added later
+is left out until someone decides it belongs — and the file is rebuilt after the rest are dropped,
+because SQLite otherwise leaves deleted rows in the file as leftovers (a test searches the backup's
+bytes for session tokens). The cost: after a restore everyone signs in again, which is one passkey
+tap.
+
+**Still not backed up, on purpose:**
 
 | File | Why not |
 |---|---|
 | `data/links/schwab_token.json` | It expires in 7 days, so a restored copy is dead on arrival more often than not — and it is **trading-capable**. Copying it into a backup that leaves the box widens the blast radius of a credential that a single click replaces. |
-| `data/sessions.sqlite` | Browser sessions. Losing it costs one sign-in, and it is capped to the token's life anyway. |
+| `data/fundamentals/` (except the overlay) | Rebuilt by the refresh job. |
 
-Restoring either is slower and riskier than clicking *Sign in with Schwab*, which is the recovery
-procedure for both.
+### Getting it off the droplet — needs doing once, by hand
 
-The fundamentals store under `data/fundamentals/` is rebuilt by the refresh job and does not need
-backing up either; only `overlay_metrics.csv` in it is hand-maintained.
+`/data/backups` is on the droplet's own disk. That protects against a bad migration or a corrupt
+file, **not against losing the droplet**. For that, turn on DigitalOcean's backups:
+*Droplets → steadybull → Backups → Enable* (daily or weekly; ~20–30% of the droplet's price). They
+image the whole disk, and the nightly copies are what make that image safe to restore from — an
+image taken mid-write can catch a live SQLite file in an inconsistent state, while the copies in
+`/data/backups` never are.
+
+After a deploy that changes `deploy/crontab`, reinstall it: `crontab /srv/steadybull/deploy/crontab`.
+
+### Restoring
+
+```bash
+cd /srv/steadybull
+docker compose stop app
+B=data/backups/<the folder>                              # e.g. 2026-09-27T083000
+sudo cp $B/accounts.sqlite data/sessions.sqlite && sudo rm -f data/sessions.sqlite-wal data/sessions.sqlite-shm
+sudo cp $B/jobs.sqlite     data/jobs.sqlite     && sudo rm -f data/jobs.sqlite-wal data/jobs.sqlite-shm
+sudo cp $B/overlay_metrics.csv data/fundamentals/
+sudo chown -R 10001:10001 data
+docker compose start app
+```
+
+Remove the `-wal`/`-shm` files: they belong to the database being replaced, and SQLite would try to
+apply them to the restored one. The tables the backup left out are recreated empty on start.
+Everyone then signs in with their passkey as usual; if the Schwab token was lost too, the owner
+reconnects it.

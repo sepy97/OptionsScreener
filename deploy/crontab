@@ -27,3 +27,8 @@ PATH=/usr/local/bin:/usr/bin:/bin
 40 9 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen >> $HOME/steadybull-cron.log 2>&1
 0 12,14 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen >> $HOME/steadybull-cron.log 2>&1
 35 15 * * 1-5  cd /srv/steadybull && docker compose exec -T app wheel-screener refresh-screen >> $HOME/steadybull-cron.log 2>&1
+
+# nightly backup of what cannot be rebuilt: accounts (no sessions or invites), screens, the overlay.
+# Consistent while the app runs; keeps 14. Lands on the volume at /data/backups, where DigitalOcean's
+# droplet backups pick it up — the copy that survives losing the droplet (docs/DEPLOY.md).
+30 4 * * *  cd /srv/steadybull && docker compose exec -T app wheel-screener backup >> $HOME/steadybull-cron.log 2>&1
