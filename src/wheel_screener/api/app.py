@@ -31,18 +31,21 @@ from pydantic import BaseModel, ValidationError
 
 from wheel_screener import __version__
 from wheel_screener.adapters.schwab.link import SchwabOAuthLink
+from wheel_screener.adapters.snaptrade.client import SnapTradeClient
 from wheel_screener.api.deps import (
     current_session,
     get_job_runner,
     get_portfolio,
     get_service,
     get_settings,
+    snaptrade_user,
 )
 from wheel_screener.api.expiries import DTE_HORIZON_DAYS, expiry_ladder, next_monthly
 from wheel_screener.api.jobs import SOURCE_REFRESH, JobBusyError, JobRunner, JobStore
 from wheel_screener.api.passkeys import PasskeyError, Passkeys
 from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
+from wheel_screener.api.secretbox import SecretBox
 from wheel_screener.api.usercache import PerUserCache
 from wheel_screener.api.users import UserStore
 from wheel_screener.composition import build_probes, build_service
@@ -177,6 +180,16 @@ async def lifespan(app: FastAPI):
         app.state.users, settings.passkeys.rp_id, settings.passkeys.rp_name,
         settings.passkeys.origin,
     )
+    # SnapTrade: how people link their own brokerages. Off unless all three keys are set, and
+    # then the Portfolio simply has no "Link a brokerage" button. A malformed encryption key
+    # fails here, at startup, rather than at the first person's click.
+    app.state.snaptrade = app.state.secretbox = None
+    if settings.snaptrade.configured:
+        app.state.secretbox = SecretBox(settings.snaptrade.secret_key.get_secret_value())
+        app.state.snaptrade = SnapTradeClient(
+            settings.snaptrade.client_id, settings.snaptrade.consumer_key.get_secret_value(),
+            timeout=settings.snaptrade.timeout_seconds,
+        )
     app.state.links = {SchwabOAuthLink(settings.schwab).broker: SchwabOAuthLink(settings.schwab)}
     # let pipeline INFO logs through so background jobs can capture stage progress
     logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
@@ -1153,7 +1166,9 @@ def portfolio_page(
     links = getattr(request.app.state, "links", {}) or {}
     mine = {name: link.status() for name, link in links.items()
             if users.link_owner(name) == session.user.id}
-    connected = any(s.connected for s in mine.values())
+    brokerages, brokerages_error = _snaptrade_connections(request)
+    connected = any(s.connected for s in mine.values()) or any(
+        not c["disabled"] for c in brokerages)
     accounts, error = _cached_balances(request, portfolio) if connected else ([], None)
     swaps = _stamp_swaps(request, portfolio, runner, accounts) if accounts else {}
     configured = {name: link.status().configured for name, link in links.items()}
@@ -1169,8 +1184,137 @@ def portfolio_page(
             "accounts": accounts,
             "balances_error": error,
             "swaps": swaps,
+            "snaptrade_on": request.app.state.snaptrade is not None,
+            "brokerages": brokerages,
+            "brokerages_error": brokerages_error,
         },
     )
+
+
+# --- Brokerages linked through SnapTrade --------------------------------------------------------
+# The person picks their broker and signs in AT the broker, inside SnapTrade's connection portal;
+# this app never sees a broker password. Everything here acts as the signed-in person only: their
+# SnapTrade identity comes from the session (deps.snaptrade_user), never from the request.
+
+
+def _snaptrade_connections(request: Request) -> tuple[list[dict], str | None]:
+    """This person's SnapTrade connections, simplified for the page, and any error reading them.
+
+    Cached per person with the balances, because a page load should not spend a SnapTrade call
+    the balances just spent. Never raises: a list that cannot be read is a message on the page.
+    """
+    user = snaptrade_user(request)
+    if user is None:
+        return [], None
+    cache = _balances_cache(request)
+    who = _cache_user(request)
+    hit = cache.get(who, "snaptrade_connections")
+    if hit is not None:
+        return hit, None
+    try:
+        raw = request.app.state.snaptrade.connections(user)
+    except ProviderError as e:
+        return [], str(e)
+    rows = [{
+        "id": str(c.get("id") or ""),
+        "name": str((c.get("brokerage") or {}).get("display_name")
+                     or (c.get("brokerage") or {}).get("name") or c.get("name") or "Brokerage"),
+        "disabled": bool(c.get("disabled")),
+    } for c in raw if c.get("id")]
+    cache.put(who, "snaptrade_connections", rows)
+    return rows, None
+
+
+def _forget_accounts(request: Request) -> None:
+    """After a link changes, nothing cached from before it may be shown after it."""
+    who = _cache_user(request)
+    _balances_cache(request).clear(who)
+    _swap_cache(request).clear(who)
+
+
+def _no_snaptrade(request: Request):
+    return templates.TemplateResponse(
+        request, "_error.html",
+        {"message": "Linking a brokerage is not available on this site yet."}, status_code=404,
+    )
+
+
+def _return_url(request: Request) -> str:
+    return f"{request.app.state.settings.passkeys.origin.rstrip('/')}/portfolio/brokerages/return"
+
+
+@app.post("/portfolio/brokerages/link")
+def brokerages_link(request: Request):
+    """Register this person with SnapTrade on their first link, then send them to the portal."""
+    client, box = request.app.state.snaptrade, request.app.state.secretbox
+    if client is None:
+        return _no_snaptrade(request)
+    user = snaptrade_user(request)
+    try:
+        if user is None:
+            me = current_session(request).user
+            secret = client.register_user(me.id)  # our internal id — never an email
+            request.app.state.users.set_snaptrade_secret(me.id, box.seal(secret))
+            user = snaptrade_user(request)
+        url = client.portal_url(user, redirect=_return_url(request))
+    except ProviderError as e:
+        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
+    return RedirectResponse(url, status_code=303)
+
+
+@app.get("/portfolio/brokerages/return")
+def brokerages_return(request: Request):
+    """Where SnapTrade's portal sends the person back. The connection lives at SnapTrade, so there
+    is nothing to exchange — only stale numbers to forget."""
+    _forget_accounts(request)
+    return RedirectResponse("/portfolio", status_code=303)
+
+
+def _own_connection(request: Request, connection_id: str) -> bool:
+    """Whether this connection is one of THIS person's. SnapTrade would refuse another person's
+    id anyway, since every call carries the caller's own secret; checking here as well turns that
+    into a clear refusal rather than an upstream error, and costs one call on a rare action."""
+    user = snaptrade_user(request)
+    if user is None or not connection_id:
+        return False
+    try:
+        return any(str(c.get("id")) == connection_id
+                   for c in request.app.state.snaptrade.connections(user))
+    except ProviderError:
+        return False
+
+
+@app.post("/portfolio/brokerages/reconnect")
+def brokerages_reconnect(request: Request, connection_id: str = Form("")):
+    """Repair a connection the broker has cut off, in place — same account, same history."""
+    if request.app.state.snaptrade is None:
+        return _no_snaptrade(request)
+    if not _own_connection(request, connection_id):
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "There is no such brokerage link."},
+            status_code=404)
+    try:
+        url = request.app.state.snaptrade.portal_url(
+            snaptrade_user(request), redirect=_return_url(request), reconnect=connection_id)
+    except ProviderError as e:
+        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
+    return RedirectResponse(url, status_code=303)
+
+
+@app.post("/portfolio/brokerages/remove")
+def brokerages_remove(request: Request, connection_id: str = Form("")):
+    if request.app.state.snaptrade is None:
+        return _no_snaptrade(request)
+    if not _own_connection(request, connection_id):
+        return templates.TemplateResponse(
+            request, "_error.html", {"message": "There is no such brokerage link."},
+            status_code=404)
+    try:
+        request.app.state.snaptrade.remove_connection(snaptrade_user(request), connection_id)
+    except ProviderError as e:
+        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
+    _forget_accounts(request)
+    return RedirectResponse("/portfolio", status_code=303)
 
 
 def _admin_only(

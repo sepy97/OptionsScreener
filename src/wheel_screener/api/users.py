@@ -66,6 +66,11 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS broker_links ("
     " broker TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),"
     " created_at TEXT NOT NULL)",
+    # A person's SnapTrade identity: registered under their user id, with the secret SnapTrade
+    # issued, ENCRYPTED (api.secretbox) — the key is in the environment, not in this file.
+    "CREATE TABLE IF NOT EXISTS snaptrade_users ("
+    " user_id TEXT PRIMARY KEY REFERENCES users(id), secret BLOB NOT NULL,"
+    " created_at TEXT NOT NULL)",
 )
 
 
@@ -398,3 +403,21 @@ class UserStore:
     def clear_link_owner(self, broker: str) -> None:
         with self._connect() as con:
             con.execute("DELETE FROM broker_links WHERE broker = ?", (broker,))
+
+    # --- SnapTrade identities -------------------------------------------------------------
+
+    def snaptrade_secret(self, user_id: str) -> bytes | None:
+        """The person's SEALED SnapTrade secret, or None if they have never linked through it."""
+        with self._connect() as con:
+            row = con.execute(
+                "SELECT secret FROM snaptrade_users WHERE user_id = ?", (user_id,)
+            ).fetchone()
+        return bytes(row[0]) if row else None
+
+    def set_snaptrade_secret(self, user_id: str, sealed: bytes) -> None:
+        with self._connect() as con:
+            con.execute(
+                "INSERT INTO snaptrade_users (user_id, secret, created_at) VALUES (?, ?, ?)"
+                " ON CONFLICT(user_id) DO UPDATE SET secret = excluded.secret",
+                (user_id, sealed, _now().isoformat()),
+            )

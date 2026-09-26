@@ -519,3 +519,13 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 .invite-table td:last-child { text-align: right; }
 .invite-table td:nth-child(2), .invite-table th:nth-child(2) { text-align: left; }
 .invite-table button { width: auto; margin: 0; padding: 0.2rem 0.6rem; font-size: 0.8rem; }
+
+/* the brokerages behind the accounts */
+.brokerages-head { margin-top: 1.5rem; }
+.brokerage-list { list-style: none; padding: 0; margin: 0 0 1rem; }
+.brokerage-list li { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center;
+  justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid var(--border); }
+.brokerage-list form, .brokerage-actions form { margin: 0; }
+.brokerage-actions { display: flex; gap: 0.5rem; }
+.brokerage-list button { width: auto; margin: 0; padding: 0.25rem 0.75rem; font-size: 0.85rem; }
+

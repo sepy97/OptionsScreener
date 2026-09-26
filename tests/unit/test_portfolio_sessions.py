@@ -240,7 +240,7 @@ def test_a_stranger_is_sent_to_sign_in() -> None:
         assert r.status_code == 303 and r.headers["location"] == "/login?next=/portfolio"
         body = c.get("/portfolio").text
         assert "Sign in with a passkey" in body
-        assert "Connect Schwab" not in body and "Connected" not in body
+        assert "Connect Schwab" not in body and "Disconnect Schwab" not in body
     finally:
         c.__exit__(None, None, None)
 
@@ -269,7 +269,7 @@ def test_an_admin_links_the_broker_and_it_is_recorded_as_theirs() -> None:
         assert "Connect Schwab" in c.get("/portfolio").text
         _link_through_the_broker(c)
         assert link.completed == 1 and app.state.users.link_owner("schwab") == sam.id
-        assert "Connected" in c.get("/portfolio").text
+        assert "Disconnect Schwab" in c.get("/portfolio").text
     finally:
         c.__exit__(None, None, None)
 
@@ -322,7 +322,7 @@ def test_a_friend_is_never_shown_the_owners_account(monkeypatch) -> None:
         _as(c, "Sam")  # the owner links Schwab…
         _as(c, "Alex", admin=False, owns_link=False)  # …then a friend signs in on this client
         body = c.get("/portfolio").text
-        assert "Connected" not in body and "Disconnect" not in body
+        assert "Disconnect Schwab" not in body and ">connected</span>" not in body
         assert "No brokerage account is linked to your sign-in" in body
         assert built and not any(built), "the friend's request was built with the credential"
 
@@ -358,7 +358,7 @@ def test_disconnecting_unlinks_the_broker_but_keeps_you_signed_in() -> None:
     c = _client(link)
     try:
         _sign_in(c)
-        assert "Connected" in c.get("/portfolio").text
+        assert "Disconnect Schwab" in c.get("/portfolio").text
         c.post("/portfolio/oauth/schwab/disconnect", follow_redirects=False)
         assert link.revoked, "disconnect must delete the credential"
         assert app.state.users.link_owner("schwab") is None
