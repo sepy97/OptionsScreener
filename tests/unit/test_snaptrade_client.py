@@ -131,6 +131,7 @@ def test_positions_and_activities_come_out_of_their_envelopes(wire) -> None:
         "data_freshness": {"as_of": "2026-09-26T14:00:00Z"}})
     wire.replies[f"/accounts/{aid}/activities"] = (200, {"data": [], "pagination": {}})
     client = SnapTradeClient("C", "K")
-    assert client.positions(USER, aid)[0]["units"] == "1"
+    rows, as_of = client.positions(USER, aid)
+    assert rows[0]["units"] == "1" and as_of == "2026-09-26T14:00:00Z"
     assert client.activities(USER, aid, date(2026, 8, 1), date(2026, 9, 26)) == []
     assert wire.sent[1]["query"]["startDate"] == ["2026-08-01"]

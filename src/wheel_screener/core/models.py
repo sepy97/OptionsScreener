@@ -495,6 +495,23 @@ class Position(BaseModel):
         return f"{direction} {side}"
 
     @property
+    def expired(self) -> bool:
+        """Past its expiry date — still listed only because the broker has not processed it."""
+        return self.is_option and self.dte is not None and self.dte < 0
+
+    @property
+    def expired_worthless(self) -> bool:
+        """Expired, and out of the money at the last price seen — so nothing will be assigned.
+        Unknown price is NOT worthless: without it, assignment cannot be ruled out."""
+        if not self.expired or self.strike is None or self.underlying_price is None:
+            return False
+        if self.kind is PositionKind.SHORT_PUT:
+            return self.underlying_price >= self.strike
+        if self.kind is PositionKind.SHORT_CALL:
+            return self.underlying_price <= self.strike
+        return False
+
+    @property
     def is_option(self) -> bool:
         return self.kind in (
             PositionKind.SHORT_PUT, PositionKind.SHORT_CALL, PositionKind.LONG_OPTION
@@ -536,14 +553,26 @@ class BrokerageAccount(BaseModel):
     account_id: str
     display_name: str
     account_type: AccountType | None = None
+    # When the positions were fetched from the broker, if the source says. SnapTrade does, and for
+    # some brokers it lags — on a page that recommends closing positions, a put closed an hour ago
+    # still being listed is something the reader must be able to see. None: fetched just now.
+    as_of: datetime | None = None
     balances: AccountBalances = Field(default_factory=AccountBalances)
     positions: list[Position] = Field(default_factory=list)
 
     @property
     def committed_collateral(self) -> float:
-        """Cash already spoken for by open short puts."""
+        """Cash already spoken for by open short puts.
+
+        A put past its expiry that finished OUT of the money commits nothing: it expired
+        worthless, and the cash is free. Brokers keep such contracts on the books until they
+        process expirations — over a weekend, for a Friday expiry — and counting them read as
+        tens of thousands of dollars less capacity than the account really had. One that finished
+        IN the money, or whose price is unknown, stays committed: assignment is coming, and the
+        cash will go to the shares.
+        """
         return sum(p.collateral or 0.0 for p in self.positions
-                   if p.kind is PositionKind.SHORT_PUT)
+                   if p.kind is PositionKind.SHORT_PUT and not p.expired_worthless)
 
     @property
     def capacity(self) -> float | None:

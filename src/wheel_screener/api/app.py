@@ -415,6 +415,16 @@ def _signed(v: object, places: int = 0) -> str:
 
 
 templates.env.filters["money"] = _money
+
+
+def _ago(moment) -> str:
+    """"12m ago" for a datetime (or an ISO string), in the dashboard's own wording."""
+    if isinstance(moment, datetime):
+        moment = moment.isoformat()
+    return _humanize_age(moment)[0] if moment else ""
+
+
+templates.env.filters["ago"] = _ago
 templates.env.filters["signed"] = _signed
 
 

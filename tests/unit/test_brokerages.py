@@ -63,7 +63,7 @@ class FakeSnapTrade:
 
     def positions(self, user, account_id):
         self._check(user)
-        return []
+        return [], None
 
     def activities(self, user, account_id, start, end):
         self._check(user)

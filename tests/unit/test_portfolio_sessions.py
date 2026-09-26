@@ -2264,3 +2264,26 @@ def test_the_proxy_config_is_mounted_as_a_directory() -> None:
     compose = (pathlib.Path(__file__).parents[2] / "docker-compose.yml").read_text()
     assert "- ./deploy/caddy:/etc/caddy:ro" in compose
     assert "Caddyfile:/etc/caddy/Caddyfile" not in compose
+
+
+def test_an_expired_contract_says_expired_instead_of_a_negative_day_count() -> None:
+    from datetime import date as _date
+
+    from wheel_screener.core.models import OptionType, Position, PositionKind
+
+    account = _account()
+    account.positions = [Position(
+        symbol="LRCX  260925P00270000", underlying="LRCX", kind=PositionKind.SHORT_PUT,
+        asset_type="OPTION", option_type=OptionType.PUT, quantity=1, strike=270.0,
+        expiration=_date(2026, 9, 25), dte=-1, collateral=27_000.0, underlying_price=315.19,
+        market_value=-1.0,
+    )]
+    c = _signed_in(_AccountService([account]))
+    try:
+        body = c.get("/portfolio").text
+        assert ">expired</span>" in body and "expired worthless" in body
+        assert "<td>-1</td>" not in body
+        assert "cash free after $0.00" in body  # its $27,000 is free again
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
