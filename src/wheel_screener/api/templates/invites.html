@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block scripts %}<script src="/static/copy.js" defer></script>{% endblock %}
+{% block content %}
+  <article>
+    <p class="detail-note"><a href="/portfolio">&larr; Portfolio</a></p>
+    <h2>Invites</h2>
+    <p class="tab-lede">Everyone who signs in is invited. An invite is a one-time link: opening it
+      and saving a passkey creates the account. There are no passwords to hand out.</p>
+
+    <form class="invite-form" hx-post="/portfolio/invites" hx-target="#invites"
+          hx-swap="innerHTML" hx-on::after-request="if (event.detail.successful) this.reset()">
+      <label>Name
+        <input type="text" name="name" required maxlength="60" autocomplete="off"
+               placeholder="Who is it for?">
+      </label>
+      <label class="invite-admin">
+        <input type="checkbox" name="admin" value="1">
+        Admin &mdash; can connect the brokerage and invite others
+      </label>
+      <button type="submit" class="run-btn">Create invite link</button>
+    </form>
+
+    <div id="invites">{% include "_invites.html" %}</div>
+  </article>
+{% endblock %}

@@ -179,24 +179,24 @@ that, on its own 90-day clock — so the two expire independently.
 
 ### Signing in: passkeys and invites
 
-Nobody signs up; an admin invites them, from the droplet:
+Nobody signs up; an admin invites them. **The first admin has to come from the droplet** — a site
+where the first visitor becomes admin is a well-known way to lose one:
 
 ```bash
-docker compose exec -T app wheel-screener invite "Sam" --admin   # the first account: an admin
-docker compose exec -T app wheel-screener invite "Alex"          # anyone else
-docker compose exec -T app wheel-screener users                  # who exists, and their ids
+docker compose exec -T app wheel-screener invite "Sam" --admin
 ```
 
-Each prints a single-use link valid for 72 hours (`PASSKEYS__INVITE_HOURS`). Opening it and
-pressing *Save a passkey* creates the account and signs the person in; there is no password
-anywhere. Send the link privately — until it is used, whoever holds it can claim it.
+After that, invites are made on the site: **Portfolio → Invite people** (admins only). The page
+makes a link and shows it once with a Copy button, lists invites not yet used (with Cancel), and
+lists everyone with a *New passkey link* button. The CLI does the same things (`invite`, `invite
+--for-user <id>`, `users`) if the site is ever unreachable.
 
-**A lost device, or a second one:** invite the same account again, and the link adds a passkey to
-it instead of creating a new one. Old passkeys keep working.
+A link works once, for 72 hours (`PASSKEYS__INVITE_HOURS`). Opening it and pressing *Save a
+passkey* creates the account and signs the person in; there is no password anywhere. Send it
+privately — until it is used, whoever holds it can claim it.
 
-```bash
-docker compose exec -T app wheel-screener invite "Sam" --for-user <id from `users`>
-```
+**A lost device, or a second one:** *New passkey link* on that person's row makes a link that adds
+a passkey to their account instead of creating one. Old passkeys keep working.
 
 Only admins can connect a broker, because there is still one Schwab token per deployment: anyone
 else linking would replace the owner's. A signed-in non-admin sees no account at all — the token
@@ -207,14 +207,17 @@ passkey is bound to that hostname, so it will not work on the droplet's IP or an
 
 #### First deploy of passkeys (v3.3.0)
 
-1. Deploy. The password on `/portfolio` (`AUTH__SCOPE=portfolio`) stays on for now — it is a second
-   lock while the first one is new.
-2. `wheel-screener invite "<you>" --admin` in the container, and open the link.
-3. Save a passkey. You land on the Portfolio (after the password prompt).
+The password that v3.0.0 put in front of `/portfolio` is switched off in the same release: the
+passkey sign-in page is the only way in. (Compose blanks `AUTH__PASSWORD`, since `.env` still has
+one.) Until step 2, **nobody can reach the Portfolio**, you included.
+
+1. Deploy.
+2. `docker compose exec -T app wheel-screener invite "<you>" --admin`, and open the link.
+3. Save a passkey. You land on the Portfolio.
 4. **Reconnect Schwab once.** The token on disk has no recorded owner — it predates owners — so
    the tab offers *Connect Schwab* rather than guessing it is yours.
-5. Once signing in has worked from each device you use, remove the password: drop `AUTH__SCOPE`
-   and set `AUTH__REQUIRED: "false"` / `AUTH__PASSWORD: ""` in compose, and release.
+5. Make a *New passkey link* for yourself on **Invite people** and open it on your other devices,
+   unless your passkey already syncs to them through iCloud Keychain or Google Password Manager.
 
 Rolling back to v3.2.0 is safe: this release only adds tables. The old release finds its own
 session table untouched and goes back to signing in with Schwab.

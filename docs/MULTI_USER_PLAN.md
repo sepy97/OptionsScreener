@@ -22,7 +22,7 @@ operator, one session at a time, no user table."
 | Phase 0 posture | **decided and built: gate /portfolio only, screener stays public** (§1) |
 | Login | **built: passkeys + invite links** (§8, Phase 1) |
 | Lost device | an admin re-invites the same account; a passkey is added, the old ones keep working |
-| Who creates invites | the CLI, in the container — no admin web page yet |
+| Who creates invites | **admins, on the Invites page**; the first admin from the CLI |
 | Who may link a broker | admins only, while there is one Schwab token per deployment |
 | Broker linking | SnapTrade, keeping the direct Schwab adapter for the owner (§3) |
 | Database | SQLite, with one choke point and a two-user leak test in place of row-level security (§5) |
@@ -430,9 +430,20 @@ How it was verified:
 * The new dependencies install from prebuilt Linux wheels for the image's Python 3.12, so the
   Docker build has nothing to compile.
 
-**Still to do in Phase 1:** remove the password on `/portfolio` once passkey sign-in has been
-confirmed in production (step 5 of the runbook), and an admin page for invites if the CLI becomes
-tiresome.
+**Added on review, in the same release:**
+
+* **An Invites page** (Portfolio → *Invite people*, admins only): make a link, shown once with a
+  Copy button; cancel ones not yet used; a *New passkey link* per person for a lost or second
+  device. Pending invites are listed and cancelled by a separate non-secret reference, so reloading
+  the page never prints a live link again. The first admin still comes from the CLI.
+* **The password on `/portfolio` is gone.** It was the browser's grey pop-up, and it was never a
+  way in if passkeys failed — only a second lock on the same door. Compose blanks it explicitly,
+  because `.env` still holds one.
+
+Both were run in headless Chrome as well: an admin makes an invite in the page, a visitor with no
+cookies opens it and saves a passkey, and lands as a member who sees no account, no invite link,
+and a refusal on the Invites page. Copy fell back to selecting the link there — headless Chrome
+refuses clipboard writes — so the fallback is verified and the normal path is not.
 
 **Phase 2 — the seam. Mostly built; see §2.2.** Done: `PortfolioService` per request,
 `ScreenerService` with no user-bound field, both caches partitioned by user and bounded, and the

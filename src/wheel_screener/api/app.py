@@ -1173,19 +1173,20 @@ def portfolio_page(
     )
 
 
-def _admin_only(request: Request):
-    """The rendered refusal for a non-admin, or None when this person may link a broker.
+def _admin_only(
+    request: Request, message: str = "Linking a brokerage is not available on your account yet."
+):
+    """The rendered refusal for a non-admin, or None when this person is an admin.
 
-    Only admins, because there is still one Schwab token per deployment: letting anyone else link
-    would overwrite the owner's, which is the slot problem v3.0.0 closed, reopened for friends.
+    Linking a broker is admin-only because there is still one Schwab token per deployment: letting
+    anyone else link would overwrite the owner's — the slot problem v3.0.0 closed, reopened for
+    friends. Inviting is admin-only because an invite is an account.
     """
     session = current_session(request)
     if session is not None and session.user.is_admin:
         return None
     return templates.TemplateResponse(
-        request, "_error.html",
-        {"message": "Linking a brokerage is not available on your account yet."},
-        status_code=403,
+        request, "_error.html", {"message": message}, status_code=403,
     )
 
 
@@ -1258,6 +1259,83 @@ def portfolio_disconnect(request: Request, broker: str, settings: Settings = Dep
     _balances_cache(request).clear(user)
     _swap_cache(request).clear(user)
     return RedirectResponse("/portfolio", status_code=303)
+
+
+# --- Invites: the admin page -------------------------------------------------------------------
+# Under /portfolio, so the session gate covers it; admins only on top of that. A new link is shown
+# exactly once, in the response that made it — the pending list shows each invite's non-secret
+# `ref`, so reloading the page never prints a live token again.
+
+
+def _invites_context(request: Request, created: dict | None = None, error: str | None = None):
+    users = request.app.state.users
+    people = [(u, len(users.credentials_for(u.id))) for u in users.users()]
+    names = {u.id: u.name for u, _ in people}
+    return {
+        "active_tab": "portfolio",
+        "user": current_session(request).user,
+        "pending": users.pending_invites(),
+        "people": people,
+        "names": names,
+        "created": created,
+        "error": error,
+    }
+
+
+@app.get("/portfolio/invites")
+def invites_page(request: Request):
+    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
+        return refused
+    return templates.TemplateResponse(request, "invites.html", _invites_context(request))
+
+
+@app.post("/portfolio/invites")
+def invites_create(
+    request: Request,
+    name: str = Form(""),
+    admin: str = Form(""),
+    for_user: str = Form(""),
+):
+    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
+        return refused
+    users = request.app.state.users
+    settings = request.app.state.settings
+    target = users.user(for_user) if for_user else None
+    if for_user and target is None:
+        return templates.TemplateResponse(
+            request, "_invites.html",
+            _invites_context(request, error="That account no longer exists."),
+        )
+    name = (target.name if target else name).strip()
+    if not name or len(name) > 60:
+        return templates.TemplateResponse(
+            request, "_invites.html",
+            _invites_context(request, error="Give the invite a name, up to 60 characters."),
+        )
+    token = users.create_invite(
+        name, is_admin=bool(admin) and target is None,
+        for_user=target.id if target else None,
+        ttl=timedelta(hours=settings.passkeys.invite_hours),
+        created_by=current_session(request).user.id,
+    )
+    created = {
+        "name": name,
+        "link": f"{settings.passkeys.origin.rstrip('/')}/invite/{token}",
+        "for_user": target is not None,
+        "admin": bool(admin) and target is None,
+        "hours": settings.passkeys.invite_hours,
+    }
+    return templates.TemplateResponse(
+        request, "_invites.html", _invites_context(request, created=created)
+    )
+
+
+@app.post("/portfolio/invites/cancel")
+def invites_cancel(request: Request, ref: str = Form("")):
+    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
+        return refused
+    request.app.state.users.cancel_invite(ref)
+    return templates.TemplateResponse(request, "_invites.html", _invites_context(request))
 
 
 # --- Signing in: passkeys --------------------------------------------------------------------

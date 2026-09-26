@@ -48,9 +48,13 @@ _SCHEMA = (
     " public_key BLOB NOT NULL, sign_count INTEGER NOT NULL,"
     " transports TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, last_used_at TEXT)",
     "CREATE INDEX IF NOT EXISTS credentials_by_user ON credentials(user_id)",
+    # `ref` is a separate, non-secret handle: the admin page lists and cancels pending invites
+    # by it, so a live token is only ever shown once — when the invite is made.
     "CREATE TABLE IF NOT EXISTS invites ("
-    " token TEXT PRIMARY KEY, name TEXT NOT NULL, is_admin INTEGER NOT NULL DEFAULT 0,"
-    " for_user TEXT REFERENCES users(id), expires_at TEXT NOT NULL, used_at TEXT)",
+    " token TEXT PRIMARY KEY, ref TEXT NOT NULL UNIQUE, name TEXT NOT NULL,"
+    " is_admin INTEGER NOT NULL DEFAULT 0, for_user TEXT REFERENCES users(id),"
+    " created_by TEXT REFERENCES users(id), created_at TEXT NOT NULL,"
+    " expires_at TEXT NOT NULL, used_at TEXT)",
     "CREATE TABLE IF NOT EXISTS challenges ("
     " challenge TEXT PRIMARY KEY, purpose TEXT NOT NULL, data TEXT NOT NULL,"
     " expires_at TEXT NOT NULL)",
@@ -97,7 +101,8 @@ class Credential:
 
 @dataclass(frozen=True)
 class Invite:
-    token: str
+    token: str  # the secret in the link
+    ref: str  # a non-secret handle for listing and cancelling
     name: str
     is_admin: bool
     for_user: str | None  # set: adds a passkey to this existing account instead of creating one
@@ -213,18 +218,42 @@ class UserStore:
 
     def create_invite(
         self, name: str, *, is_admin: bool = False, for_user: str | None = None,
-        ttl: timedelta = timedelta(hours=72),
+        ttl: timedelta = timedelta(hours=72), created_by: str | None = None,
     ) -> str:
         if for_user is not None and self.user(for_user) is None:
             raise ValueError(f"no user {for_user!r}")
         token = secrets.token_urlsafe(_TOKEN_BYTES)
         with self._connect() as con:
             con.execute(
-                "INSERT INTO invites (token, name, is_admin, for_user, expires_at)"
-                " VALUES (?, ?, ?, ?, ?)",
-                (token, name, int(is_admin), for_user, (_now() + ttl).isoformat()),
+                "INSERT INTO invites (token, ref, name, is_admin, for_user, created_by,"
+                " created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (token, secrets.token_hex(8), name, int(is_admin), for_user, created_by,
+                 _now().isoformat(), (_now() + ttl).isoformat()),
             )
         return token
+
+    def pending_invites(self) -> list[Invite]:
+        """Invites that could still be used, newest first."""
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT token, ref, name, is_admin, for_user, expires_at FROM invites"
+                " WHERE used_at IS NULL AND expires_at > ? ORDER BY created_at DESC",
+                (_now().isoformat(),),
+            ).fetchall()
+        return [self._invite(r) for r in rows]
+
+    def cancel_invite(self, ref: str) -> bool:
+        """Make a pending invite unusable. True if there was one to cancel."""
+        with self._connect() as con:
+            cur = con.execute(
+                "DELETE FROM invites WHERE ref = ? AND used_at IS NULL", (ref,)
+            )
+            return cur.rowcount == 1
+
+    @staticmethod
+    def _invite(row) -> Invite:
+        return Invite(token=row[0], ref=row[1], name=row[2], is_admin=bool(row[3]),
+                      for_user=row[4], expires_at=datetime.fromisoformat(row[5]))
 
     def invite(self, token: str | None) -> Invite | None:
         """The invite, if it is still usable — unused and unexpired. Does not consume it: the
@@ -233,16 +262,13 @@ class UserStore:
             return None
         with self._connect() as con:
             row = con.execute(
-                "SELECT token, name, is_admin, for_user, expires_at FROM invites"
+                "SELECT token, ref, name, is_admin, for_user, expires_at FROM invites"
                 " WHERE token = ? AND used_at IS NULL", (token,),
             ).fetchone()
         if row is None:
             return None
-        expires = datetime.fromisoformat(row[4])
-        if expires <= _now():
-            return None
-        return Invite(token=row[0], name=row[1], is_admin=bool(row[2]), for_user=row[3],
-                      expires_at=expires)
+        invite = self._invite(row)
+        return invite if invite.expires_at > _now() else None
 
     def use_invite(self, token: str) -> bool:
         """Mark it used. True only for the ONE caller that got there first — the guard against the

@@ -13,14 +13,14 @@ services:
     environment:
       # production posture (override anything from .env)
       CHAIN_SOURCE: alpaca # key/secret, no OAuth — the prod chain source
-      # The SCREENER stays public; the PORTFOLIO needs the password. Scoping the gate rather than
-      # switching it on site-wide keeps the screener shareable while closing the broker slot: the
-      # OAuth connect route is what claims this deployment's single Schwab credential, so leaving
-      # it open let any visitor with a Schwab account of their own overwrite the stored token and
-      # end the owner's sessions. AUTH__PASSWORD comes from .env — with REQUIRED=true the app
-      # REFUSES TO START without it, so set it there BEFORE deploying this.
-      AUTH__REQUIRED: "true"
-      AUTH__SCOPE: portfolio
+      # No HTTP Basic-Auth password. The screener is public on purpose, and the Portfolio is
+      # behind a passkey sign-in (v3.3.0) — including the broker connect/callback routes, which
+      # v3.0.0 had to put a password in front of because they were the way in. The password gate
+      # still exists (AUTH__SCOPE) but is switched off: it was the browser's grey pop-up, and it
+      # offered no way in if passkeys ever failed. .env still holds AUTH__PASSWORD, so it is
+      # blanked here explicitly; REQUIRED=false stops the app refusing to start without one.
+      AUTH__REQUIRED: "false"
+      AUTH__PASSWORD: ""
       # runtime paths -> the mounted volume
       DATA_DIR: /data/fundamentals
       EARNINGS_PATH: /data/earnings_calendar.csv

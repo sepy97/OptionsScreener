@@ -2117,3 +2117,141 @@ def test_the_www_name_redirects_rather_than_serving_the_site() -> None:
     assert "redir https://steadybull.net{uri} permanent" in blocks["www.steadybull.net"]
     assert "reverse_proxy" not in blocks["www.steadybull.net"]
     assert "reverse_proxy app:8000" in blocks["steadybull.net"]
+
+
+def test_production_has_no_password_prompt_in_front_of_the_portfolio() -> None:
+    """The passkey sign-in page is the only way in. The Basic-Auth gate put there in v3.0.0 was
+    the browser's grey pop-up, and it offered no way in of its own if passkeys failed. .env still
+    holds a password, so compose must blank it explicitly or the prompt comes back on deploy."""
+    compose = (pathlib.Path(__file__).parents[2] / "docker-compose.yml").read_text()
+    env = dict(
+        line.strip().split(": ", 1) for line in compose.splitlines()
+        if line.strip().startswith("AUTH__")
+    )
+    assert env == {"AUTH__REQUIRED": '"false"', "AUTH__PASSWORD": '""'}
+
+
+# --- the invites page ------------------------------------------------------------------------
+
+def _link_in(html: str) -> str:
+    import re
+
+    found = re.search(r'value="(http://[^"]+/invite/[^"]+)"', html)
+    assert found, "no invite link on the page"
+    return found.group(1)
+
+
+def test_an_admin_makes_an_invite_and_the_link_creates_a_working_account() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        page = c.get("/portfolio/invites")
+        assert page.status_code == 200 and "Create invite link" in page.text
+        made = c.post("/portfolio/invites", data={"name": "Alex"})
+        link = _link_in(made.text)
+        token = link.rsplit("/", 1)[-1]
+        assert "Invite for Alex" in made.text and "only time it is shown" in made.text
+
+        c.cookies.clear()  # Alex, on their own device
+        r, _ = _register_over_http(c, token)
+        assert r.status_code == 200
+        alex = next(u for u in app.state.users.users() if u.name == "Alex")
+        assert not alex.is_admin, "an admin only when the box is ticked"
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_ticking_admin_makes_an_admin() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        token = _link_in(c.post("/portfolio/invites", data={"name": "Pat", "admin": "1"}).text)
+        c.cookies.clear()
+        _register_over_http(c, token.rsplit("/", 1)[-1])
+        assert next(u for u in app.state.users.users() if u.name == "Pat").is_admin
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_link_is_shown_once_and_never_again() -> None:
+    """The pending list works by a non-secret reference, so reloading the page cannot re-print
+    a live token for someone looking over a shoulder, or a screenshot, to use."""
+    c = _client()
+    try:
+        _as(c, "Sam")
+        token = _link_in(c.post("/portfolio/invites", data={"name": "Alex"}).text).rsplit("/")[-1]
+        later = c.get("/portfolio/invites").text
+        assert "Alex" in later and "creates an account" in later
+        assert token not in later
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_cancelling_an_invite_kills_the_link() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        token = _link_in(c.post("/portfolio/invites", data={"name": "Alex"}).text).rsplit("/")[-1]
+        (pending,) = app.state.users.pending_invites()
+        after = c.post("/portfolio/invites/cancel", data={"ref": pending.ref}).text
+        assert "No invites outstanding" in after
+        assert c.get(f"/invite/{token}").status_code == 404
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_new_passkey_link_adds_to_the_same_account() -> None:
+    c = _client()
+    try:
+        sam = _as(c, "Sam")
+        made = c.post("/portfolio/invites", data={"for_user": sam.id}).text
+        assert "New passkey link for Sam" in made
+        token = _link_in(made).rsplit("/", 1)[-1]
+        c.cookies.clear()
+        assert "Add a passkey" in c.get(f"/invite/{token}").text
+        r, _ = _register_over_http(c, token)
+        assert r.status_code == 200 and len(app.state.users.users()) == 1
+        assert len(app.state.users.credentials_for(sam.id)) == 1
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_an_invite_needs_a_name() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        for name in ("", "   ", "x" * 61):
+            r = c.post("/portfolio/invites", data={"name": name})
+            assert "Give the invite a name" in r.text
+        assert app.state.users.pending_invites() == []
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_only_an_admin_can_invite() -> None:
+    c = _client()
+    try:
+        _as(c, "Alex", admin=False, owns_link=False)
+        assert c.get("/portfolio/invites").status_code == 403
+        assert c.post("/portfolio/invites", data={"name": "Mallory"}).status_code == 403
+        assert c.post("/portfolio/invites", data={"name": "M", "admin": "1"}).status_code == 403
+        assert app.state.users.pending_invites() == []
+        assert "Invite people" not in c.get("/portfolio").text
+        c.cookies.clear()
+        stranger = c.get("/portfolio/invites", follow_redirects=False)
+        assert stranger.status_code == 303 and stranger.headers["location"].startswith("/login")
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_member_cannot_cancel_invites_either() -> None:
+    c = _client()
+    try:
+        _as(c, "Sam")
+        c.post("/portfolio/invites", data={"name": "Alex"})
+        (pending,) = app.state.users.pending_invites()
+        _as(c, "Eve", admin=False, owns_link=False)
+        assert c.post("/portfolio/invites/cancel", data={"ref": pending.ref}).status_code == 403
+        assert len(app.state.users.pending_invites()) == 1
+    finally:
+        c.__exit__(None, None, None)

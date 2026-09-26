@@ -4,6 +4,7 @@
   <article>
     {# Signing out ends the site session only; the broker link is untouched and waits for next time. #}
     <div class="signed-in-as">
+      {% if user.is_admin %}<a href="/portfolio/invites"><small>Invite people</small></a>{% endif %}
       <small>Signed in as <b>{{ user.name }}</b></small>
       <form method="post" action="/auth/logout">
         <button type="submit" class="secondary outline">Sign out</button>
