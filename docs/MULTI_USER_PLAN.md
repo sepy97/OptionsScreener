@@ -10,8 +10,9 @@ middleman, the tables, keeping users apart. This document covers what it does no
 codebase* assumes one person, and in what order to take it apart. It also records what was checked
 against the vendors rather than assumed.
 
-**Status:** investigated; **Phase 0 shipped as v3.0.0** (the password now covers /portfolio
-only — §1). Phases 1–4 not started. Supersedes the line in
+**Status:** **Phase 0 shipped as v3.0.0** (the password covers /portfolio only — §1). **Phase 2
+mostly built** — the per-user seam and the caches (§2.1); what is left of it needs the user ids
+Phase 1 brings. Phases 1, 3 and 4 not started. Supersedes the line in
 [`PORTFOLIO_PLAN.md`](PORTFOLIO_PLAN.md) §1b — "Multi-user is explicitly out of scope: one
 operator, one session at a time, no user table."
 
@@ -102,14 +103,15 @@ The brief says nothing about this, and it is most of the work. The good news fir
 
 ### What breaks
 
-**a. `ScreenerService` is a process singleton that carries a per-user credential.** Built once in
+**a. `ScreenerService` is a process singleton that carries a per-user credential.** *(fixed — see
+§2.1)* Built once in
 the app lifespan, stashed on `app.state.service`. Every field on it is shared *except*
 `accounts`, and exactly one method reads that field (`brokerage_accounts()`). Everything else
 account-shaped — `_price_positions`, `swap_reviews`, `_fresh_put_and_ask` — works on `Position`
 objects it is handed, and `exit_options` takes explicit arguments and touches no account at all.
 So the per-user surface is one field and one method. §2.1 below is the proposed split.
 
-**b. Two process-level caches hold account data, keyed by nothing.**
+**b. Two process-level caches hold account data, keyed by nothing.** *(fixed — see §2.1)*
 
 | Cache | Contents | Under multi-user |
 |---|---|---|
@@ -172,6 +174,34 @@ Caches move off `app.state` into a small TTL cache whose key is always prefixed 
 supplied by that dependency, so a route cannot spell a key itself. Keying them by the session
 token is also **correct today and forward-compatible**, so that part can land before anything
 else in v3.
+
+### 2.2 As built
+
+Option B, and the shape held up: the per-user surface really was one field and one method.
+
+* `core/portfolio.py` — `PortfolioService(accounts, screener)`. It owns the credential and nothing
+  else; `brokerage_accounts()` reads the account and hands it to the screener to price.
+* `ScreenerService` lost its `accounts` field and its `brokerage_accounts()`, and
+  `_price_positions` became public `price_positions` — it is a function of a position and the
+  market, so it is the same answer whoever asks. A test asserts
+  `not hasattr(screener, "accounts")`, which is what keeps the invariant from quietly coming back.
+* `api/deps.py` — `get_portfolio` builds one per request. It is the **only** place a session turns
+  into a credential, and there is nowhere else for a route to get one.
+* `api/usercache.py` — `PerUserCache`, a TTL cache partitioned by user and bounded at both levels
+  (least-recently-used eviction), replacing both unbounded `app.state` dicts. The user part comes
+  from the dependency that resolved the session; a route cannot spell it. `clear(user)` forgets one
+  person's entries, so Refresh no longer empties everybody's.
+* The CLI keeps working through `build_portfolio(settings)` — two call sites.
+
+The three tests that matter mint **two sessions directly** into the store, because two live ones
+cannot be had through the OAuth flow today (a callback revokes the previous ones — there is one
+credential), which is exactly what a passkey login will do in Phase 1. Each was checked against the
+old behaviour by making the cache unkeyed again: all three fail, with the messages that name the
+leak. Without that check they would have been decoration.
+
+`revoke_broker` narrowing, the canonical screen and job-result ownership are **not** done — each
+needs a user id, or in the screen's case a jobs-DB column that the store has no migration path for
+(#78). See §8.
 
 ---
 
@@ -364,16 +394,19 @@ already has a deny-by-default gate with a tested exempt list. The risky part of 
 site-wide middleware, largely goes away: the gate keeps its shape and the password it checks becomes
 a passkey session.
 
-**Phase 2 — the seam.** `PortfolioService` per request, `ScreenerService` with no user-bound
-field, both caches keyed by user and bounded, `revoke_broker` narrowed to one person, the
-scheduled screen made canonical for the Close? column, ownership and a TTL on job results (#64),
-and the two-user leak test — two live sessions, every `/portfolio` route, asserting that the
-second visitor never sees the first one's numbers. That test is the one that matters: **both live
-bugs in the Close? column were in the wiring rather than the logic, and neither was caught by a
-unit test.**
+**Phase 2 — the seam. Mostly built; see §2.2.** Done: `PortfolioService` per request,
+`ScreenerService` with no user-bound field, both caches partitioned by user and bounded, and the
+two-session leak test. **Waiting on Phase 1's user ids:**
 
-The cache keying is worth pulling out of Phase 2 and doing first: keyed by session token it is
-correct today and needs nothing else to exist.
+* `revoke_broker` narrowed to one person. Today it deletes every session for a broker, which is
+  correct with one credential and signs everybody out with more than one.
+* Ownership and a TTL on job results (#64).
+
+**Waiting on a jobs-DB migration (#78):** the scheduled screen made canonical for the Close?
+column. `latest_done()` is global, and telling a cron run from an ad-hoc one needs a `source`
+column — which `CREATE TABLE IF NOT EXISTS` will not add to the table already on the droplet. Worth
+doing on its own, because it is wrong for the single user too: a screen you run by hand with an odd
+DTE window silently becomes what every open put is compared against.
 
 **Phase 3 — SnapTrade.** `adapters/snaptrade/` behind `BrokerageAccountProvider`, the encrypted
 `broker_links` table, connect/reconnect/disconnect routes, the `CONNECTION_BROKEN` webhook.

@@ -247,7 +247,7 @@ def test_an_expired_link_offers_reconnect_rather_than_an_error() -> None:
 # --- balances on the tab --------------------------------------------------------------------
 
 from wheel_screener.api.app import _money  # noqa: E402
-from wheel_screener.api.deps import get_service  # noqa: E402
+from wheel_screener.api.deps import get_portfolio, get_service  # noqa: E402
 from wheel_screener.core.errors import AuthExpiredError  # noqa: E402
 from wheel_screener.core.models import AccountBalances, AccountType, BrokerageAccount  # noqa: E402
 
@@ -266,7 +266,8 @@ class _AccountService:
 def _account(**kw):
     balances = AccountBalances(total_value=1000.0, cash=400.0, invested=600.0, buying_power=800.0)
     return BrokerageAccount(
-        broker="schwab", account_id="HASH", display_name="••••1337",
+        broker="schwab", account_id=kw.get("account_id", "HASH"),
+        display_name=kw.get("display_name", "••••1337"),
         account_type=AccountType.MARGIN, balances=kw.get("balances", balances),
     )
 
@@ -274,9 +275,17 @@ def _account(**kw):
 def _signed_in(service):
     c = _client()
     app.dependency_overrides[get_service] = lambda: service
-    app.state.balances_cache = None
+    app.dependency_overrides[get_portfolio] = lambda: service
+    _reset_caches()
     _sign_in(c)
     return c
+
+
+def _reset_caches() -> None:
+    """Drop the per-user caches between tests. They are keyed by session token, and a test that
+    signs in twice would otherwise read the previous run's numbers."""
+    app.state.balances_cache = None
+    app.state.swap_cache = None
 
 
 def test_the_connected_tab_shows_the_money() -> None:
@@ -320,13 +329,19 @@ def test_balances_are_cached_so_a_refresh_does_not_re_ask_the_broker() -> None:
 
 
 def test_disconnect_drops_the_cached_numbers() -> None:
-    """Cached balances must not outlive the session that was allowed to see them."""
+    """Cached balances must not outlive the session that was allowed to see them.
+
+    The cache is partitioned by session token now, so the assertion is that the partition is gone
+    rather than that the whole cache object is: one person disconnecting must not empty anybody
+    else's, and "no partitions at all" is what that looks like with a single signed-in user.
+    """
     service = _AccountService([_account()])
     c = _signed_in(service)
     try:
         c.get("/portfolio")
+        assert len(app.state.balances_cache) == 1  # cached for the session that read them
         c.post("/portfolio/oauth/schwab/disconnect", follow_redirects=False)
-        assert app.state.balances_cache is None
+        assert len(app.state.balances_cache) == 0
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
@@ -592,10 +607,13 @@ def _portfolio_page() -> str:
             return [_account_with_positions()]
 
     c = _client()
-    app.dependency_overrides[get_service] = lambda: _Svc()
+    svc = _Svc()
+    app.dependency_overrides[get_service] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
     try:
         _sign_in(c)
-        app.state.balances_cache = None  # the route caches for 30s; this test wants a fresh read
+        _reset_caches()  # the route caches for 30s; this test wants a fresh read
         return c.get("/portfolio").text
     finally:
         app.dependency_overrides.pop(get_service, None)
@@ -747,6 +765,7 @@ def _exits_client(rows=None, spot=185.0, error=None, after=None, grid=None, earl
     svc = _Svc()
     c = _client()
     app.dependency_overrides[get_service] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
     _sign_in(c)
     return c, svc
 
@@ -1283,7 +1302,10 @@ def _page_for(account) -> str:
             return [account]
 
     c = _client()
-    app.dependency_overrides[get_service] = lambda: _Svc()
+    svc = _Svc()
+    app.dependency_overrides[get_service] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
     try:
         _sign_in(c)
         app.state.balances_cache = None
@@ -1449,6 +1471,7 @@ def _swap_client(account, reviews):
     svc = _Svc()
     c = _client()
     app.dependency_overrides[get_service] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
     _sign_in(c)
     app.state.balances_cache = None
     app.state.swap_cache = None
@@ -1599,7 +1622,10 @@ def test_a_covered_calls_verdict_reaches_the_page_and_its_panel_opens() -> None:
                 p.swap = verdict
 
     c = _client()
-    app.dependency_overrides[get_service] = lambda: _Svc()
+    svc = _Svc()
+    app.dependency_overrides[get_service] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
     try:
         _sign_in(c)
         app.state.balances_cache = None
@@ -1645,4 +1671,143 @@ def test_the_password_gate_can_cover_the_portfolio_alone() -> None:
     finally:
         app.state.auth = None
         app.state.auth_scope = "site"
+        c.__exit__(None, None, None)
+
+
+# --- keeping two people apart ---------------------------------------------------------------
+# The leak this seam exists to close. Two live sessions cannot be made through the OAuth flow
+# today — a callback revokes the previous ones, because the deployment has one credential — so
+# they are minted straight into the store, which is what a passkey login will do in Phase 1.
+
+
+def _two_sessions() -> tuple[str, str]:
+    expires = _later()
+    return (app.state.sessions.create("schwab", "A", expires),
+            app.state.sessions.create("schwab", "B", expires))
+
+
+def test_one_session_is_never_served_another_sessions_balances() -> None:
+    """Before the partition, the balances cache was a single 30-second entry with no key at all:
+    whoever loaded the tab second inside the window was handed the first one's account."""
+    class _TwoPeople:
+        """A different account on each upstream read, so a cache hit is visible on the page."""
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def brokerage_accounts(self):
+            self.calls += 1
+            return [_account(display_name="••••AAAA" if self.calls == 1 else "••••BBBB")]
+
+        def swap_reviews(self, *args, **kwargs) -> None:
+            pass
+
+    c = _client()
+    people = _TwoPeople()
+    app.dependency_overrides[get_service] = lambda: people
+    app.dependency_overrides[get_portfolio] = lambda: people
+    _reset_caches()
+    a, b = _two_sessions()
+    cookie = app.state.settings.portfolio.cookie_name
+    try:
+        c.cookies.set(cookie, a)
+        assert "••••AAAA" in c.get("/portfolio").text
+        assert people.calls == 1
+
+        c.cookies.set(cookie, b)
+        second = c.get("/portfolio").text
+        assert "••••AAAA" not in second, "the second session was served the first one's balances"
+        assert "••••BBBB" in second
+        assert people.calls == 2, "the second session must cost its own upstream read"
+
+        c.cookies.set(cookie, a)
+        assert "••••AAAA" in c.get("/portfolio").text  # its own partition, still warm
+        assert people.calls == 2
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_one_session_is_never_served_another_sessions_verdict() -> None:
+    """Same story for the Close? column, whose key was the contract and the size — identical for
+    two people holding the same put, so they shared an entry."""
+    account = _swap_account("swap")
+    reviews = [_swap_review("swap"), _swap_review("keep", reason="rule 1 did not pass",
+                                                 rule1_passed=False)]
+
+    class _Svc:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def brokerage_accounts(self):
+            return [account]
+
+        def swap_reviews(self, positions, candidates, today, criteria=None) -> None:
+            verdict = reviews[min(self.calls, len(reviews) - 1)]
+            self.calls += 1
+            for position in positions:
+                position.swap = verdict
+
+    c = _client()
+    svc = _Svc()
+    app.dependency_overrides[get_service] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
+    _reset_caches()
+    a, b = _two_sessions()
+    cookie = app.state.settings.portfolio.cookie_name
+    try:
+        c.cookies.set(cookie, a)
+        assert ">Yes<" in c.get("/portfolio").text
+        assert svc.calls == 1
+
+        c.cookies.set(cookie, b)
+        second = c.get("/portfolio").text
+        assert ">No<" in second, "the second session was served the first one's verdict"
+        assert ">Yes<" not in second
+        assert svc.calls == 2
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_one_persons_refresh_does_not_cost_everybody_their_cache() -> None:
+    """Refresh used to replace the single process-wide dict, so it emptied every user's."""
+    account = _swap_account("swap")
+
+    class _Svc:
+        def __init__(self) -> None:
+            self.reads = 0
+
+        def brokerage_accounts(self):
+            self.reads += 1
+            return [account]
+
+        def swap_reviews(self, positions, candidates, today, criteria=None) -> None:
+            for position in positions:
+                position.swap = _swap_review("swap")
+
+    c = _client()
+    svc = _Svc()
+    app.dependency_overrides[get_service] = lambda: svc
+    app.dependency_overrides[get_portfolio] = lambda: svc
+    _reset_caches()
+    a, b = _two_sessions()
+    cookie = app.state.settings.portfolio.cookie_name
+    try:
+        c.cookies.set(cookie, a)
+        c.get("/portfolio")
+        c.cookies.set(cookie, b)
+        c.get("/portfolio")
+        assert svc.reads == 2 and len(app.state.balances_cache) == 2
+
+        c.cookies.set(cookie, b)
+        c.post("/portfolio/swaps/refresh")
+        assert len(app.state.balances_cache) == 2, "A's partition survived B pressing Refresh"
+
+        before = svc.reads
+        c.cookies.set(cookie, a)
+        c.get("/portfolio")
+        assert svc.reads == before, "A's balances were still cached"
+    finally:
+        app.dependency_overrides.clear()
         c.__exit__(None, None, None)

@@ -740,11 +740,13 @@ def test_held_short_options_are_stamped_with_dividends_and_an_early_assignment_v
                Dividend(ex_date=today + timedelta(days=28), amount=0.71, frequency="quarterly")],
         "KO": [],
     })
+    from wheel_screener.core.portfolio import PortfolioService
+
     service = ScreenerService(
         fundamentals=_FakeFundamentals(), chains=_Spot(_chain([])), dividends=divs,
-        accounts=_Accounts(_held_account(today)),
     )
-    (account,) = service.brokerage_accounts()
+    portfolio = PortfolioService(accounts=_Accounts(_held_account(today)), screener=service)
+    (account,) = portfolio.brokerage_accounts()
     call, put, shares = account.positions
     assert call.underlying_price == 52.0 and call.mark == pytest.approx(2.13)
     assert [d.ex_date for d in call.dividends] == [today + timedelta(days=28)]

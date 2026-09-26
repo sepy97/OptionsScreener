@@ -11,7 +11,7 @@ from typing import TypeVar
 
 import typer
 
-from wheel_screener.composition import build_probes, build_service
+from wheel_screener.composition import build_portfolio, build_probes, build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.errors import AuthExpiredError, ProviderError, RateLimitedError
 from wheel_screener.core.models import EarningsStatus, OptionType, ScreenCriteria, Underlying
@@ -94,7 +94,7 @@ def balances() -> None:
     against the broker's own app by eye.
     """
     settings = Settings()
-    accounts = build_service(settings).brokerage_accounts()
+    accounts = build_portfolio(settings).brokerage_accounts()
     if not accounts:
         typer.echo("No accounts returned. The broker is linked but reported nothing.")
         return
@@ -192,7 +192,7 @@ def _report_broker(settings: Settings) -> None:
     hours = (status.expires_at - datetime.now(tz=UTC)).total_seconds() / 3600
     when = f"expires in {hours:.0f}h ({status.expires_at:%d %b %H:%M} UTC)"
     try:
-        accounts = build_service(settings).brokerage_accounts()
+        accounts = build_portfolio(settings).brokerage_accounts()
     except Exception as e:  # noqa: BLE001 - the failure IS the diagnostic
         typer.echo(f"  XX schwab     token on disk {when}, but the broker rejected it:")
         typer.echo(f"                {e}")

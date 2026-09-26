@@ -30,12 +30,18 @@ from pydantic import BaseModel, ValidationError
 
 from wheel_screener import __version__
 from wheel_screener.adapters.schwab.link import SchwabOAuthLink
-from wheel_screener.api.deps import get_job_runner, get_service, get_settings
+from wheel_screener.api.deps import (
+    get_job_runner,
+    get_portfolio,
+    get_service,
+    get_settings,
+)
 from wheel_screener.api.expiries import DTE_HORIZON_DAYS, expiry_ladder, next_monthly
 from wheel_screener.api.jobs import JobBusyError, JobRunner, JobStore
 from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
 from wheel_screener.api.sessions import SessionStore
+from wheel_screener.api.usercache import PerUserCache
 from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.dividends import DividendImpact
@@ -54,6 +60,7 @@ from wheel_screener.core.models import (
     PositionKind,
     ScreenCriteria,
 )
+from wheel_screener.core.portfolio import PortfolioService
 from wheel_screener.core.service import ScreenerService
 
 logger = logging.getLogger(__name__)
@@ -902,18 +909,44 @@ def fundamentals_route(
 _BALANCES_TTL_SECONDS = 30.0
 
 
-def _cached_balances(request: Request, service: ScreenerService):
+def _cache_user(request: Request) -> str | None:
+    """Whose cache partition this request reads. The session token, which is nobody else's.
+
+    The session is the strongest identity this app has until there are user accounts, and it is the
+    right one either way: it changes on a relink, which is exactly when a cached balance stops
+    describing the account it was read from. Routes never pass this themselves — every caller gets
+    it from here, so a route cannot reach another partition by spelling a key.
+    """
+    session = current_session(request)
+    return session.token if session is not None else None
+
+
+def _balances_cache(request: Request) -> PerUserCache:
+    cache = getattr(request.app.state, "balances_cache", None)
+    if cache is None:
+        cache = request.app.state.balances_cache = PerUserCache(_BALANCES_TTL_SECONDS)
+    return cache
+
+
+def _swap_cache(request: Request) -> PerUserCache:
+    cache = getattr(request.app.state, "swap_cache", None)
+    if cache is None:
+        cache = request.app.state.swap_cache = PerUserCache(_SWAP_TTL_SECONDS)
+    return cache
+
+
+def _cached_balances(request: Request, portfolio: PortfolioService):
     """Accounts for this request, or the recent ones. Returns ``(accounts, error)`` — never raises,
     because a balance we cannot fetch must degrade to a message inside the page, not a 500."""
-    cache = getattr(request.app.state, "balances_cache", None)
-    now = time.monotonic()
-    if cache is not None and now - cache[0] < _BALANCES_TTL_SECONDS:
-        return cache[1], None
+    user = _cache_user(request)
+    hit = _balances_cache(request).get(user)
+    if hit is not None:
+        return hit, None
     try:
-        accounts = service.brokerage_accounts()
+        accounts = portfolio.brokerage_accounts()
     except ProviderError as e:
         return [], str(e)
-    request.app.state.balances_cache = (now, accounts)
+    _balances_cache(request).put(user, None, accounts)
     return accounts, None
 
 
@@ -942,15 +975,17 @@ def _latest_candidates(runner: JobRunner) -> tuple[list, dict | None]:
     return out, latest
 
 
-def _stamp_swaps(request: Request, service: ScreenerService, runner: JobRunner,
+def _stamp_swaps(request: Request, portfolio: PortfolioService, runner: JobRunner,
                  accounts: list, *, force: bool = False) -> dict:
     """Attach a keep/swap verdict to every open short put, and say how fresh the inputs are.
 
     Never raises: the verdict is an opinion about a position, and the page showing the position
     is worth more than the opinion.
     """
-    cache = {} if force else (getattr(request.app.state, "swap_cache", None) or {})
-    now = time.monotonic()
+    user = _cache_user(request)
+    cache = _swap_cache(request)
+    if force:
+        cache.clear(user)  # this person's entries only — never everybody's
     # BOTH short sides: puts get the keep-or-swap verdict, calls the cheaper "are these shares
     # still earning" one. Passing only puts here left every call's cell empty on the live page
     # while the service was perfectly able to answer for them.
@@ -958,21 +993,20 @@ def _stamp_swaps(request: Request, service: ScreenerService, runner: JobRunner,
     puts = [p for a in accounts for p in a.positions if p.kind in short]
     todo = []
     for p in puts:
-        hit = cache.get(_position_key(p))
-        if hit is not None and now - hit[0] < _SWAP_TTL_SECONDS:
-            p.swap = hit[1]
+        hit = cache.get(user, _position_key(p))
+        if hit is not None:
+            p.swap = hit
         else:
             todo.append(p)
     candidates, latest = _latest_candidates(runner)
     if todo:
         try:
-            service.swap_reviews(todo, candidates, date.today())
+            portfolio.swap_reviews(todo, candidates, date.today())
         except Exception as e:  # noqa: BLE001 - a verdict is never worth a dead tab
             logger.warning("swap review failed: %s", e)
         for p in todo:
             if p.swap is not None:
-                cache[_position_key(p)] = (now, p.swap)
-    request.app.state.swap_cache = cache
+                cache.put(user, _position_key(p), p.swap)
     screen_age, screen_stale = (
         _humanize_age(latest["created_at"]) if latest else ("", True)
     )
@@ -1073,7 +1107,7 @@ def portfolio_exits(
 def portfolio_page(
     request: Request,
     settings: Settings = Depends(get_settings),
-    service: ScreenerService = Depends(get_service),
+    portfolio: PortfolioService = Depends(get_portfolio),
     runner: JobRunner = Depends(get_job_runner),
 ):
     """The Portfolio tab. Four states, each with a real rendering:
@@ -1088,8 +1122,8 @@ def portfolio_page(
     links = getattr(request.app.state, "links", {}) or {}
     status = {name: link.status() for name, link in links.items()}
     connected = session is not None and any(s.connected for s in status.values())
-    accounts, error = _cached_balances(request, service) if connected else ([], None)
-    swaps = _stamp_swaps(request, service, runner, accounts) if accounts else {}
+    accounts, error = _cached_balances(request, portfolio) if connected else ([], None)
+    swaps = _stamp_swaps(request, portfolio, runner, accounts) if accounts else {}
     return templates.TemplateResponse(
         request, "portfolio.html",
         {
@@ -1139,7 +1173,10 @@ def portfolio_callback(request: Request, broker: str, settings: Settings = Depen
     # A relink may be a different account, so previous sessions for this broker are ended first —
     # cheaper and more certain than re-checking an account fingerprint on every later request.
     store.revoke_broker(broker)
-    request.app.state.balances_cache = None  # a relink may be a different account
+    # A relink may be a different account. The cache is keyed by session token and the token is
+    # about to change, so the old partition is already unreachable; clearing it just frees it.
+    _balances_cache(request).clear(_cache_user(request))
+    _swap_cache(request).clear(_cache_user(request))
     expires = status.expires_at or (datetime.now(tz=UTC) + timedelta(days=1))
     token = store.create(broker, status.account_fingerprint or "unknown", expires)
 
@@ -1157,9 +1194,11 @@ def portfolio_disconnect(request: Request, broker: str, settings: Settings = Dep
     """End the session AND delete the credential. Either alone would leave a way back in."""
     link = _link_for(request, broker)
     store = request.app.state.sessions
+    user = _cache_user(request)  # read BEFORE the session is revoked, or there is no partition
     store.revoke(request.cookies.get(settings.portfolio.cookie_name))
     store.revoke_broker(broker)
-    request.app.state.balances_cache = None
+    _balances_cache(request).clear(user)
+    _swap_cache(request).clear(user)
     link.revoke()
     response = RedirectResponse("/portfolio", status_code=303)
     response.delete_cookie(settings.portfolio.cookie_name, path="/portfolio")
@@ -1169,7 +1208,7 @@ def portfolio_disconnect(request: Request, broker: str, settings: Settings = Dep
 @app.post("/portfolio/swaps/refresh")
 def portfolio_swaps_refresh(
     request: Request,
-    service: ScreenerService = Depends(get_service),
+    portfolio: PortfolioService = Depends(get_portfolio),
     runner: JobRunner = Depends(get_job_runner),
 ):
     """Re-price every open put against live quotes and the latest screen.
@@ -1177,9 +1216,9 @@ def portfolio_swaps_refresh(
     Balances are re-read too: the verdict's dollars are per contract, so a position that changed
     since the cached read would be judged at the wrong size.
     """
-    request.app.state.balances_cache = None
-    accounts, error = _cached_balances(request, service)
-    swaps = _stamp_swaps(request, service, runner, accounts, force=True)
+    _balances_cache(request).clear(_cache_user(request))
+    accounts, error = _cached_balances(request, portfolio)
+    swaps = _stamp_swaps(request, portfolio, runner, accounts, force=True)
     return templates.TemplateResponse(
         request, "_positions.html",
         {"accounts": accounts, "balances_error": error, "swaps": swaps},
@@ -1190,7 +1229,7 @@ def portfolio_swaps_refresh(
 def portfolio_swap_detail(
     request: Request,
     position: str,
-    service: ScreenerService = Depends(get_service),
+    portfolio: PortfolioService = Depends(get_portfolio),
     runner: JobRunner = Depends(get_job_runner),
 ):
     """The reasoning behind one position's Close? verdict: the numbers, the rules, the
@@ -1202,8 +1241,8 @@ def portfolio_swap_detail(
     for the ways-out panel), htmx merges an ancestor's hx-vals into the child's request, and the
     duplicate that arrives last is the one Starlette hands over.
     """
-    accounts, _error = _cached_balances(request, service)
-    swaps = _stamp_swaps(request, service, runner, accounts)
+    accounts, _error = _cached_balances(request, portfolio)
+    swaps = _stamp_swaps(request, portfolio, runner, accounts)
     held = next(
         (p for a in accounts for p in a.positions
          if p.kind in (PositionKind.SHORT_PUT, PositionKind.SHORT_CALL)
