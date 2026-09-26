@@ -25,6 +25,7 @@ services:
       DATA_DIR: /data/fundamentals
       EARNINGS_PATH: /data/earnings_calendar.csv
       JOBS_DB_PATH: /data/jobs.sqlite
+      BACKUP_DIR: /data/backups # on the volume, so DigitalOcean's droplet backups carry it off-box
       LOG__DIR: /data/logs
       # Portfolio state MUST live on the volume. Both default to paths inside the container, and
       # a deploy replaces the container — so leaving them would sign every session out and destroy

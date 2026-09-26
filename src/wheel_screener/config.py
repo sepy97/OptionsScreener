@@ -237,3 +237,8 @@ class Settings(BaseSettings):
     data_dir: str = "data/fundamentals"
     earnings_path: str = "data/earnings_calendar.csv"  # local calendar (refresh-earnings job)
     jobs_db_path: str = "data/jobs.sqlite"  # background screen-job state (web API)
+    # `wheel-screener backup`: dated, self-contained copies of what cannot be rebuilt (accounts,
+    # screens, the overlay). On the same volume, so it guards against a bad migration or a corrupt
+    # file; surviving the loss of the droplet needs DigitalOcean's own backups on top (DEPLOY.md).
+    backup_dir: str = "data/backups"
+    backup_keep: int = 14

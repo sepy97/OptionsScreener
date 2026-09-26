@@ -480,3 +480,13 @@ so the droplet cannot.
 Proven against one real account before any invite goes out.
 
 **Phase 4 — the preconditions.** Backups (#66), the licence decision, and then invites.
+
+* **Backups — built as v3.4.0.** `wheel-screener backup`, nightly, 14 kept, runbook in
+  [`DEPLOY.md`](DEPLOY.md) → *Rollback & backups*. The accounts copy keeps users, passkeys' public
+  keys and link ownership and nothing else — no session, invite or OAuth state — and is rebuilt
+  after the drop so no token survives as leftover bytes. Checked by the test that matters: restore
+  a backup, and the same passkey signs the same person back in, still an admin, still owning the
+  link. **Off-box needs DigitalOcean's backups switched on by hand** — nothing here can do that.
+  This reverses an earlier decision in the runbook not to back up `sessions.sqlite`, whose premise
+  ("losing it costs one sign-in") stopped being true when it started holding accounts.
+* **Licences** — still yours to decide (§7).

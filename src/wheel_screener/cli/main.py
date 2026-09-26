@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import functools
+import sqlite3
 from collections.abc import Callable
 from datetime import date, timedelta
 from pathlib import Path
@@ -458,6 +459,40 @@ def refresh_screen(
     job = runner.get(runner.run_blocking(criteria))
     n = len(job.get("result") or [])
     typer.echo(f"Stored screen ({job['status']}, {n} candidates) — the dashboard now shows it.")
+
+
+@app.command("backup")
+def backup(
+    keep: int = typer.Option(None, help="How many backups to keep (default: BACKUP_KEEP, 14)."),
+) -> None:
+    """Copy the state that cannot be rebuilt — accounts, screens, the overlay — into a dated folder.
+
+    Safe while the app is running. The accounts copy holds no session, invite or OAuth state:
+    restored, everyone signs in again with their passkey and nobody is re-invited.
+    """
+    from datetime import UTC, datetime
+
+    from wheel_screener.adapters.local.overlay import OVERLAY_FILENAME
+    from wheel_screener.jobs.backup import BackupError, run_backup
+
+    settings = Settings()
+    try:
+        report = run_backup(
+            accounts_db=settings.portfolio.sessions_db_path,
+            jobs_db=settings.jobs_db_path,
+            overlay=Path(settings.data_dir).expanduser() / OVERLAY_FILENAME,
+            dest_root=settings.backup_dir,
+            keep=keep or settings.backup_keep,
+            now=datetime.now(tz=UTC),
+        )
+    except (BackupError, OSError, sqlite3.Error) as e:
+        typer.echo(f"error: backup failed: {e}")
+        raise typer.Exit(1) from None
+    typer.echo(f"Backed up to {report.path}")
+    for name, summary in report.files.items():
+        typer.echo(f"  {name:<22} {summary}")
+    if report.pruned:
+        typer.echo(f"  removed {len(report.pruned)} older backup(s)")
 
 
 @app.command("invite")
