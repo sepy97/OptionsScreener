@@ -45,8 +45,12 @@ class SwapParams:
     # A put still paying this much is not used up, whatever else the market offers. Without it
     # the ratio test also fires on healthy positions, because at a common expiry a 2x yield gap
     # is roughly a 2-3x delta gap — which is a decision to take more risk, not to stop idling.
-    # 0.15 is the screen's own `yield_satisfactory` bar, so the two agree on what "decent" means.
-    used_up_yield: float = 0.15
+    #
+    # Started at 0.15, the screen's own `yield_satisfactory` bar, and was lowered after a week
+    # of live verdicts: an MRVL put decayed from 22% to 15.7%/yr in four days, which would have
+    # flipped it to "swap" on ordinary decay rather than on anything being wrong with it. The
+    # bar for "this cash is idle" belongs below the bar for "this is a decent yield".
+    used_up_yield: float = 0.10
     min_ratio: float = 2.0  # rule 1: the fresh put must pay this many times the old put
     min_extra: float = 100.0  # rule 2: dollars of extra premium, after cost
     swap_cost: float = 10.0  # commission plus the bid/ask loss the prices don't already carry

@@ -151,9 +151,10 @@ class SwapSettings(BaseModel):
     holding to expiry, so they are settings rather than constants.
     """
 
-    # a put still paying this much is not used up, whatever else is on offer (the screen's
-    # own yield_satisfactory bar, so the two agree on what a decent yield is)
-    used_up_yield: float = 0.15
+    # a put still paying this much is not used up, whatever else is on offer. Below the screen's
+    # `yield_satisfactory` (0.15) on purpose: "idle cash" is a lower bar than "a decent yield",
+    # and at 0.15 a put flipped to "swap" on four days of ordinary decay.
+    used_up_yield: float = 0.10
     min_ratio: float = 2.0  # rule 1: a fresh put must pay this many times the open one
     min_extra: float = 100.0  # rule 2: dollars of extra premium over the days left, after cost
     swap_cost: float = 10.0  # commission plus the bid/ask loss the quotes don't already carry

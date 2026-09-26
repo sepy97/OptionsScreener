@@ -3,8 +3,8 @@
 > **IMPLEMENTATION NOTE (added by the repo, not part of the spec).** The code follows this
 > document with two deliberate departures, both made after the rule flagged a put sold days
 > earlier: the comparison is made at the open put's own TENOR rather than at the best-paying
-> expiry in the entry window, and a put must first be paying under 15%/yr to be considered used
-> up at all. Reasoning and evidence: `PORTFOLIO_PLAN.md`, phase P5b.
+> expiry in the entry window, and a put must first be paying under a floor to be considered used
+> up at all (10%/yr, settable). Reasoning and evidence: `PORTFOLIO_PLAN.md`, phase P5b.
 
 
 When to buy back an open short put early and put the cash into a new one.
