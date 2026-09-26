@@ -634,8 +634,11 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
         life, which silently assumed a re-sale.
       - **Nothing tested whether the put was used up.** The rules only asked whether something
         better existed, and something better always exists. A put must now be paying under
-        `USED_UP_YIELD` (15%/yr, the screen's own `yield_satisfactory` bar) before the rest of
-        the rule runs. The reason to have both: at a common expiry a 2x yield gap is roughly a
+        `USED_UP_YIELD` before the rest of the rule runs. It started at 15%/yr (the screen's own
+        `yield_satisfactory` bar) and was lowered to **10%** after a week live: an MRVL put
+        decayed from 22% to 15.7%/yr in four days, so at 15% it would have flipped to "swap" on
+        ordinary decay rather than on anything being wrong with it. "This cash is idle" is a
+        lower bar than "this is a decent yield". The reason to have both: at a common expiry a 2x yield gap is roughly a
         2-3x delta gap, so the ratio test on its own recommends carrying more risk, not
         redeploying idle cash.
 

@@ -224,7 +224,7 @@ would open on the *same ticker* today, priced at the bid, versus the open put pr
 
 | Test | Default | What it stops |
 |---|---|---|
-| The open put must pay less than `USED_UP_YIELD` | 15%/yr | Swapping a put that is still earning. At a common expiry a 2x yield gap is roughly a 2-3x delta gap, so without this the rule recommends *more risk* rather than *less idle cash*. 15% is the `yield_satisfactory` bar the screen already grades by |
+| The open put must pay less than `USED_UP_YIELD` | 10%/yr | Swapping a put that is still earning. At a common expiry a 2x yield gap is roughly a 2-3x delta gap, so without this the rule recommends *more risk* rather than *less idle cash*. deliberately below the screen's 15% `yield_satisfactory` bar: "idle cash" is a lower bar than "a decent yield" |
 | A fresh put must pay `MIN_RATIO`x the open one | 2.0 | Swapping for a marginal gain. Measured forward against the market, this is the equivalent of the widely-used "close at 50% of max profit" convention |
 | The extra premium over the days left, after cost, must clear `MIN_EXTRA` | $100 | Swaps on small positions, and on puts whose cash frees itself soon anyway |
 

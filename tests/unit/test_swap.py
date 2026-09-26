@@ -39,9 +39,10 @@ def test_yield_is_the_yearly_rate_on_the_locked_cash() -> None:
     [
         ("CRDO", 130.0, 25, 0.062, 145.0, SwapAction.SWAP, 130.0, None),
         ("TER", 290.0, 25, 0.069, 320.0, SwapAction.SWAP, 288.0, None),
-        ("SCCO", 170.0, 25, 0.125, 180.0, SwapAction.KEEP, None, "rule 1"),
-        # the spec's example stops this one on rule 1 too; with the used-up floor it never gets
-        # that far, because a put paying 18%/yr is not a put whose cash is idle
+        # The spec's trace stops both of these on rule 1. At the shipped floor (10%/yr) neither
+        # gets that far: a put paying 12% or 18% is not one whose cash is idle. Same verdicts,
+        # earlier test — which is the point of having the floor first.
+        ("SCCO", 170.0, 25, 0.125, 180.0, SwapAction.KEEP, None, "used up"),
         ("LRCX", 270.0, 4, 0.184, 290.0, SwapAction.KEEP, None, "used up"),
     ],
 )
@@ -78,16 +79,16 @@ def test_a_put_that_still_pays_well_is_never_a_candidate() -> None:
     r = review(_open("MRVL", 210.0, 39, 0.219, 310.0), _pick("MRVL", 0.278))
     assert r.action is SwapAction.KEEP and r.used_up is False
     assert r.rule1_passed is None and r.rule2_passed is None  # never reached
-    assert "22%/yr" in r.reason and "15%/yr" in r.reason
+    assert "22%/yr" in r.reason and "10%/yr" in r.reason
 
 
 def test_the_floor_is_tunable() -> None:
-    """A put at 14%/yr is just under the default floor, so the rest of the rule runs. Lowering
-    the floor is what makes the rule quieter: fewer puts count as used up."""
-    eligible = review(_open("X", 100.0, 30, 0.14, 130.0), _pick("X", 0.40))
+    """A put at 8%/yr is under the default floor, so the rest of the rule runs. Lowering the
+    floor is what makes the rule quieter: fewer puts count as used up."""
+    eligible = review(_open("X", 100.0, 30, 0.08, 130.0), _pick("X", 0.40))
     assert eligible.action is SwapAction.SWAP and eligible.used_up
-    stricter = review(_open("X", 100.0, 30, 0.14, 130.0), _pick("X", 0.40),
-                      params=SwapParams(used_up_yield=0.10))
+    stricter = review(_open("X", 100.0, 30, 0.08, 130.0), _pick("X", 0.40),
+                      params=SwapParams(used_up_yield=0.05))
     assert stricter.action is SwapAction.KEEP and stricter.used_up is False
 
 
