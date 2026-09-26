@@ -144,10 +144,21 @@ where the first visitor becomes admin is a well-known way to lose one:
 docker compose exec -T app wheel-screener invite "Sam" --admin
 ```
 
-After that, invites are made on the site: **Portfolio → Invite people** (admins only). The page
-makes a link and shows it once with a Copy button, lists invites not yet used (with Cancel), and
-lists everyone with a *New passkey link* button. The CLI does the same things (`invite`, `invite
---for-user <id>`, `users`) if the site is ever unreachable.
+After that, everything is on the site's **Admin** tab, which only admins see — to anyone else
+`/admin` answers "not found", signed in or not:
+
+* **People**: everyone who can sign in — joined, last signed in, passkeys, whether they have linked
+  a brokerage — with *New passkey link*, *Sign out everywhere* (a lost or stolen device) and
+  *Remove access*. Removing someone ends their sessions, retires their passkeys and deletes their
+  brokerage links at SnapTrade, which frees those links from the plan's count; if SnapTrade cannot
+  be reached, nothing is removed and it says so. You cannot remove yourself.
+* **Invites**: make a link (shown once, with a Copy button), and cancel ones not yet used.
+* **Status**: version, whether each data connection works, how old the scheduled screen is, and
+  **when the last backup ran** — flagged if it is more than 36 hours old, which means the crontab
+  is not installed or the job is failing.
+
+The CLI does the invite side (`invite`, `invite --for-user <id>`, `users`) if the site is ever
+unreachable.
 
 A link works once, for 72 hours (`PASSKEYS__INVITE_HOURS`). Opening it and pressing *Save a
 passkey* creates the account and signs the person in; there is no password anywhere. Send it
@@ -157,7 +168,7 @@ privately — until it is used, whoever holds it can claim it.
 a passkey to their account instead of creating one. Old passkeys keep working.
 
 Admins and members see the same Portfolio: everyone links their own brokerages. Being an admin
-only adds the Invites page.
+only adds the Admin tab.
 
 `PASSKEYS__RP_ID` and `PASSKEYS__ORIGIN` are set by `docker-compose.yml` to `steadybull.net`. A
 passkey is bound to that hostname, so it will not work on the droplet's IP or any other name.
@@ -172,7 +183,7 @@ one.) Until step 2, **nobody can reach the Portfolio**, you included.
 2. `docker compose exec -T app wheel-screener invite "<you>" --admin`, and open the link.
 3. Save a passkey. You land on the Portfolio.
 4. Link your brokerages from the Portfolio tab.
-5. Make a *New passkey link* for yourself on **Invite people** and open it on your other devices,
+5. Make a *New passkey link* for yourself on the **Admin** tab and open it on your other devices,
    unless your passkey already syncs to them through iCloud Keychain or Google Password Manager.
 
 Rolling back is safe: releases only ever add tables to the accounts file, and leave the ones they

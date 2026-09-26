@@ -163,6 +163,49 @@ class UserStore:
             ).fetchone()
         return self._user(row) if row else None
 
+    def people(self) -> list[dict]:
+        """Everyone who can sign in, for the admin page: joined, last signed in (the latest use
+        of any of their passkeys), how many passkeys, and whether they have linked a brokerage."""
+        with self._connect() as con:
+            rows = con.execute(
+                "SELECT u.id, u.handle, u.name, u.is_admin, u.created_at,"
+                " (SELECT count(*) FROM credentials c WHERE c.user_id = u.id),"
+                " (SELECT max(last_used_at) FROM credentials c WHERE c.user_id = u.id),"
+                " EXISTS (SELECT 1 FROM snaptrade_users s WHERE s.user_id = u.id)"
+                " FROM users u ORDER BY u.created_at"
+            ).fetchall()
+        return [{
+            "user": self._user(r[:4]), "joined": datetime.fromisoformat(r[4]),
+            "passkeys": r[5], "last_seen": datetime.fromisoformat(r[6]) if r[6] else None,
+            "linked": bool(r[7]),
+        } for r in rows]
+
+    def remove_user(self, user_id: str) -> bool:
+        """Take someone's access away completely, in one transaction: their sessions end, their
+        passkeys stop working, their SnapTrade identity is forgotten, and invites made FOR them die.
+        Invites they made for others are kept, with the author forgotten. True if they existed.
+
+        SnapTrade's side of their links is the caller's to delete first — this only forgets the
+        secret that reaches it.
+        """
+        with self._connect() as con:
+            for sql in (
+                "DELETE FROM user_sessions WHERE user_id = ?",
+                "DELETE FROM credentials WHERE user_id = ?",
+                "DELETE FROM snaptrade_users WHERE user_id = ?",
+                "DELETE FROM invites WHERE for_user = ?",
+                "UPDATE invites SET created_by = NULL WHERE created_by = ?",
+            ):
+                con.execute(sql, (user_id,))
+            # A table an earlier release used, still in older files, still holding a foreign key
+            # to users — left in place for rollbacks, so cleared rather than dropped.
+            legacy = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'broker_links'"
+            ).fetchone()
+            if legacy:
+                con.execute("DELETE FROM broker_links WHERE user_id = ?", (user_id,))
+            return con.execute("DELETE FROM users WHERE id = ?", (user_id,)).rowcount == 1
+
     def users(self) -> list[User]:
         with self._connect() as con:
             rows = con.execute(
@@ -176,12 +219,15 @@ class UserStore:
         self, user_id: str, credential_id: bytes, public_key: bytes, sign_count: int,
         transports: list[str] | None = None,
     ) -> None:
+        # Saving a passkey signs the person in, so it counts as its first use — otherwise someone
+        # who joined and has been using the site since reads as "last signed in: never".
+        now = _now().isoformat()
         with self._connect() as con:
             con.execute(
                 "INSERT INTO credentials (id, user_id, public_key, sign_count, transports,"
-                " created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                " created_at, last_used_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (credential_id, user_id, public_key, sign_count,
-                 json.dumps(transports or []), _now().isoformat()),
+                 json.dumps(transports or []), now, now),
             )
 
     @staticmethod

@@ -104,8 +104,13 @@ class SnapTradeClient:
         return secret
 
     def delete_user(self, user_id: str) -> None:
-        """Remove the person and every connection they made, at SnapTrade."""
-        self._call(self._sdk.authentication.delete_snap_trade_user, user_id=user_id)
+        """Remove the person and every connection they made, at SnapTrade — which frees those
+        connections from the plan's count. Already gone (404) counts as done."""
+        try:
+            self._call(self._sdk.authentication.delete_snap_trade_user, user_id=user_id)
+        except ProviderDataError as e:
+            if "HTTP 404" not in str(e):
+                raise
 
     def portal_url(
         self, user: SnapTradeUser, *, redirect: str, reconnect: str | None = None,
