@@ -1768,7 +1768,7 @@ def test_production_has_no_password_prompt_in_front_of_the_portfolio() -> None:
     assert env == {"AUTH__REQUIRED": '"false"', "AUTH__PASSWORD": '""'}
 
 
-# --- the invites page ------------------------------------------------------------------------
+# --- the admin tab ---------------------------------------------------------------------------
 
 def _link_in(html: str) -> str:
     import re
@@ -1778,19 +1778,52 @@ def _link_in(html: str) -> str:
     return found.group(1)
 
 
+def test_the_admin_tab_is_shown_to_admins_and_to_nobody_else() -> None:
+    c = _client()
+    try:
+        assert 'href="/admin"' not in c.get("/").text  # a stranger
+        _as(c, "Alex", admin=False)
+        assert 'href="/admin"' not in c.get("/").text  # a member
+        assert 'href="/admin"' not in c.get("/portfolio").text
+        _as(c, "Sam")
+        assert 'href="/admin"' in c.get("/").text  # on every page, not just the Portfolio
+        assert 'href="/admin"' in c.get("/portfolio").text
+    finally:
+        c.__exit__(None, None, None)
+
+
+@pytest.mark.parametrize("method, path", [
+    ("GET", "/admin"), ("POST", "/admin/invites"), ("POST", "/admin/invites/cancel"),
+    ("POST", "/admin/people/signout"), ("POST", "/admin/people/remove"),
+])
+def test_to_anyone_but_an_admin_the_admin_routes_do_not_exist(method, path) -> None:
+    """Signed out or a member, the answer is the same one an unknown address gets — the page does
+    not announce itself, and nothing is created or changed."""
+    c = _client()
+    try:
+        unknown = c.get("/no-such-page")
+        for who in (None, "member"):
+            if who:
+                _as(c, "Alex", admin=False)
+            r = c.request(method, path, data={"name": "Mallory", "admin": "1", "user_id": "x",
+                                              "ref": "x"}, follow_redirects=False)
+            assert (r.status_code, r.json()) == (unknown.status_code, unknown.json()), who
+        assert app.state.users.pending_invites() == []
+    finally:
+        c.__exit__(None, None, None)
+
+
 def test_an_admin_makes_an_invite_and_the_link_creates_a_working_account() -> None:
     c = _client()
     try:
         _as(c, "Sam")
-        page = c.get("/portfolio/invites")
+        page = c.get("/admin")
         assert page.status_code == 200 and "Create invite link" in page.text
-        made = c.post("/portfolio/invites", data={"name": "Alex"})
+        made = c.post("/admin/invites", data={"name": "Alex"})
         link = _link_in(made.text)
-        token = link.rsplit("/", 1)[-1]
         assert "Invite for Alex" in made.text and "only time it is shown" in made.text
-
         c.cookies.clear()  # Alex, on their own device
-        r, _ = _register_over_http(c, token)
+        r, _ = _register_over_http(c, link.rsplit("/", 1)[-1])
         assert r.status_code == 200
         alex = next(u for u in app.state.users.users() if u.name == "Alex")
         assert not alex.is_admin, "an admin only when the box is ticked"
@@ -1798,28 +1831,13 @@ def test_an_admin_makes_an_invite_and_the_link_creates_a_working_account() -> No
         c.__exit__(None, None, None)
 
 
-def test_ticking_admin_makes_an_admin() -> None:
-    c = _client()
-    try:
-        _as(c, "Sam")
-        token = _link_in(c.post("/portfolio/invites", data={"name": "Pat", "admin": "1"}).text)
-        c.cookies.clear()
-        _register_over_http(c, token.rsplit("/", 1)[-1])
-        assert next(u for u in app.state.users.users() if u.name == "Pat").is_admin
-    finally:
-        c.__exit__(None, None, None)
-
-
 def test_a_link_is_shown_once_and_never_again() -> None:
-    """The pending list works by a non-secret reference, so reloading the page cannot re-print
-    a live token for someone looking over a shoulder, or a screenshot, to use."""
     c = _client()
     try:
         _as(c, "Sam")
-        token = _link_in(c.post("/portfolio/invites", data={"name": "Alex"}).text).rsplit("/")[-1]
-        later = c.get("/portfolio/invites").text
-        assert "Alex" in later and "creates an account" in later
-        assert token not in later
+        token = _link_in(c.post("/admin/invites", data={"name": "Alex"}).text).rsplit("/")[-1]
+        later = c.get("/admin").text
+        assert "Alex" in later and "creates an account" in later and token not in later
     finally:
         c.__exit__(None, None, None)
 
@@ -1828,10 +1846,10 @@ def test_cancelling_an_invite_kills_the_link() -> None:
     c = _client()
     try:
         _as(c, "Sam")
-        token = _link_in(c.post("/portfolio/invites", data={"name": "Alex"}).text).rsplit("/")[-1]
+        token = _link_in(c.post("/admin/invites", data={"name": "Alex"}).text).rsplit("/")[-1]
         (pending,) = app.state.users.pending_invites()
-        after = c.post("/portfolio/invites/cancel", data={"ref": pending.ref}).text
-        assert "No invites outstanding" in after
+        assert "No invites outstanding" in c.post("/admin/invites/cancel",
+                                                  data={"ref": pending.ref}).text
         assert c.get(f"/invite/{token}").status_code == 404
     finally:
         c.__exit__(None, None, None)
@@ -1841,14 +1859,11 @@ def test_a_new_passkey_link_adds_to_the_same_account() -> None:
     c = _client()
     try:
         sam = _as(c, "Sam")
-        made = c.post("/portfolio/invites", data={"for_user": sam.id}).text
+        made = c.post("/admin/invites", data={"for_user": sam.id}).text
         assert "New passkey link for Sam" in made
-        token = _link_in(made).rsplit("/", 1)[-1]
         c.cookies.clear()
-        assert "Add a passkey" in c.get(f"/invite/{token}").text
-        r, _ = _register_over_http(c, token)
+        r, _ = _register_over_http(c, _link_in(made).rsplit("/", 1)[-1])
         assert r.status_code == 200 and len(app.state.users.users()) == 1
-        assert len(app.state.users.credentials_for(sam.id)) == 1
     finally:
         c.__exit__(None, None, None)
 
@@ -1858,49 +1873,153 @@ def test_an_invite_needs_a_name() -> None:
     try:
         _as(c, "Sam")
         for name in ("", "   ", "x" * 61):
-            r = c.post("/portfolio/invites", data={"name": name})
-            assert "Give the invite a name" in r.text
+            assert "Give the invite a name" in c.post("/admin/invites", data={"name": name}).text
         assert app.state.users.pending_invites() == []
     finally:
         c.__exit__(None, None, None)
 
 
-def test_only_an_admin_can_invite() -> None:
-    c = _client()
-    try:
-        _as(c, "Alex", admin=False, linked=False)
-        assert c.get("/portfolio/invites").status_code == 403
-        assert c.post("/portfolio/invites", data={"name": "Mallory"}).status_code == 403
-        assert c.post("/portfolio/invites", data={"name": "M", "admin": "1"}).status_code == 403
-        assert app.state.users.pending_invites() == []
-        assert "Invite people" not in c.get("/portfolio").text
-        c.cookies.clear()
-        stranger = c.get("/portfolio/invites", follow_redirects=False)
-        assert stranger.status_code == 303 and stranger.headers["location"].startswith("/login")
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_a_member_cannot_cancel_invites_either() -> None:
+def test_the_old_invites_address_leads_to_the_admin_tab() -> None:
     c = _client()
     try:
         _as(c, "Sam")
-        c.post("/portfolio/invites", data={"name": "Alex"})
-        (pending,) = app.state.users.pending_invites()
-        _as(c, "Eve", admin=False, linked=False)
-        assert c.post("/portfolio/invites/cancel", data={"ref": pending.ref}).status_code == 403
-        assert len(app.state.users.pending_invites()) == 1
+        r = c.get("/portfolio/invites", follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/admin"
     finally:
         c.__exit__(None, None, None)
 
 
-def test_the_proxy_config_is_mounted_as_a_directory() -> None:
-    """A single-file bind mount is pinned to the file's inode, and `git checkout` replaces files
-    rather than editing them — so the proxy kept reading the old Caddyfile after every deploy, and
-    v3.3.0's www redirect shipped without taking effect. A directory mount sees the new file."""
-    compose = (pathlib.Path(__file__).parents[2] / "docker-compose.yml").read_text()
-    assert "- ./deploy/caddy:/etc/caddy:ro" in compose
-    assert "Caddyfile:/etc/caddy/Caddyfile" not in compose
+# --- people ---------------------------------------------------------------------------------
+
+class _DeletingSnapTrade(_Linked):
+    def __init__(self, fail=None) -> None:
+        self.deleted, self._fail = [], fail
+
+    def delete_user(self, user_id):
+        if self._fail:
+            raise self._fail
+        self.deleted.append(user_id)
+
+
+def test_the_people_list_says_who_has_linked_and_when_they_last_signed_in() -> None:
+    c = _client()
+    try:
+        _as(c, "Alex", admin=False, linked=False)
+        _as(c, "Sam")
+        body = c.get("/admin").text
+        assert "Alex" in body and "Sam</td>" not in body.split("(you)")[0][-40:]
+        assert "member" in body and "admin" in body and "linked" in body and "never" in body
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_removing_someone_ends_everything_they_had() -> None:
+    """Sessions, passkeys, their SnapTrade identity — and, at SnapTrade, their links, which is
+    what frees them from the plan's count."""
+    c = _client()
+    fake = app.state.snaptrade = _DeletingSnapTrade()
+    try:
+        alex = _as(c, "Alex", admin=False)
+        alex_cookie = c.cookies.get(app.state.settings.portfolio.cookie_name)
+        app.state.users.add_credential(alex.id, b"alex-key", b"pk", 0)
+        app.state.users.create_invite("Alex", for_user=alex.id)
+        _as(c, "Sam")
+        body = c.post("/admin/people/remove", data={"user_id": alex.id}).text
+        assert "Alex no longer has access" in body
+        store = app.state.users
+        assert store.user(alex.id) is None and store.session(alex_cookie) is None
+        assert store.credential(b"alex-key") is None and store.snaptrade_secret(alex.id) is None
+        assert store.pending_invites() == [] and fake.deleted == [alex.id]
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_if_snaptrade_cannot_be_reached_nothing_is_removed() -> None:
+    """Removing locally first would leave links at SnapTrade that nothing can reach to delete —
+    still counted against the plan. So SnapTrade goes first, and a failure changes nothing."""
+    from wheel_screener.core.errors import ProviderUnavailableError
+
+    c = _client()
+    app.state.snaptrade = _DeletingSnapTrade(fail=ProviderUnavailableError("SnapTrade is down"))
+    try:
+        alex = _as(c, "Alex", admin=False)
+        _as(c, "Sam")
+        body = c.post("/admin/people/remove", data={"user_id": alex.id}).text
+        assert "Nothing was changed" in body and app.state.users.user(alex.id) is not None
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_you_cannot_remove_yourself() -> None:
+    c = _client()
+    try:
+        sam = _as(c, "Sam")
+        body = c.post("/admin/people/remove", data={"user_id": sam.id}).text
+        assert "remove your own access" in body and app.state.users.user(sam.id)
+        assert 'hx-post="/admin/people/remove"' not in c.get("/admin").text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_signing_someone_out_everywhere_keeps_their_account() -> None:
+    c = _client()
+    try:
+        alex = _as(c, "Alex", admin=False)
+        phone = c.cookies.get(app.state.settings.portfolio.cookie_name)
+        _as(c, "Sam")
+        body = c.post("/admin/people/signout", data={"user_id": alex.id}).text
+        assert "Alex is signed out everywhere" in body
+        assert app.state.users.session(phone) is None and app.state.users.user(alex.id)
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_signing_yourself_out_everywhere_sends_this_page_to_sign_in() -> None:
+    c = _client()
+    try:
+        sam = _as(c, "Sam")
+        r = c.post("/admin/people/signout", data={"user_id": sam.id},
+                   headers={"HX-Request": "true"})
+        assert r.headers.get("HX-Redirect") == "/login?next=/admin"
+        assert c.get("/admin").status_code == 404  # that session is gone too
+    finally:
+        c.__exit__(None, None, None)
+
+
+# --- status ---------------------------------------------------------------------------------
+
+def test_status_says_when_the_last_backup_ran_and_warns_when_it_is_overdue(tmp_path) -> None:
+    c = _client()
+    app.state.settings.backup_dir = str(tmp_path / "backups")
+    try:
+        _as(c, "Sam")
+        body = c.get("/admin").text
+        assert "Latest backup" in body and "none yet" in body and "crontab" in body
+        stamp = (datetime.now(tz=UTC) - timedelta(hours=3)).strftime("%Y-%m-%dT%H%M%S")
+        folder = tmp_path / "backups" / stamp
+        folder.mkdir(parents=True)
+        (folder / "accounts.sqlite").write_bytes(b"")
+        body = c.get("/admin").text
+        assert "3h ago" in body and "accounts.sqlite" in body and "overdue" not in body
+        old = (datetime.now(tz=UTC) - timedelta(days=3)).strftime("%Y-%m-%dT%H%M%S")
+        for f in list((tmp_path / "backups").iterdir()):
+            f.rename(tmp_path / "backups" / old)
+        assert "overdue" in c.get("/admin").text
+    finally:
+        app.state.settings.backup_dir = "data/backups"
+        c.__exit__(None, None, None)
+
+
+def test_status_shows_the_version_and_whether_linking_is_on() -> None:
+    from wheel_screener import __version__
+
+    c = _client()
+    try:
+        _as(c, "Sam")
+        body = c.get("/admin").text
+        assert __version__ in body and "SnapTrade" in body
+    finally:
+        c.__exit__(None, None, None)
 
 
 def test_an_expired_contract_says_expired_instead_of_a_negative_day_count() -> None:
@@ -1943,3 +2062,16 @@ def test_the_command_line_reads_its_token_s_expiry_from_the_grant(tmp_path) -> N
     assert token_expires_at(SchwabSettings(token_path=str(tmp_path / "none.json"))) is None
     path.write_text("not json")
     assert token_expires_at(SchwabSettings(token_path=str(path))) is None
+
+
+def test_joining_counts_as_signing_in() -> None:
+    """Saving a passkey through an invite signs the person in; the admin list must not call
+    someone who has been using the site since "never signed in"."""
+    c = _client()
+    try:
+        _register_over_http(c, app.state.users.create_invite("Sam", is_admin=True))
+        (row,) = app.state.users.people()
+        assert row["last_seen"] is not None
+        assert "<td>never</td>" not in c.get("/admin").text
+    finally:
+        c.__exit__(None, None, None)

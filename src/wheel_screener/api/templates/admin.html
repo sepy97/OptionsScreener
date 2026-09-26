@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% import "_icons.html" as icon %}
+{% block scripts %}<script src="/static/copy.js" defer></script>{% endblock %}
+{% block content %}
+  <article>
+    <h2>Admin</h2>
+
+    {# ---- people and invites: re-rendered in place after every action ---------------------- #}
+    <h4>People</h4>
+    <form class="invite-form" hx-post="/admin/invites" hx-target="#people"
+          hx-swap="innerHTML" hx-on::after-request="if (event.detail.successful) this.reset()">
+      <label>Invite someone
+        <input type="text" name="name" required maxlength="60" autocomplete="off"
+               placeholder="Who is it for?">
+      </label>
+      <label class="invite-admin">
+        <input type="checkbox" name="admin" value="1">
+        Admin &mdash; can open this tab and invite others
+      </label>
+      <button type="submit" class="run-btn">Create invite link</button>
+    </form>
+    <div id="people">{% include "_admin_people.html" %}</div>
+
+    {# ---- how the deployment is doing ------------------------------------------------------ #}
+    {% set st = status %}
+    <h4>Status</h4>
+    <dl class="admin-status">
+      <div><dt>Version</dt><dd>{{ st.version }}</dd></div>
+      {% for p in st.providers %}
+        <div><dt>{{ p.role | capitalize }}</dt>
+          <dd>{% if p.ready %}<span class="badge badge--ok">working</span> {{ p.name }}
+              {% else %}<span class="badge badge--neg">{{ icon.warning() }}failing</span> {{ p.name }}
+                <small class="detail-note">{{ p.detail }}</small>{% endif %}</dd></div>
+      {% endfor %}
+      <div><dt>Scheduled screen</dt>
+        <dd>{% if st.screen %}{{ st.screen_count }} candidates, {{ st.screen_age }}
+              {% if st.screen_stale %}<span class="badge">{{ icon.warning() }}stale</span>{% endif %}
+            {% else %}<span class="badge">{{ icon.warning() }}none yet</span>
+              <small class="detail-note">the refresh job has not stored one</small>{% endif %}</dd></div>
+      <div><dt>Latest backup</dt>
+        <dd>{% if st.backup %}{{ st.backup_age }} &middot; {{ st.backup_files | join(', ') }}
+              <small class="detail-note">{{ st.backups_kept }} kept</small>{% endif %}
+            {% if st.backup_overdue %}<span class="badge badge--neg">{{ icon.warning() }}{{ 'overdue' if st.backup else 'none yet' }}</span>
+              <small class="detail-note">the nightly job is not running &mdash; is the crontab
+                installed? (<code>crontab /srv/steadybull/deploy/crontab</code>)</small>{% endif %}</dd></div>
+      <div><dt>Brokerage linking</dt>
+        <dd>{% if st.snaptrade_on %}<span class="badge badge--ok">on</span> SnapTrade
+            {% else %}<span class="badge">off</span> <small class="detail-note">no SnapTrade keys</small>{% endif %}</dd></div>
+    </dl>
+  </article>
+{% endblock %}

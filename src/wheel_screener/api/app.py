@@ -290,7 +290,14 @@ async def _rate_limit_gate(request: Request, call_next):
     return await call_next(request)
 
 _HERE = Path(__file__).parent
-templates = Jinja2Templates(directory=str(_HERE / "templates"))
+def _viewer(request: Request) -> dict:
+    """Who is looking at the page, for every template: the navigation shows the Admin tab to an
+    admin and to nobody else. One session lookup per page — a point read on a local file."""
+    session = current_session(request)
+    return {"viewer": session.user if session is not None else None}
+
+
+templates = Jinja2Templates(directory=str(_HERE / "templates"), context_processors=[_viewer])
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
 
 
@@ -662,6 +669,16 @@ def _probe(request: Request, probe: object) -> str | None:
     return detail
 
 
+def _provider_status(request: Request) -> list[dict]:
+    """Each credentialed data connection, actually called (and cached briefly — see _probe)."""
+    out = []
+    for probe in getattr(request.app.state, "probes", []):
+        detail = _probe(request, probe)
+        out.append({"role": probe.role, "name": probe.name, "ready": detail is None,
+                     "detail": detail})
+    return out
+
+
 @app.get("/health")
 def health(
     request: Request,
@@ -682,13 +699,7 @@ def health(
     except Exception:  # noqa: BLE001 - health must never raise
         store_loaded = False
 
-    providers = []
-    for probe in getattr(request.app.state, "probes", []):
-        detail = _probe(request, probe)
-        providers.append(
-            {"role": probe.role, "name": probe.name, "ready": detail is None, "detail": detail}
-        )
-
+    providers = _provider_status(request)
     chains = next((p for p in providers if p["role"] == "option chains"), None)
     chain_ready = bool(chains["ready"]) if chains else False
     degraded = [p for p in providers if not p["ready"]]
@@ -1261,93 +1272,163 @@ def brokerages_remove(request: Request, connection_id: str = Form("")):
     return RedirectResponse("/portfolio", status_code=303)
 
 
-def _admin_only(request: Request, message: str):
-    """The rendered refusal for a non-admin, or None when this person is an admin. Inviting is
-    admin-only because an invite is an account. (Linking a brokerage is not: everyone links their
-    own, through SnapTrade.)"""
+# --- Admin -------------------------------------------------------------------------------------
+# One tab, for admin accounts only: the people who can sign in, invites, and how the deployment is
+# doing. To anyone else — signed in or not — every route here answers exactly what an unknown
+# address answers, so the page does not announce that it exists.
+
+# A nightly backup older than this is a backup job that is not running.
+_BACKUP_OVERDUE = timedelta(hours=36)
+
+
+def _require_admin(request: Request):
+    """The signed-in admin, or a 404 indistinguishable from an address that does not exist."""
     session = current_session(request)
-    if session is not None and session.user.is_admin:
-        return None
-    return templates.TemplateResponse(
-        request, "_error.html", {"message": message}, status_code=403,
-    )
+    if session is None or not session.user.is_admin:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return session.user
 
 
-# --- Invites: the admin page -------------------------------------------------------------------
-# Under /portfolio, so the session gate covers it; admins only on top of that. A new link is shown
-# exactly once, in the response that made it — the pending list shows each invite's non-secret
-# `ref`, so reloading the page never prints a live token again.
-
-
-def _invites_context(request: Request, created: dict | None = None, error: str | None = None):
+def _admin_people_context(request: Request, created: dict | None = None,
+                          error: str | None = None, notice: str | None = None) -> dict:
     users = request.app.state.users
-    people = [(u, len(users.credentials_for(u.id))) for u in users.users()]
-    names = {u.id: u.name for u, _ in people}
+    people = users.people()
     return {
-        "active_tab": "portfolio",
-        "user": current_session(request).user,
-        "pending": users.pending_invites(),
+        "active_tab": "admin",
+        "me": current_session(request).user,
         "people": people,
-        "names": names,
+        "names": {row["user"].id: row["user"].name for row in people},
+        "pending": users.pending_invites(),
         "created": created,
         "error": error,
+        "notice": notice,
     }
 
 
-@app.get("/portfolio/invites")
-def invites_page(request: Request):
-    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
-        return refused
-    return templates.TemplateResponse(request, "invites.html", _invites_context(request))
+def _admin_status(request: Request, runner: JobRunner) -> dict:
+    """How the deployment is doing, in the terms an operator acts on."""
+    from wheel_screener.jobs.backup import backup_time, list_backups
+
+    settings = request.app.state.settings
+    screen = runner.store.latest_done(source=SOURCE_REFRESH)
+    screen_age, screen_stale = _humanize_age(screen["created_at"]) if screen else ("", True)
+    backups = list_backups(settings.backup_dir)
+    latest = backups[-1] if backups else None
+    taken = backup_time(latest) if latest else None
+    return {
+        "version": __version__,
+        "providers": _provider_status(request),
+        "screen": screen,
+        "screen_age": screen_age,
+        "screen_stale": screen_stale,
+        "screen_count": len((screen or {}).get("result") or []),
+        "backup": latest,
+        "backup_age": _humanize_age(taken.isoformat())[0] if taken else "",
+        "backup_overdue": taken is None or datetime.now(tz=UTC) - taken > _BACKUP_OVERDUE,
+        "backup_files": sorted(f.name for f in latest.iterdir()) if latest else [],
+        "backups_kept": len(backups),
+        "snaptrade_on": request.app.state.snaptrade is not None,
+    }
 
 
-@app.post("/portfolio/invites")
-def invites_create(
-    request: Request,
-    name: str = Form(""),
-    admin: str = Form(""),
-    for_user: str = Form(""),
+@app.get("/admin")
+def admin_page(request: Request, runner: JobRunner = Depends(get_job_runner)):
+    _require_admin(request)
+    return templates.TemplateResponse(
+        request, "admin.html",
+        {**_admin_people_context(request), "status": _admin_status(request, runner)},
+    )
+
+
+def _people(request: Request, **context):
+    return templates.TemplateResponse(
+        request, "_admin_people.html", _admin_people_context(request, **context))
+
+
+@app.post("/admin/invites")
+def admin_invite(
+    request: Request, name: str = Form(""), admin: str = Form(""), for_user: str = Form(""),
 ):
-    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
-        return refused
+    me = _require_admin(request)
     users = request.app.state.users
     settings = request.app.state.settings
     target = users.user(for_user) if for_user else None
     if for_user and target is None:
-        return templates.TemplateResponse(
-            request, "_invites.html",
-            _invites_context(request, error="That account no longer exists."),
-        )
+        return _people(request, error="That account no longer exists.")
     name = (target.name if target else name).strip()
     if not name or len(name) > 60:
-        return templates.TemplateResponse(
-            request, "_invites.html",
-            _invites_context(request, error="Give the invite a name, up to 60 characters."),
-        )
+        return _people(request, error="Give the invite a name, up to 60 characters.")
     token = users.create_invite(
         name, is_admin=bool(admin) and target is None,
         for_user=target.id if target else None,
-        ttl=timedelta(hours=settings.passkeys.invite_hours),
-        created_by=current_session(request).user.id,
+        ttl=timedelta(hours=settings.passkeys.invite_hours), created_by=me.id,
     )
-    created = {
+    return _people(request, created={
         "name": name,
         "link": f"{settings.passkeys.origin.rstrip('/')}/invite/{token}",
         "for_user": target is not None,
         "admin": bool(admin) and target is None,
         "hours": settings.passkeys.invite_hours,
-    }
-    return templates.TemplateResponse(
-        request, "_invites.html", _invites_context(request, created=created)
-    )
+    })
 
 
-@app.post("/portfolio/invites/cancel")
-def invites_cancel(request: Request, ref: str = Form("")):
-    if (refused := _admin_only(request, "Only an admin can invite people.")) is not None:
-        return refused
+@app.post("/admin/invites/cancel")
+def admin_invite_cancel(request: Request, ref: str = Form("")):
+    _require_admin(request)
     request.app.state.users.cancel_invite(ref)
-    return templates.TemplateResponse(request, "_invites.html", _invites_context(request))
+    return _people(request)
+
+
+@app.post("/admin/people/signout")
+def admin_sign_out(request: Request, user_id: str = Form("")):
+    """End every session someone holds — a lost phone, say. Their account and passkeys stay."""
+    me = _require_admin(request)
+    target = request.app.state.users.user(user_id)
+    if target is None:
+        return _people(request, error="That account no longer exists.")
+    request.app.state.users.end_sessions_for(target.id)
+    if target.id == me.id:
+        # including this one: the next page load will ask for a passkey
+        return Response(status_code=204, headers={"HX-Redirect": "/login?next=/admin"})
+    return _people(request, notice=f"{target.name} is signed out everywhere.")
+
+
+@app.post("/admin/people/remove")
+def admin_remove(request: Request, user_id: str = Form("")):
+    """Take someone's access away: sessions, passkeys, and their brokerage links at SnapTrade —
+    which frees those links from the plan's count. SnapTrade goes first, and if it cannot be
+    reached nothing is removed, so the admin can simply try again rather than leave links behind
+    that this site can no longer reach to delete."""
+    me = _require_admin(request)
+    users = request.app.state.users
+    target = users.user(user_id)
+    if target is None:
+        return _people(request, error="That account no longer exists.")
+    if target.id == me.id:
+        return _people(request, error="You can't remove your own access.")
+    snaptrade = request.app.state.snaptrade
+    note = ""
+    if users.snaptrade_secret(target.id) is not None:
+        if snaptrade is None:
+            note = (" Their brokerage links are still held at SnapTrade, since this site no longer"
+                    " has keys to reach it; remove them from the SnapTrade dashboard.")
+        else:
+            try:
+                snaptrade.delete_user(target.id)
+            except ProviderError as e:
+                return _people(request, error=(
+                    f"Could not remove {target.name}'s brokerage links at SnapTrade ({e}). "
+                    "Nothing was changed — try again."))
+    users.remove_user(target.id)
+    _balances_cache(request).clear(target.id)
+    _swap_cache(request).clear(target.id)
+    return _people(request, notice=f"{target.name} no longer has access.{note}")
+
+
+@app.get("/portfolio/invites")
+def old_invites_page():
+    """Where the Invites page used to be, for bookmarks."""
+    return RedirectResponse("/admin", status_code=303)
 
 
 # --- Signing in: passkeys --------------------------------------------------------------------

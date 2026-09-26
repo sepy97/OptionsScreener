@@ -22,7 +22,7 @@ operator, one session at a time, no user table."
 | Phase 0 posture | **decided and built: gate /portfolio only, screener stays public** (§1) |
 | Login | **built: passkeys + invite links** (§8, Phase 1) |
 | Lost device | an admin re-invites the same account; a passkey is added, the old ones keep working |
-| Who creates invites | **admins, on the Invites page**; the first admin from the CLI |
+| Who creates invites | **admins, on the Admin tab** (v3.7.0); the first admin from the CLI |
 | Who may link a broker | admins only, while there is one Schwab token per deployment |
 | Broker linking | SnapTrade, keeping the direct Schwab adapter for the owner (§3) |
 | Database | SQLite, with one choke point and a two-user leak test in place of row-level security (§5) |
@@ -519,8 +519,14 @@ matched the direct one (balances, positions, open dates, holdings), the direct w
 Connect/Disconnect Schwab routes, the one-token-per-deployment rules that existed only because of
 it (admin-only linking, link ownership, `revoke_broker`'s successors), the code that merged two
 sources, and the Schwab section of `/health` — which had been listing the owner's link expiry on a
-public page. Everyone, admins included, links through SnapTrade; admins only add the Invites page.
+public page. Everyone, admins included, links through SnapTrade; admins only add the Admin tab.
 The command line keeps its own Schwab access (`auth-login`, `balances`, `doctor`).
+
+**An Admin tab, v3.7.0.** Only admins see it; to anyone else `/admin` answers exactly like an
+unknown address. It takes over the Invites page and adds what was missing before anyone could be
+invited: **removing someone's access** (sessions, passkeys, and their links at SnapTrade — which frees
+them from the plan's count; SnapTrade goes first, so a failure there changes nothing), *sign out
+everywhere*, and a status panel whose most useful line is **when the last backup ran**.
 
 Not done: the `CONNECTION_BROKEN` webhook. A broken link is found when its owner next opens the
 tab, which is when it matters; a webhook would only let the site say so sooner.

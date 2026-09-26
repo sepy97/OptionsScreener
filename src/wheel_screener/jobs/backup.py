@@ -29,7 +29,7 @@ import re
 import shutil
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 # The account tables worth restoring. Everything else in that file is dropped from the copy.
@@ -53,6 +53,20 @@ class BackupReport:
     path: Path
     files: dict[str, str] = field(default_factory=dict)  # file -> one-line summary
     pruned: list[Path] = field(default_factory=list)
+
+
+def list_backups(dest_root: str | Path) -> list[Path]:
+    """Finished backups under ``dest_root``, oldest first. Only folders named like a backup."""
+    root = Path(dest_root).expanduser()
+    if not root.is_dir():
+        return []
+    return sorted((p for p in root.iterdir() if p.is_dir() and _STAMP.match(p.name)),
+                  key=lambda p: p.name)
+
+
+def backup_time(folder: Path) -> datetime:
+    """When a backup was taken — its folder's name, in UTC."""
+    return datetime.strptime(folder.name, "%Y-%m-%dT%H%M%S").replace(tzinfo=UTC)
 
 
 def _copy_sqlite(source: Path, target: Path, keep_tables: tuple[str, ...] | None = None) -> None:
@@ -145,10 +159,7 @@ def run_backup(
         raise
 
     # Keep the newest `keep` finished backups, and clear any half-written ones a crash left.
-    finished = sorted(
-        (p for p in root.iterdir() if p.is_dir() and _STAMP.match(p.name)),
-        key=lambda p: p.name,
-    )
+    finished = list_backups(root)
     for old in finished[:-keep]:
         shutil.rmtree(old)
         report.pruned.append(old)
