@@ -678,7 +678,7 @@ class ScreenerService:
         the shares behind them are still earning (see ``core.swap``).
 
         One chain pull per held put does double duty: it carries the ASK that says what buying
-        the put back costs, and the board the YARDSTICK is chosen from — the one put the entry
+        the put back costs, and the board the fresh put is chosen from — the one put the entry
         rules would open on that ticker today, picked by the very same ``select_put`` the screen
         uses, so the comparison is against a put this project would really sell.
 
