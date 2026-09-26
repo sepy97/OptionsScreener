@@ -212,7 +212,10 @@ Adapters translate into broker-neutral `BrokerageAccount` and `Position`, with o
 underlying / strike / expiry / right / DTE as fields rather than a broker's own symbol format. The
 normalising is the adapter's job precisely because every broker spells it differently.
 
-Multi-user is explicitly **out of scope**: one operator, one session at a time, no user table.
+Multi-user was explicitly **out of scope** for v2: one operator, one session at a time, no
+user table. It is the subject of **v3** — see [`MULTI_USER_PLAN.md`](MULTI_USER_PLAN.md), which
+also records the hole this leaves today (any visitor with a Schwab account of their own can claim
+the deployment's single broker slot and evict the owner).
 
 ---
 
