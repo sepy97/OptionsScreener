@@ -141,22 +141,16 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
 
 def build_portfolio(
     settings: Settings | None = None, service: ScreenerService | None = None,
-    *, linked: bool = True,
 ) -> PortfolioService:
-    """The account-facing service, bound to whatever broker credential this caller has.
+    """The account-facing service for the COMMAND LINE: the operator's own Schwab account, read
+    with the token `wheel-screener auth-login` left on this machine. The website does not use
+    this — people link their brokerages through SnapTrade (``api.deps.get_portfolio``).
 
-    Built PER REQUEST by the web app (see ``api.deps.get_portfolio``), and once per command by the
-    CLI. Cheap on purpose: the Schwab provider loads its token when a call is actually made, so
-    constructing one costs nothing but an object.
-
-    ``accounts`` being None — no credential configured, or ``linked`` False because the caller
-    does not own the link — is a state this returns rather than refuses, because "no broker
-    linked" is a page the Portfolio tab knows how to render. The CLI passes nothing and gets the
-    credential: it runs on the operator's own machine against their own token.
+    ``accounts`` is None when no Schwab credentials are configured.
     """
     settings = settings or Settings()
     return PortfolioService(
-        accounts=_build_accounts(settings) if linked else None,
+        accounts=_build_accounts(settings),
         screener=service if service is not None else build_service(settings),
     )
 

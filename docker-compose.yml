@@ -14,8 +14,8 @@ services:
       # production posture (override anything from .env)
       CHAIN_SOURCE: alpaca # key/secret, no OAuth — the prod chain source
       # No HTTP Basic-Auth password. The screener is public on purpose, and the Portfolio is
-      # behind a passkey sign-in (v3.3.0) — including the broker connect/callback routes, which
-      # v3.0.0 had to put a password in front of because they were the way in. The password gate
+      # behind a passkey sign-in (v3.3.0); each person links their own brokerages through
+      # SnapTrade from there. The password gate
       # still exists (AUTH__SCOPE) but is switched off: it was the browser's grey pop-up, and it
       # offered no way in if passkeys ever failed. .env still holds AUTH__PASSWORD, so it is
       # blanked here explicitly; REQUIRED=false stops the app refusing to start without one.
@@ -27,22 +27,16 @@ services:
       JOBS_DB_PATH: /data/jobs.sqlite
       BACKUP_DIR: /data/backups # on the volume, so DigitalOcean's droplet backups carry it off-box
       LOG__DIR: /data/logs
-      # Portfolio state MUST live on the volume. Both default to paths inside the container, and
-      # a deploy replaces the container — so leaving them would sign every session out and destroy
-      # the broker link on each release, looking like "Schwab keeps disconnecting".
-      # Where Schwab sends the browser back. It defaults to a LOOPBACK address for the CLI's
-      # local login, which is always wrong for the web flow — Schwab would redirect the visitor
-      # to their own machine with the authorization code attached. Set here, not in .env, so a
-      # deploy cannot inherit the default.
-      SCHWAB__CALLBACK_URL: https://steadybull.net/portfolio/oauth/schwab/callback
+      # Portfolio state MUST live on the volume: a deploy replaces the container, and anything
+      # inside it would go with it — every account and passkey, on each release.
       PORTFOLIO__SESSIONS_DB_PATH: /data/sessions.sqlite
       # Passkeys are bound to the hostname and the browser reports the exact origin on every
       # sign-in; both are checked. The defaults are for local development (localhost), so they are
       # set here rather than in .env — a deploy that inherited them would refuse every passkey.
-      # These also make `wheel-screener invite` print links for the right site.
+      # These also make `wheel-screener invite` print links for the right site, and give the
+      # address SnapTrade sends people back to after linking a brokerage.
       PASSKEYS__RP_ID: steadybull.net
       PASSKEYS__ORIGIN: https://steadybull.net
-      SCHWAB__TOKEN_PATH: /data/links/schwab_token.json
     volumes:
       # host ./data holds the slim store (fundamentals/), jobs DB, logs.
       # the container runs as uid 10001 — `sudo chown -R 10001:10001 ./data` first (see DEPLOY.md).

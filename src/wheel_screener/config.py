@@ -159,7 +159,6 @@ class PortfolioSettings(BaseModel):
     # Set false only for local http development; a Secure cookie is never sent over plain HTTP,
     # so leaving it on would make the session silently fail to stick.
     cookie_secure: bool = True
-    state_ttl_seconds: int = 600  # a login that takes >10 min is an abandoned one
     # The short-term interest rate a put holder earns on the strike cash by exercising early —
     # the early-assignment test for short puts. The verdict isn't sensitive to a point either way.
     carry_rate: float = 0.04

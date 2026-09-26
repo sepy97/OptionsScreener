@@ -2,11 +2,12 @@
 
 What each copy is, and what it deliberately is not:
 
-* **accounts** — who can sign in (``users``), their passkeys' PUBLIC keys (``credentials``), and
-  who owns a broker link (``broker_links``). Nothing in it can sign anybody in. Live sessions,
-  invite links, challenges and OAuth state are left out: each is a bearer credential or worthless
-  after a few minutes, and a backup file that leaves the box should not be a way into the site.
-  Restored, it means everyone signs in again — one passkey tap — and nobody is re-invited.
+* **accounts** — who can sign in (``users``), their passkeys' PUBLIC keys (``credentials``),
+  and their SnapTrade identity, encrypted (``snaptrade_users``). Nothing in it can sign anybody
+  in. Live sessions, invite links and challenges are left out: each is a bearer credential or
+  worthless after a few minutes, and a backup file that leaves the box should not be a way into
+  the site. Restored, it means everyone signs in again — one passkey tap — and nobody is
+  re-invited or has to re-link a brokerage.
   The rule is a list of tables to KEEP, not to drop, so a table added later is left out until
   someone decides it belongs here.
 * **jobs** — past screens, including the precomputed ones the dashboard and Close? column read.
@@ -35,7 +36,7 @@ from pathlib import Path
 # `snaptrade_users` holds each person's SnapTrade secret ENCRYPTED, with the key kept in the
 # environment and not in any backup — so the copy restores people's broker links without being a
 # way into them on its own.
-ACCOUNT_TABLES = ("users", "credentials", "broker_links", "snaptrade_users")
+ACCOUNT_TABLES = ("users", "credentials", "snaptrade_users")
 
 _PARTIAL = ".partial-"
 # Only directories named like this are ever considered for pruning — never anything else that

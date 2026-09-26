@@ -14,9 +14,8 @@ from wheel_screener.adapters.snaptrade.client import SnapTradeUser
 from wheel_screener.api.jobs import JobRunner
 from wheel_screener.api.secretbox import SecretBoxError
 from wheel_screener.api.users import Session
-from wheel_screener.composition import build_portfolio
 from wheel_screener.config import Settings
-from wheel_screener.core.portfolio import AllAccounts, PortfolioService
+from wheel_screener.core.portfolio import PortfolioService
 from wheel_screener.core.service import ScreenerService
 
 
@@ -42,27 +41,14 @@ def current_session(request: Request) -> Session | None:
 
 
 def get_portfolio(request: Request) -> PortfolioService:
-    """The account-facing service for THIS request, holding THIS person's broker credential.
+    """The account-facing service for THIS request, holding THIS person's broker credential —
+    their SnapTrade identity, or nothing.
 
     Built per request, unlike the screener singleton, because a credential belongs to one person.
     This is the only place a session turns into one, and there is nowhere else for a route to get
     it from.
-
-    While a deployment has a single Schwab token, "this person's credential" means: the token, if
-    they are the one who linked it, and nothing otherwise. That rule is what stops a signed-in
-    friend being shown the owner's account — the token file itself does not know whose it is.
     """
-    session = current_session(request)
-    store = request.app.state.users
-    settings = request.app.state.settings
-    owns_link = session is not None and store.link_owner("schwab") == session.user.id
-    schwab = build_portfolio(settings, request.app.state.service, linked=owns_link).accounts
-    sources = [schwab] if schwab is not None else []
-    snaptrade = snaptrade_for(request)
-    if snaptrade is not None:
-        sources.append(snaptrade)
-    accounts = sources[0] if len(sources) == 1 else (AllAccounts(sources) if sources else None)
-    return PortfolioService(accounts=accounts, screener=request.app.state.service)
+    return PortfolioService(accounts=snaptrade_for(request), screener=request.app.state.service)
 
 
 def snaptrade_user(request: Request) -> SnapTradeUser | None:

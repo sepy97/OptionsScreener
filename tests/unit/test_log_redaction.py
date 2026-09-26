@@ -12,12 +12,10 @@ from wheel_screener.logging_config import RedactSecretsFilter, redact_path
 @pytest.mark.parametrize("path, logged", [
     ("/invite/VRSnKDqZqvxhcwHM3Sr6", "/invite/<redacted>"),
     ("/invite/VRSnKDqZqvxhcwHM3Sr6?x=1", "/invite/<redacted>?x=1"),
-    ("/portfolio/oauth/schwab/callback?code=C0DE&state=S7ATE",
-     "/portfolio/oauth/schwab/callback?<redacted>"),
     # everything else is logged as it was
     ("/portfolio", "/portfolio"),
     ("/search?symbol=AAPL", "/search?symbol=AAPL"),
-    ("/portfolio/oauth/schwab/connect", "/portfolio/oauth/schwab/connect"),
+    ("/portfolio/brokerages/return", "/portfolio/brokerages/return"),
 ])
 def test_only_the_secret_parts_are_redacted(path, logged) -> None:
     assert redact_path(path) == logged
@@ -30,7 +28,7 @@ def test_uvicorns_own_access_line_carries_no_secret() -> None:
         '%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False
     )
     lines = []
-    for path in ("/invite/SEKRIT-TOKEN", "/portfolio/oauth/schwab/callback?code=SEKRIT&state=X"):
+    for path in ("/invite/SEKRIT-TOKEN",):
         record = logging.LogRecord(
             "uvicorn.access", logging.INFO, __file__, 0, '%s - "%s %s HTTP/%s" %d',
             ("1.2.3.4:5", "GET", path, "1.1", 200), None,

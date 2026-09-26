@@ -9,12 +9,31 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from wheel_screener.config import SchwabSettings
 from wheel_screener.core.errors import AuthExpiredError
 
 logger = logging.getLogger(__name__)
+
+# Schwab refresh tokens last 7 days from the GRANT. schwab-py's `creation_timestamp` records the
+# grant and never moves on the ~30-minute access-token refreshes, so it is the clock to read.
+REFRESH_TOKEN_DAYS = 7
+
+
+def token_expires_at(settings: SchwabSettings) -> datetime | None:
+    """When the token on disk stops working, or None if there is no readable token."""
+    path = Path(settings.token_path).expanduser()
+    if not path.exists():
+        return None
+    try:
+        created = json.loads(path.read_text()).get("creation_timestamp")
+        minted = datetime.fromtimestamp(float(created), tz=UTC)
+    except (OSError, ValueError, TypeError, AttributeError) as e:
+        logger.warning("schwab token unreadable (%s)", e)
+        return None
+    return minted + timedelta(days=REFRESH_TOKEN_DAYS)
 
 
 def _creds(s: SchwabSettings) -> tuple[str, str, str, str]:

@@ -20,8 +20,9 @@ NOW = datetime(2026, 9, 26, 4, 30, tzinfo=UTC)
 
 
 def _live(tmp_path: Path):
-    """A deployment's state as it really is: an account with a passkey and a live session, an
-    unused invite, a pending challenge, OAuth state, the old release's session table, a screen."""
+    """A deployment's state as it really is: an account with a passkey, a linked brokerage and a
+    live session, an unused invite, a pending challenge, the old release's session table, a
+    screen."""
     users = UserStore(str(tmp_path / "live" / "sessions.sqlite"))
     pk = Passkeys(users, "steadybull.example", "Steady Bull", ORIGIN)
     key = SoftKey(ORIGIN)
@@ -30,8 +31,7 @@ def _live(tmp_path: Path):
     session, _ = users.create_session(sam.id, timedelta(days=90))
     invite = users.create_invite("Alex")
     pk.login_options()  # leaves a challenge behind
-    state = users.issue_state("schwab")
-    users.set_link_owner("schwab", sam.id)
+    users.set_snaptrade_secret(sam.id, b"sealed-by-a-key-that-is-not-in-the-backup")
     con = sqlite3.connect(tmp_path / "live" / "sessions.sqlite")
     con.execute("CREATE TABLE sessions (token TEXT PRIMARY KEY, broker TEXT, "
                 "account_fingerprint TEXT, expires_at TEXT)")  # v3.2.0's, left in place
@@ -43,7 +43,7 @@ def _live(tmp_path: Path):
     jobs.finish("screen1", "done", result=[])
     overlay = tmp_path / "live" / "overlay_metrics.csv"
     overlay.write_text("symbol,pe\nAAPL,30\n")
-    secrets = [session, invite, state, "LEGACY-TOKEN"]
+    secrets = [session, invite, "LEGACY-TOKEN"]
     return pk, key, sam, secrets
 
 
@@ -69,14 +69,14 @@ def _tables(path: Path) -> set[str]:
 
 def test_a_restored_backup_lets_you_sign_in_with_the_same_passkey(tmp_path) -> None:
     """The only test that says a backup is worth anything: restore it, and the passkey on the
-    person's phone still opens their account, still an admin, still owning the broker link."""
+    person's phone still opens their account, still an admin, with their brokerage still linked."""
     _, key, sam, _ = _live(tmp_path)
     report = _backup(tmp_path)
     restored = UserStore(str(report.path / "accounts.sqlite"))  # what a restore opens
     pk = Passkeys(restored, "steadybull.example", "Steady Bull", ORIGIN)
     back = pk.login(key.get(json.loads(pk.login_options())))
     assert back.id == sam.id and back.is_admin
-    assert restored.link_owner("schwab") == sam.id
+    assert restored.snaptrade_secret(sam.id) == b"sealed-by-a-key-that-is-not-in-the-backup"
 
 
 def test_it_keeps_the_account_tables_and_nothing_else(tmp_path) -> None:

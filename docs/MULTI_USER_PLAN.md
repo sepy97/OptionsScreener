@@ -514,6 +514,14 @@ contract counts and collateral all read correctly. Two things did not:
 
 Each account read through SnapTrade now says when its positions were last fetched from the broker.
 
+**The direct Schwab connection removed, v3.6.0.** Once the SnapTrade view of a real Schwab account
+matched the direct one (balances, positions, open dates, holdings), the direct web link went: the
+Connect/Disconnect Schwab routes, the one-token-per-deployment rules that existed only because of
+it (admin-only linking, link ownership, `revoke_broker`'s successors), the code that merged two
+sources, and the Schwab section of `/health` — which had been listing the owner's link expiry on a
+public page. Everyone, admins included, links through SnapTrade; admins only add the Invites page.
+The command line keeps its own Schwab access (`auth-login`, `balances`, `doctor`).
+
 Not done: the `CONNECTION_BROKEN` webhook. A broken link is found when its owner next opens the
 tab, which is when it matters; a webhook would only let the site say so sooner.
 
