@@ -7,7 +7,15 @@ from datetime import date, timedelta
 import pytest
 
 from wheel_screener.core.models import SwapAction, SwapSuggestion
-from wheel_screener.core.swap import OpenPut, SwapParams, list_median_yield, put_yield, review
+from wheel_screener.core.swap import (
+    OpenCall,
+    OpenPut,
+    SwapParams,
+    list_median_yield,
+    put_yield,
+    review,
+    review_covered_call,
+)
 
 TODAY = date(2026, 9, 21)
 YARDSTICK = 0.219  # the spec's example: the average yield of the three puts opened that day
@@ -149,3 +157,45 @@ def test_scope_and_pricing_guards() -> None:
         SwapAction.NOT_APPLICABLE)  # expires today
     no_ask = review(OpenPut("X", 100.0, 30, 1, 120.0, None), _pick("X", 0.5))
     assert no_ask.action is SwapAction.NOT_APPLICABLE and "ask" in no_ask.reason
+
+
+# --- covered calls: are the shares still earning? --------------------------------------------
+
+def _call(strike: float, days: int, spot: float, price: float, contracts: float = 1) -> OpenCall:
+    return OpenCall(symbol="X", strike=strike, days=days, contracts=contracts, spot=spot,
+                    price=price)
+
+
+def test_a_call_decayed_to_nothing_says_the_shares_are_idle() -> None:
+    """$120 call, stock at $110, 5c of premium left over 25 days: the shares are working for
+    about 0.7%/yr. Reported as a fact, with no strike recommended."""
+    r = review_covered_call(_call(120.0, 25, 110.0, 0.05))
+    assert r.action is SwapAction.IDLE and r.used_up
+    assert r.old_yield == pytest.approx(0.05 / 110 * 365 / 25, abs=1e-4)
+    assert r.cash == pytest.approx(11_000.0)  # what the shares are worth, not the strike
+    assert "earning almost nothing" in r.reason
+    assert r.suggestions == []  # nothing is suggested: closing a call frees no capital
+
+
+def test_a_call_still_paying_is_left_alone() -> None:
+    r = review_covered_call(_call(120.0, 25, 110.0, 1.50))  # ~20%/yr on the shares
+    assert r.action is SwapAction.KEEP and r.used_up is False
+    assert "still earning" in r.reason
+
+
+def test_a_call_in_the_money_is_the_called_away_question_instead() -> None:
+    r = review_covered_call(_call(120.0, 25, 125.0, 5.40))
+    assert r.action is SwapAction.NOT_APPLICABLE and "called-away" in r.reason
+
+
+def test_a_call_needs_a_share_price_and_a_mark() -> None:
+    assert review_covered_call(_call(120.0, 25, None, 0.05)).action is SwapAction.NOT_APPLICABLE
+    no_mark = review_covered_call(_call(120.0, 25, 110.0, None))
+    assert no_mark.action is SwapAction.NOT_APPLICABLE and "no price" in no_mark.reason
+    assert review_covered_call(_call(120.0, 0, 110.0, 0.05)).action is SwapAction.NOT_APPLICABLE
+
+
+def test_the_call_floor_is_the_same_setting_as_the_put_one() -> None:
+    quiet = _call(120.0, 25, 110.0, 0.30)  # ~4%/yr
+    assert review_covered_call(quiet).action is SwapAction.IDLE
+    assert review_covered_call(quiet, SwapParams(used_up_yield=0.02)).action is SwapAction.KEEP

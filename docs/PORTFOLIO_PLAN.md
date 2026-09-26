@@ -5,7 +5,7 @@ part that goes stale fastest. Target release: **v2.0.0** — shipped; positions 
 
 **Status:** live. Sign-in, balances and positions are running in production against a real Schwab
 account; P5 (ops), P5a (the early-assignment watch, v2.12.0) and P5b (the Close? swap column,
-v2.13.0, corrected in v2.14.0) are done. Remaining: P6 (cross-links into the screener).
+v2.13.0, corrected in v2.14.0, extended to calls in v2.15.0) are done. Remaining: P6 (cross-links into the screener).
 
 | Decision | State |
 |---|---|
@@ -648,6 +648,25 @@ sudo chown -R 10001:10001 /srv/steadybull/data/links
       2015). More premium collected, less money kept. Note also that `MIN_RATIO = 2.0` measured
       at a common expiry is the forward-looking equivalent of the "close at 50% of max profit"
       convention, which is the most-backtested threshold in this space.
+- [x] **P5b-2 — the call side (v2.15.0).** Two gaps a reader spotted: the Assignment cell said
+      nothing about moneyness for short calls, and the Close? column ignored them entirely.
+      - **Moneyness now shows for short calls**, worded for the side. The original decision —
+        "assignment is only a cash question for a short put" — was defensible until v2.12.0 put
+        early-assignment and ex-dividend markers in the same cell for calls: the page would warn
+        that the holder was about to exercise without saying whether it was in the money. In the
+        money is stated, not alarmed at: for a covered call it is the outcome it was written for.
+      - **A dead call is marked `idle`, and nothing is recommended.** The put rule does not port:
+        closing a call frees no capital (the capital IS the shares), so there is no cross-ticker
+        decision, and a closer strike buys premium by capping upside and raising the odds of a
+        sale — possibly below where the holder would have kept the stock, and as a taxable event.
+        "This cash is idle" is a fact; "these shares should earn more" is a view on the stock,
+        which the app does not have. So it reports the rate the shares are earning and stops.
+      - **It costs no API call.** The broker's own mark prices the call, so unlike the put path
+        there is no chain pull — the check is free on every page load.
+      - Two app-layer filters still said SHORT_PUT after the service learned about calls: the
+        stamping pass never handed calls to the service, and the panel route could not find one.
+        Both were caught by rendering the page rather than by the tests, which is the second time
+        that has been true for this column — the interaction is where these bugs live.
 - [ ] **P6 — cross-links** into screener and search.
 - [ ] **v2.0.0 release.**
 - [ ] *(later)* **A second broker**, to prove the abstraction is real rather than Schwab wearing a

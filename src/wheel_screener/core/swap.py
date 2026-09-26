@@ -171,6 +171,73 @@ def review(
     )
 
 
+@dataclass(frozen=True)
+class OpenCall:
+    """An open short call, for the idle-shares check."""
+
+    symbol: str
+    strike: float
+    days: int  # to expiry
+    contracts: float
+    spot: float | None
+    price: float | None  # what the call is worth now, per share
+
+
+def review_covered_call(call: OpenCall, params: SwapParams = DEFAULT_PARAMS) -> SwapReview:
+    """Are the shares behind this call still earning anything?
+
+    Deliberately NOT the put rule with the sides swapped, and not a recommendation. Two things
+    make a covered call a different question:
+
+    * **nothing is freed.** Closing a put releases cash that can go to any ticker, which is what
+      makes "swap into a better put" a decision about capital. The capital behind a call IS the
+      shares, so the only replacement is another call on the same stock;
+    * **the trade-off inverts.** A closer strike buys premium by capping upside and raising the
+      odds the shares are sold — possibly below where the holder would have kept them, and as a
+      taxable event. "This cash is idle" is a fact; "these shares should earn more" is a view on
+      the stock, and the app does not have one.
+
+    So this reports the fact and stops: the call has decayed to almost nothing, so the shares are
+    working for a rate worth knowing. The ways-out panel prices the roll-downs for anyone who
+    wants one.
+    """
+    if call.spot is None:
+        return SwapReview(
+            action=SwapAction.NOT_APPLICABLE,
+            reason="no share price, so there is no way to tell what these shares are earning",
+        )
+    if call.spot >= call.strike:
+        return SwapReview(
+            action=SwapAction.NOT_APPLICABLE,
+            reason="the stock is at or above the strike — this is the called-away question, "
+                   "not an idle-shares one",
+        )
+    if call.days < 1 or not call.price:
+        return SwapReview(
+            action=SwapAction.NOT_APPLICABLE,
+            reason="no price for the call, so what it still earns is unknown",
+        )
+    # the rate the SHARES earn: the premium still in the call, against what they are worth
+    rate = put_yield(call.price, call.spot, call.days)
+    shares = call.spot * 100 * call.contracts
+    common = {"old_yield": rate, "cash": shares, "days": call.days,
+              "used_up_yield": params.used_up_yield}
+    if rate is None:
+        return SwapReview(action=SwapAction.NOT_APPLICABLE, reason="the call cannot be priced")
+    if rate >= params.used_up_yield:
+        return SwapReview(
+            action=SwapAction.KEEP, used_up=False,
+            reason=f"the shares are still earning {rate:.1%}/yr from this call",
+            **common,
+        )
+    return SwapReview(
+        action=SwapAction.IDLE, used_up=True,
+        reason=f"this call has decayed to {rate:.1%}/yr on the ${shares:,.0f} of shares behind "
+               f"it — they are earning almost nothing for the {call.days} days left",
+        **common,
+    )
+
+
 def list_median_yield(yields: Sequence[float]) -> float | None:
     """The median of the screen's picks — the fallback. None when the list is empty."""
     usable = [y for y in yields if y is not None]

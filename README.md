@@ -244,6 +244,14 @@ nothing liquid enough), the **median** of the screen's picks stands in — never
 which would fire a swap constantly. Puts the stock has fallen *below* are out of scope: that is
 the assignment question, and the ways-out panel answers it.
 
+**Covered calls are asked a different question.** Closing a call frees no capital — the capital
+*is* the shares — so there is nothing to redeploy and the only replacement is another call on the
+same stock. A closer strike would pay more by capping your upside and raising the odds the shares
+are sold, which is a view on the stock rather than arithmetic. So a call whose premium has decayed
+below the same floor is simply marked **idle** — these shares are earning almost nothing — with no
+strike recommended; the ways-out panel prices the roll-downs if you want one. Short calls also show
+in/out of the money, worded for the call side: in the money means the shares go at your strike.
+
 Verdicts are priced **live** when the tab loads — one chain pull per open put, cached ~10 minutes
 — and **Refresh prices** re-prices them on demand. The suggestions come from the most recent
 screen, which cron refreshes just after the open and at 15:35 ET so they are current before the

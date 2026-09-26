@@ -6,13 +6,14 @@
 {% import "_icons.html" as icon %}
 {% import "_swap_bits.html" as sw %}
 {% set swap = r.action == 'swap' %}
+{% set idle = r.action == 'idle' %}
 <tr class="detail swap-row">
  <td colspan="10">
   <article class="exits swap-panel">
     <header class="results-head">
-      <strong>{{ p.underlying }} {{ p.strike|money }} put &middot;
-        {{ 'swap it' if swap else 'keep it' }}</strong>
-      <span class="badge {{ 'badge--neg' if swap else 'badge--ok' }}">{{ 'Yes' if swap else 'No' }}</span>
+      <strong>{{ p.underlying }} {{ p.strike|money }} {{ 'call' if idle else 'put' }} &middot;
+        {{ 'the shares are earning almost nothing' if idle else ('swap it' if swap else 'keep it') }}</strong>
+      <span class="badge {{ 'badge--neg' if swap else ('' if idle else 'badge--ok') }}">{{ 'idle' if idle else ('Yes' if swap else 'No') }}</span>
       <span class="result-stats">
         <span>{{ p.quantity | int }} contract{{ 's' if p.quantity != 1 else '' }}</span>
         {% if r.days is not none %}<span>{{ r.days }} days left</span>{% endif %}
@@ -22,7 +23,27 @@
 
     <p class="div-explain {{ 'assign-likely' if swap else 'assign-low' }}">{{ r.reason|capitalize }}.</p>
 
-    {% if r.old_yield is not none %}
+    {% if idle %}
+    <dl class="card-grid">
+      <dt>These shares</dt>
+      <dd><b>{{ sw.pct(r.old_yield) }}</b>/yr from this call, on {{ r.cash|money }} of stock,
+        with {{ r.days }} days left &mdash; under the {{ sw.pct(r.used_up_yield) }}/yr this rule
+        treats as earning nothing.</dd>
+
+      <dt>What it isn't</dt>
+      <dd>Not a recommendation to close. Closing a covered call frees no capital &mdash; the
+        capital <em>is</em> the shares &mdash; so unlike a put there is nothing to redeploy, and
+        the only replacement is another call on {{ p.underlying }}.
+        <span class="detail-note">A closer strike would pay more, by capping your upside at that
+        strike and raising the odds the shares are sold &mdash; possibly below where you would
+        have kept them, and as a taxable event. That is a view on the stock, and this app does
+        not have one.</span></dd>
+
+      <dt>If you want one</dt>
+      <dd>Click the row itself: the ways-out panel prices every roll, strike by strike and expiry
+        by expiry, against what buying this call back costs.</dd>
+    </dl>
+    {% elif r.old_yield is not none %}
     <dl class="card-grid">
       <dt>This put</dt>
       <dd><b>{{ sw.pct(r.old_yield) }}</b>/yr on the {{ r.cash|money }} it locks up &mdash;
@@ -89,9 +110,9 @@
     </p>
     {% endif %}
 
-    <p class="detail-note"><b>Draft rule.</b> Both limits are starting values and have not been
+    {% if not idle %}<p class="detail-note"><b>Draft rule.</b> Both limits are starting values and have not been
       backtested against simply holding to expiry, so this is a prompt to look, not a signal.
-      Highest yield usually means highest risk: the entry rules are the guard.</p>
+      Highest yield usually means highest risk: the entry rules are the guard.</p>{% endif %}
   </article>
  </td>
 </tr>

@@ -98,9 +98,9 @@
                   {% set early_warn = ea is not none and ea.risk in ('likely', 'possible') %}
                   {% set dv = p|position_dividend_view %}
                   <td class="assign-cell"><div class="assign-stack">
-                    {% if p.kind != 'short_put' %}
-                      {# ITM/OTM is only a cash question for a short put; a short call is
-                         answered by the shares, and a long option cannot be assigned #}
+                    {% set is_call = p.kind == 'short_call' %}
+                    {% if p.kind not in ('short_put', 'short_call') %}
+                      {# a long option is exercised by choice, and shares are not assigned #}
                       {% if not early_warn and not dv %}<span class="detail-note">&mdash;</span>{% endif %}
                     {% elif p.in_the_money is none %}
                       {# The broker prices the CONTRACT, never the stock behind it, so this
@@ -112,9 +112,16 @@
                         which the broker does not report — it is fetched separately and was not
                         available for this name">no quote</span>
                     {% elif p.in_the_money %}
-                      <span class="badge badge--neg">ITM &middot; {{ p.underlying_price | money }}</span>
+                      {# in the money means opposite things by side: cash about to be spent on a
+                         put, shares about to be sold at the strike on a call — which is the
+                         outcome a covered call was written for, so it is stated, not alarmed at #}
+                      <span class="badge {{ '' if is_call else 'badge--neg' }}"
+                        title="{% if is_call %}the shares would be called away at {{ p.strike | money }}{% else %}assignment would buy the shares at {{ p.strike | money }}{% endif %}"
+                        >ITM &middot; {{ p.underlying_price | money }}</span>
                     {% else %}
-                      <span class="badge badge--ok">OTM &middot; {{ p.underlying_price | money }}</span>
+                      <span class="badge badge--ok"
+                        title="{% if is_call %}you keep the shares and the premium{% else %}no assignment at this price{% endif %}"
+                        >OTM &middot; {{ p.underlying_price | money }}</span>
                     {% endif %}
                     {% if early_warn %}{{ am.badge(ea, true) }}{% endif %}
                     {% if dv %}{{ divm.pill(dv, p.kind == 'short_call') }}{% endif %}
