@@ -24,6 +24,47 @@ from wheel_screener.core.service import ScreenerService
 
 _JOB_RETENTION_DAYS = 30  # prune finished jobs older than this so the table stays bounded
 
+# Who started a run. The distinction exists because the two are not equally trustworthy as "the
+# latest screen": the refresh command runs from cron (or the operator's own shell) on the default
+# criteria, while the Run button on the public screener can be pressed by any visitor with any DTE
+# window and delta they like. Reading "the latest screen" without asking whose let a stranger's
+# screen become the dashboard for everyone AND the list the Close? column compares open puts to.
+SOURCE_REFRESH = "refresh"  # the refresh-screen command
+SOURCE_WEB = "web"  # the Run button
+
+# Schema changes, applied in order and recorded in SQLite's own `user_version` header field (#78).
+# APPEND ONLY: a database that has run a migration never runs it again, so editing a released one
+# changes nothing on the databases that matter. The table itself is still created by the original
+# statement below, so a fresh database and a years-old one take the same path through this list.
+_MIGRATIONS: tuple[tuple[int, str], ...] = (
+    # NULL for runs stored before this existed — unknown, and deliberately not guessed. Nullable
+    # also keeps a rollback safe: the previous release inserts without naming this column.
+    (1, "ALTER TABLE jobs ADD COLUMN source TEXT"),
+)
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Bring the schema up to date. Safe to run from several processes at once.
+
+    The web app and every cron'd CLI run open this file, and a deploy can land on the same minute
+    as a screen. ``BEGIN IMMEDIATE`` takes the write lock before reading the version, so the check
+    and the change are one step: the second process waits, then finds nothing left to do, instead
+    of both reading version 0 and the loser dying on "duplicate column".
+    """
+    conn.isolation_level = None  # explicit transaction control below
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        version = conn.execute("PRAGMA user_version").fetchone()[0]
+        for target, sql in _MIGRATIONS:
+            if version < target:
+                conn.execute(sql)
+                conn.execute(f"PRAGMA user_version = {int(target)}")
+                version = target
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+
 
 class JobBusyError(Exception):
     """A screen is already running (single in-flight by design)."""
@@ -58,6 +99,7 @@ class JobStore:
             cutoff = (datetime.now(tz=UTC) - timedelta(days=_JOB_RETENTION_DAYS)).isoformat()
             conn.execute("DELETE FROM jobs WHERE created_at < ?", (cutoff,))
             conn.commit()
+            _migrate(conn)
         finally:
             conn.close()
 
@@ -74,10 +116,12 @@ class JobStore:
         finally:
             conn.close()
 
-    def create(self, job_id: str, created_at: str) -> None:
+    def create(self, job_id: str, created_at: str, source: str | None = None) -> None:
+        """A new running job. ``source`` is SOURCE_REFRESH or SOURCE_WEB; None means unknown."""
         self._write(
-            "INSERT INTO jobs (id, status, progress, created_at) VALUES (?, 'running', '[]', ?)",
-            (job_id, created_at),
+            "INSERT INTO jobs (id, status, progress, created_at, source)"
+            " VALUES (?, 'running', '[]', ?, ?)",
+            (job_id, created_at, source),
         )
 
     def set_progress(self, job_id: str, progress: list[str]) -> None:
@@ -105,6 +149,7 @@ class JobStore:
             "result": json.loads(row["result"]) if row["result"] else None,
             "error": json.loads(row["error"]) if row["error"] else None,
             "created_at": row["created_at"],
+            "source": row["source"],
         }
 
     def get(self, job_id: str) -> dict | None:
@@ -115,13 +160,21 @@ class JobStore:
             conn.close()
         return self._row(row) if row is not None else None
 
-    def latest_done(self) -> dict | None:
-        """Most recent completed/cancelled job — powers the dashboard's 'latest results'."""
+    def latest_done(self, source: str | None = None) -> dict | None:
+        """Most recent completed/cancelled job, optionally only those started by ``source``.
+
+        Callers that treat the answer as THE screen — the dashboard, the Close? column — should
+        ask for SOURCE_REFRESH; see the note on the constants for why.
+        """
+        where = "status IN ('done', 'cancelled')"
+        params: tuple = ()
+        if source is not None:
+            where += " AND source = ?"
+            params = (source,)
         conn = self._connect()
         try:
             row = conn.execute(
-                "SELECT * FROM jobs WHERE status IN ('done', 'cancelled') "
-                "ORDER BY created_at DESC LIMIT 1"
+                f"SELECT * FROM jobs WHERE {where} ORDER BY created_at DESC LIMIT 1", params
             ).fetchone()
         finally:
             conn.close()
@@ -163,7 +216,7 @@ class JobRunner:
         cancel = threading.Event()
         self._cancels[job_id] = cancel
         try:
-            self.store.create(job_id, datetime.now(tz=UTC).isoformat())
+            self.store.create(job_id, datetime.now(tz=UTC).isoformat(), SOURCE_WEB)
             thread = threading.Thread(
                 target=self._run_and_release, args=(job_id, criteria, cancel), daemon=True
             )
@@ -196,7 +249,7 @@ class JobRunner:
         cancel = threading.Event()
         self._cancels[job_id] = cancel
         try:
-            self.store.create(job_id, datetime.now(tz=UTC).isoformat())
+            self.store.create(job_id, datetime.now(tz=UTC).isoformat(), SOURCE_REFRESH)
             self._run(job_id, criteria, cancel)  # cleans up _cancels/_threads in its finally
         except Exception:
             self._cancels.pop(job_id, None)  # store.create failed before _run could clean up

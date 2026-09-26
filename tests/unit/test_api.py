@@ -304,11 +304,11 @@ def test_start_failure_does_not_wedge_runner(tmp_path) -> None:
             super().__init__(p)
             self.fail_next = True
 
-        def create(self, job_id: str, created_at: str) -> None:
+        def create(self, job_id: str, created_at: str, source: str | None = None) -> None:
             if self.fail_next:
                 self.fail_next = False
                 raise RuntimeError("create boom")
-            super().create(job_id, created_at)
+            super().create(job_id, created_at, source)
 
     runner = JobRunner(_FakeService(result=[]), _BadStore(str(tmp_path / "j.sqlite")))
     with pytest.raises(RuntimeError):
@@ -1365,3 +1365,66 @@ def test_auth_covers_respects_the_scope() -> None:
     # and the prefix boundary is a boundary, not a string prefix
     assert not _auth_covers("/portfoliox", "portfolio")
     assert not _auth_covers("/health", "portfolio")
+
+
+# --- the precomputed screen, not whoever screened last ----------------------------------------
+
+def _finished(runner: JobRunner, job_id: str, source, symbol: str, minutes_ago: int) -> None:
+    from datetime import timedelta
+
+    at = (datetime.now(tz=UTC) - timedelta(minutes=minutes_ago)).isoformat()
+    runner.store.create(job_id, at, source)
+    runner.store.finish(job_id, "done", result=[_candidate(symbol).model_dump(mode="json")])
+
+
+def test_the_close_column_compares_against_the_precomputed_screen_only(tmp_path) -> None:
+    """The Run button is open to every visitor, so the newest screen can be a stranger's. It must
+    not supply the other tickers the Close? panel suggests, nor the median it falls back on."""
+    from wheel_screener.api.app import _latest_candidates
+    from wheel_screener.api.jobs import SOURCE_REFRESH, SOURCE_WEB
+
+    runner = _runner(_FakeService(), tmp_path)
+    _finished(runner, "cron", SOURCE_REFRESH, "CRON", minutes_ago=90)
+    _finished(runner, "stranger", SOURCE_WEB, "ODD", minutes_ago=2)
+    candidates, latest = _latest_candidates(runner)
+    assert latest["job_id"] == "cron"
+    assert [c.symbol for c in candidates] == ["CRON"]
+
+
+def test_with_no_precomputed_screen_the_close_column_borrows_nothing(tmp_path) -> None:
+    from wheel_screener.api.app import _latest_candidates
+    from wheel_screener.api.jobs import SOURCE_WEB
+
+    runner = _runner(_FakeService(), tmp_path)
+    _finished(runner, "stranger", SOURCE_WEB, "ODD", minutes_ago=2)
+    assert _latest_candidates(runner) == ([], None)  # the column says "no screen yet" instead
+
+
+def test_the_dashboard_shows_the_precomputed_screen_over_a_newer_hand_run(tmp_path) -> None:
+    from wheel_screener.api.jobs import SOURCE_REFRESH, SOURCE_WEB
+
+    runner = _runner(_FakeService(), tmp_path)
+    _finished(runner, "cron", SOURCE_REFRESH, "CRON", minutes_ago=90)
+    _finished(runner, "stranger", SOURCE_WEB, "ODD", minutes_ago=2)
+    body = _client(runner).get("/").text
+    assert "CRON" in body and "ODD" not in body
+
+
+def test_the_dashboard_falls_back_to_any_run_when_nothing_was_precomputed(tmp_path) -> None:
+    """A fresh install or local development has no refresh yet; the tab should not sit empty."""
+    from wheel_screener.api.jobs import SOURCE_WEB
+
+    runner = _runner(_FakeService(), tmp_path)
+    _finished(runner, "mine", SOURCE_WEB, "MINE", minutes_ago=2)
+    assert "MINE" in _client(runner).get("/").text
+
+
+def test_runs_record_who_started_them(tmp_path) -> None:
+    from wheel_screener.api.jobs import SOURCE_REFRESH, SOURCE_WEB
+
+    runner = _runner(_FakeService(result=[]), tmp_path)
+    web = runner.start(ScreenCriteria())
+    runner.wait(web)
+    refresh = runner.run_blocking(ScreenCriteria())
+    assert runner.get(web)["source"] == SOURCE_WEB
+    assert runner.get(refresh)["source"] == SOURCE_REFRESH
