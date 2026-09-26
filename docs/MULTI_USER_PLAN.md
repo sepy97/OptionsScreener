@@ -500,6 +500,20 @@ brokerages through SnapTrade*.
   comes back broken, reconnect. The Unlink button was seen to submit; the removal itself is
   covered by the route tests.
 
+**First real account (Schwab through SnapTrade, 2026-09-26), v3.5.1:** positions, strikes, expiries,
+contract counts and collateral all read correctly. Two things did not:
+
+* The account type SnapTrade reported for a Schwab margin account did not contain "margin", so
+  buying power went missing. SnapTrade's spec says a non-margin account reports buying power equal
+  to cash, so buying power above cash now reads as margin, whatever the label says.
+* A put that expired the day before (LRCX) was still listed — the broker had not processed the
+  weekend's expirations — and its $27,000 counted as committed, so capacity read $5,235 instead of
+  about $32,235. Not SnapTrade's doing, and the direct Schwab view had it too: a put past expiry
+  that finished out of the money now commits nothing, and the table says "expired" instead of
+  "-1". One that finished in the money, or has no price, stays committed.
+
+Each account read through SnapTrade now says when its positions were last fetched from the broker.
+
 Not done: the `CONNECTION_BROKEN` webhook. A broken link is found when its owner next opens the
 tab, which is when it matters; a webhook would only let the site say so sooner.
 

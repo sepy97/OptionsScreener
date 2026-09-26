@@ -25,6 +25,11 @@
         <h3>{{ a.display_name }}
           <span class="company-tags">{{ a.account_type.value if a.account_type else '' }}</span>
         </h3>
+        {% if a.as_of %}
+          {# The broker's positions as the linking service last fetched them. For some brokers
+             that lags, and a page that recommends closing positions must say how old they are. #}
+          <p class="detail-note">positions as of {{ a.as_of | ago }}</p>
+        {% endif %}
         <dl class="balance-grid">
           <div class="balance headline">
             <dt>Total value</dt><dd>{{ b.total_value | money }}</dd>
@@ -86,7 +91,11 @@
                   <td>{{ p.position_label }}</td>
                   <td>{{ p.strike | money }}</td>
                   <td>{{ p.expiration.strftime('%d %b') if p.expiration else '—' }}</td>
-                  <td>{{ p.dte if p.dte is not none else '—' }}</td>
+                  {# An expired contract is still listed until the broker processes expirations
+                     (a Friday expiry, over the weekend); say so rather than print "-1". #}
+                  <td>{% if p.expired %}<span class="badge"
+                      title="{{ 'expired worthless — its cash is free again, and not counted as committed' if p.expired_worthless else 'expired — waiting for the broker to settle it' }}">expired</span>
+                      {%- else %}{{ p.dte if p.dte is not none else '—' }}{% endif %}</td>
                   <td>{{ p.quantity | int }}</td>
                   <td>{{ p.collateral | money }}</td>
                   <td>{{ p.market_value | money }}</td>

@@ -52,8 +52,8 @@ BALANCES = [
 
 class _FakeClient:
     def __init__(self, positions, accounts=(ACCOUNT,), balances=BALANCES, activities=(),
-                 activities_error=None):
-        self._positions, self._accounts = positions, list(accounts)
+                 activities_error=None, as_of=None):
+        self._positions, self._accounts, self._as_of = positions, list(accounts), as_of
         self._balances, self._activities = balances, list(activities)
         self._activities_error = activities_error
         self.users = []
@@ -66,7 +66,7 @@ class _FakeClient:
         return self._balances
 
     def positions(self, user, account_id):
-        return self._positions
+        return self._positions, self._as_of
 
     def activities(self, user, account_id, start, end):
         if self._activities_error:
@@ -159,7 +159,26 @@ def test_buying_power_is_shown_only_where_it_means_borrowing() -> None:
 
 
 def test_an_ira_is_not_guessed_to_be_cash_or_margin() -> None:
-    assert _one([], accounts=({**ACCOUNT, "raw_type": "Roth IRA"},)).account_type is None
+    """An IRA cannot borrow, so it reports buying power equal to its cash."""
+    no_borrowing = [{"currency": {"code": "USD"}, "cash": 40_000.0, "buying_power": 40_000.0}]
+    a = _one([], accounts=({**ACCOUNT, "raw_type": "Roth IRA"},), balances=no_borrowing)
+    assert a.account_type is None and a.balances.buying_power is None
+
+
+def test_buying_power_above_cash_reads_as_margin_whatever_the_label_says() -> None:
+    """Seen on a real Schwab account through SnapTrade: the account type did not say "margin",
+    so buying power went missing. SnapTrade's spec says a non-margin account reports buying power
+    EQUAL to cash — power above cash is borrowing, which is what a margin account is."""
+    a = _one([], accounts=({**ACCOUNT, "raw_type": "Individual"},))
+    assert a.account_type is AccountType.MARGIN and a.balances.buying_power == 80_000.0
+
+
+def test_positions_carry_when_the_broker_was_last_read() -> None:
+    from datetime import UTC, datetime
+
+    a = _one([], as_of="2026-09-26T14:31:00Z")
+    assert a.as_of == datetime(2026, 9, 26, 14, 31, tzinfo=UTC)
+    assert _one([]).as_of is None
 
 
 def test_closed_accounts_are_left_out() -> None:

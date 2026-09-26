@@ -151,13 +151,17 @@ class SnapTradeClient:
             account_id=account_id, user_id=user.user_id, user_secret=user.secret,
         ))
 
-    def positions(self, user: SnapTradeUser, account_id: str) -> list[dict]:
-        """Every position — stocks, funds and options together (``/positions/all``)."""
+    def positions(self, user: SnapTradeUser, account_id: str) -> tuple[list[dict], str | None]:
+        """Every position — stocks, funds and options together (``/positions/all``) — and when
+        SnapTrade last fetched them from the broker (``data_freshness.as_of``), if it says."""
         data = self._call(
             self._sdk.account_information.get_all_account_positions,
             account_id=account_id, user_id=user.user_id, user_secret=user.secret,
         )
-        return _list(data.get("results") if isinstance(data, dict) else data)
+        if not isinstance(data, dict):
+            return _list(data), None
+        as_of = (data.get("data_freshness") or {}).get("as_of")
+        return _list(data.get("results")), as_of if isinstance(as_of, str) else None
 
     def activities(
         self, user: SnapTradeUser, account_id: str, start: date, end: date

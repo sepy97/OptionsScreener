@@ -24,7 +24,7 @@ Mapping notes, from SnapTrade's API spec (``api.yaml``), since no live account h
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from wheel_screener.adapters.snaptrade.client import SnapTradeClient, SnapTradeUser
@@ -72,6 +72,16 @@ def _day(value) -> date | None:
             return None
 
 
+def _moment(value) -> datetime | None:
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+
+
 def _contract_key(symbol: str | None):
     """(underlying, expiry, side, strike) — the same contract however its symbol is spaced."""
     osi = parse_osi(symbol or "")
@@ -96,8 +106,9 @@ class SnapTradeAccountProvider:
             if not account_id or str(acct.get("status") or "").lower() in ("closed", "archived"):
                 continue
             balances = self._client.balances(self._user, account_id)
-            rows = self._client.positions(self._user, account_id)
+            rows, as_of = self._client.positions(self._user, account_id)
             account = self._to_account(acct, balances, rows, today)
+            account.as_of = _moment(as_of)
             if any(p.is_option for p in account.positions):
                 opened = self._opening_trades(account_id, today)
                 for p in account.positions:
@@ -130,10 +141,16 @@ class SnapTradeAccountProvider:
                     if str((b.get("currency") or {}).get("code") or "").upper() == "USD"), None)
         row = usd or (balances[0] if len(balances) == 1 else None)  # one currency: use it
         cash = _num(row.get("cash")) if row else None
+        power = _num(row.get("buying_power")) if row else None
+        if account_type is None and cash is not None and power is not None and power > cash + 1:
+            # SnapTrade's `raw_type` is the broker's own wording, and a Schwab margin account's did
+            # not say "margin" (seen on a real account). Its spec is explicit that a non-margin
+            # account reports buying power EQUAL to cash — so power above cash is borrowing, and
+            # borrowing is what makes an account a margin account.
+            account_type = AccountType.MARGIN
         # SnapTrade reports buying power as cash for a non-margin account; this app shows buying
         # power only where it means borrowing, so it is left out otherwise.
-        buying_power = _num(row.get("buying_power")) if row and account_type is AccountType.MARGIN \
-            else None
+        buying_power = power if account_type is AccountType.MARGIN else None
         return BrokerageAccount(
             broker=self.broker,
             account_id=str(acct.get("id")),
