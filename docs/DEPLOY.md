@@ -10,7 +10,7 @@ store is slimmed to ~365 MB and lives on the host, mounted into the container �
 |---|---|
 | `Dockerfile` | app image (uv `--frozen --extra api`, uvicorn, non-root, healthcheck) |
 | `docker-compose.yml` | `app` + `caddy`; prod env (`AUTH__REQUIRED=true`, `AUTH__SCOPE=portfolio`, `CHAIN_SOURCE=alpaca`), `./data` volume |
-| `Caddyfile` | `steadybull.net` → reverse-proxy `app:8000`, automatic HTTPS |
+| `deploy/caddy/Caddyfile` | `steadybull.net` → reverse-proxy `app:8000`, automatic HTTPS; `www` redirects. Mounted as a directory — see compose for why |
 | `tools/slim_store.py` | build the deploy-size fundamentals store |
 
 ## One-time: provision the droplet

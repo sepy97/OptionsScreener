@@ -64,7 +64,11 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # The DIRECTORY, not the file. A single-file bind mount is pinned to the file's inode, and
+      # `git checkout` replaces files rather than editing them — so the container went on seeing
+      # the old Caddyfile after every deploy, and `caddy reload` reloaded the old config. That is
+      # how v3.3.0's www redirect deployed without taking effect.
+      - ./deploy/caddy:/etc/caddy:ro
       - caddy_data:/data # ACME certs (persist so re-deploys don't re-issue)
       - caddy_config:/config
 

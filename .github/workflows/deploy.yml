@@ -72,15 +72,23 @@ jobs:
           echo "current deployed ref: $prev"
           # REF is validated as a strict vX.Y.Z tag above, so it's safe to interpolate here.
           # caddy reload picks up any Caddyfile change (bind-mounted, so a rebuild alone won't).
+          # The mount is deploy/caddy/ as a DIRECTORY: a single-file mount keeps the old inode
+          # after `git checkout`, and the reload would re-read the old file (see compose).
           # fetch_fundcore.sh pulls the private analysis engine into vendor/ using GH_TOKEN from
           # the droplet's .env. It is a no-op without that token, so the build never depends on it.
-          $SSH "set -e; cd /srv/steadybull; git fetch --tags --force; git checkout '$REF'; bash deploy/fetch_fundcore.sh; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
+          $SSH "set -e; cd /srv/steadybull; git fetch --tags --force; git checkout '$REF'; bash deploy/fetch_fundcore.sh; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || echo '::warning::caddy reload failed; the proxy is still on its previous config'"
 
       - name: Verify public health
         run: |
           for i in $(seq 1 40); do
             if curl -fsS https://steadybull.net/health | grep -q '"status"'; then
-              echo "deploy healthy:"; curl -s https://steadybull.net/health; echo; exit 0
+              echo "deploy healthy:"; curl -s https://steadybull.net/health; echo
+              # The proxy's own config, checked from outside. A warning rather than a failure: a
+              # proxy problem is not the release's fault, and rolling the app back cannot fix it.
+              if ! curl -sI https://www.steadybull.net/ | grep -qi '^location: https://steadybull.net/'; then
+                echo "::warning::www.steadybull.net is not redirecting to steadybull.net — Caddy may be on a stale config"
+              fi
+              exit 0
             fi
             echo "waiting for the app to come up... ($i/40)"; sleep 5
           done
@@ -95,7 +103,7 @@ jobs:
         run: |
           SSH="ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes $DEPLOY_USER@$DEPLOY_HOST"
           echo "::warning::deploy unhealthy — rolling back to $PREV"
-          $SSH "set -e; cd /srv/steadybull; git checkout '$PREV'; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || true"
+          $SSH "set -e; cd /srv/steadybull; git checkout '$PREV'; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || echo '::warning::caddy reload failed; the proxy is still on its previous config'"
           for i in $(seq 1 40); do
             if curl -fsS https://steadybull.net/health | grep -q '"status"'; then
               echo "rolled back to $PREV and healthy"; exit 0

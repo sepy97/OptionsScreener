@@ -2106,7 +2106,7 @@ def test_production_passkeys_name_the_site_people_actually_use() -> None:
 def test_the_www_name_redirects_rather_than_serving_the_site() -> None:
     """A passkey ceremony on www reports origin https://www.steadybull.net, which is refused, and a
     session cookie set there does not reach the bare domain. So www must only ever redirect."""
-    caddy = (pathlib.Path(__file__).parents[2] / "Caddyfile").read_text()
+    caddy = (pathlib.Path(__file__).parents[2] / "deploy" / "caddy" / "Caddyfile").read_text()
     blocks = {}
     for chunk in caddy.split("\n}\n"):
         header = next((ln for ln in chunk.splitlines() if ln.rstrip().endswith("{")
@@ -2255,3 +2255,12 @@ def test_a_member_cannot_cancel_invites_either() -> None:
         assert len(app.state.users.pending_invites()) == 1
     finally:
         c.__exit__(None, None, None)
+
+
+def test_the_proxy_config_is_mounted_as_a_directory() -> None:
+    """A single-file bind mount is pinned to the file's inode, and `git checkout` replaces files
+    rather than editing them — so the proxy kept reading the old Caddyfile after every deploy, and
+    v3.3.0's www redirect shipped without taking effect. A directory mount sees the new file."""
+    compose = (pathlib.Path(__file__).parents[2] / "docker-compose.yml").read_text()
+    assert "- ./deploy/caddy:/etc/caddy:ro" in compose
+    assert "Caddyfile:/etc/caddy/Caddyfile" not in compose
