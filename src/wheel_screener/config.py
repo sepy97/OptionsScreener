@@ -165,6 +165,27 @@ class PortfolioSettings(BaseModel):
     carry_rate: float = 0.04
 
 
+class SnapTradeSettings(BaseModel):
+    """Linking brokerages through SnapTrade — how friends connect their own accounts.
+
+    All three must be set for the feature to appear; with any missing, the Portfolio simply offers
+    no "Link a brokerage" button. ``client_id`` and ``consumer_key`` come from the SnapTrade
+    dashboard (commercial API keys, since each person links their own accounts); ``secret_key`` is
+    this deployment's own Fernet key for encrypting the per-person secrets SnapTrade issues — see
+    ``api/secretbox.py`` for how to make one.
+    """
+
+    client_id: str = ""
+    consumer_key: SecretStr = SecretStr("")
+    secret_key: SecretStr = SecretStr("")
+    timeout_seconds: float = 20.0
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.client_id and self.consumer_key.get_secret_value()
+                    and self.secret_key.get_secret_value())
+
+
 class PasskeySettings(BaseModel):
     """Signing in to the Portfolio with a passkey.
 
@@ -227,6 +248,7 @@ class Settings(BaseSettings):
     rate_limit: RateLimitSettings = Field(default_factory=RateLimitSettings)
     portfolio: PortfolioSettings = Field(default_factory=PortfolioSettings)
     passkeys: PasskeySettings = Field(default_factory=PasskeySettings)
+    snaptrade: SnapTradeSettings = Field(default_factory=SnapTradeSettings)
     swap: SwapSettings = Field(default_factory=SwapSettings)
 
     # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)

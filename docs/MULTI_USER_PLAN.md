@@ -475,9 +475,33 @@ Found along the way and left alone: several stores opening a *brand-new* databas
 on switching it to WAL mode. Only a first-ever start can hit it — the mode is stored in the file —
 so the droplet cannot.
 
-**Phase 3 — SnapTrade.** `adapters/snaptrade/` behind `BrokerageAccountProvider`, the encrypted
-`broker_links` table, connect/reconnect/disconnect routes, the `CONNECTION_BROKEN` webhook.
-Proven against one real account before any invite goes out.
+**Phase 3 — SnapTrade. Built as v3.5.0; switched off until keys are configured.** People link
+their own brokerages from the Portfolio tab. Runbook: [`DEPLOY.md`](DEPLOY.md) → *Linking
+brokerages through SnapTrade*.
+
+* **The official SDK** (`snaptrade-python-sdk`) does the signing and the endpoints, behind a small
+  wrapper (`adapters/snaptrade/client.py`) that adds what the SDK does not: plain JSON back,
+  failures rebuilt from our own words (the SDK's error text includes response headers and body,
+  and its network errors can name the URL — which carries the person's secret), and a timeout
+  (the SDK sends none, so a hung call would hang the page).
+* **The mapping** (`adapters/snaptrade/account.py`) follows SnapTrade's API spec — decimal
+  strings, negative units for a short, per-share cost basis, a contract multiplier. Minis (10
+  shares) are listed but kept out of the option maths, which assumes 100. **Not yet checked
+  against a real linked account**; that is the first thing to do when one exists.
+* **Each person's SnapTrade secret is encrypted** with a key kept in the environment, and is
+  backed up only in that form.
+* **Several sources read as one** (`AllAccounts`): Schwab linked directly and brokerages through
+  SnapTrade. One failing does not hide the others.
+* **Isolation**, mutation-checked: credentials come from the session only (taking anyone else's
+  fails two tests), and reconnecting or unlinking a connection that is not yours is refused
+  (removing that check fails the test). A fake SnapTrade in the tests refuses any call made with
+  the wrong person's secret.
+* Ran in headless Chrome against the real app with a fake SnapTrade: link, a second link that
+  comes back broken, reconnect. The Unlink button was seen to submit; the removal itself is
+  covered by the route tests.
+
+Not done: the `CONNECTION_BROKEN` webhook. A broken link is found when its owner next opens the
+tab, which is when it matters; a webhook would only let the site say so sooner.
 
 **Phase 4 — the preconditions.** Backups (#66), the licence decision, and then invites.
 

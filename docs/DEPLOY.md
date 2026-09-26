@@ -222,6 +222,42 @@ one.) Until step 2, **nobody can reach the Portfolio**, you included.
 Rolling back to v3.2.0 is safe: this release only adds tables. The old release finds its own
 session table untouched and goes back to signing in with Schwab.
 
+### Linking brokerages through SnapTrade
+
+How people link their own accounts — Fidelity, Robinhood, IBKR, Schwab and the rest — without this
+site ever seeing a broker password: *Link a brokerage* sends them to SnapTrade's connection portal,
+they sign in **at their broker**, and they come back to `/portfolio/brokerages/return`. Read-only:
+the portal is always asked for a read connection, and no call that trades exists in the code.
+
+Off until three values are in the droplet's `.env`:
+
+```
+SNAPTRADE__CLIENT_ID=...        # SnapTrade dashboard — COMMERCIAL keys (each person links their own)
+SNAPTRADE__CONSUMER_KEY=...
+SNAPTRADE__SECRET_KEY=...       # this deployment's own; see below
+```
+
+`SNAPTRADE__SECRET_KEY` encrypts the secret SnapTrade issues each person, which is stored in the
+accounts database — so the database, or a backup of it, cannot read anyone's brokerage on its own.
+Make it once, and **keep a copy in a password manager**:
+
+```bash
+docker compose exec -T app python -c \
+  "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+```
+
+Losing it costs nobody their account, only their broker links (a click each to redo). A malformed
+key stops the app at startup, loudly, rather than at the first person's click.
+
+People are registered with SnapTrade under this site's internal user id, never their email. The
+free tier allows 5 connected accounts; the next step up is $100/month (see
+[`MULTI_USER_PLAN.md`](MULTI_USER_PLAN.md) §3).
+
+**Built from SnapTrade's published API spec, not yet run against a real linked account.** The
+first time someone links one, check their Portfolio against the broker's own app: balances, each
+option's strike, expiry and contract count, and the opening dates. Anything wrong there is a
+mapping fix in `adapters/snaptrade/account.py`, whose notes say what each field was assumed to be.
+
 ## Diagnosing a broken data connection
 
 ```bash

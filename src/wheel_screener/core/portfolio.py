@@ -18,10 +18,11 @@ delegates rather than duplicating them. The only thing it owns is the credential
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date
 
-from wheel_screener.core.errors import ProviderUnavailableError
+from wheel_screener.core.errors import ProviderError, ProviderUnavailableError
 from wheel_screener.core.models import (
     BrokerageAccount,
     CandidateResult,
@@ -30,6 +31,35 @@ from wheel_screener.core.models import (
 )
 from wheel_screener.core.ports import BrokerageAccountProvider
 from wheel_screener.core.service import ScreenerService
+
+logger = logging.getLogger(__name__)
+
+
+class AllAccounts:
+    """Several account sources read as one — Schwab linked directly, and any brokers linked
+    through SnapTrade.
+
+    One source failing does not cost the others: their accounts still show, and the broken link
+    shows as needing a reconnect in the list of brokerages. Only when every source fails is it
+    an error, because then the page has nothing true to show.
+    """
+
+    def __init__(self, providers: list[BrokerageAccountProvider]) -> None:
+        self._providers = providers
+
+    def accounts(self) -> list[BrokerageAccount]:
+        out: list[BrokerageAccount] = []
+        failures: list[ProviderError] = []
+        for provider in self._providers:
+            try:
+                out.extend(provider.accounts())
+            except ProviderError as e:
+                logger.warning("%s accounts unavailable: %s",
+                               getattr(provider, "broker", "a broker"), e)
+                failures.append(e)
+        if failures and not out:
+            raise failures[0]
+        return out
 
 
 @dataclass

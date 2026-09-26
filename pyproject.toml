@@ -23,6 +23,8 @@ api = [
     "jinja2>=3.1",
     "python-multipart>=0.0.9",
     "webauthn>=2.5",
+    "cryptography>=43",
+    "snaptrade-python-sdk>=13,<14",
 ]
 
 [project.scripts]

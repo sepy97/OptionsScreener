@@ -32,7 +32,10 @@ from datetime import datetime
 from pathlib import Path
 
 # The account tables worth restoring. Everything else in that file is dropped from the copy.
-ACCOUNT_TABLES = ("users", "credentials", "broker_links")
+# `snaptrade_users` holds each person's SnapTrade secret ENCRYPTED, with the key kept in the
+# environment and not in any backup — so the copy restores people's broker links without being a
+# way into them on its own.
+ACCOUNT_TABLES = ("users", "credentials", "broker_links", "snaptrade_users")
 
 _PARTIAL = ".partial-"
 # Only directories named like this are ever considered for pruning — never anything else that

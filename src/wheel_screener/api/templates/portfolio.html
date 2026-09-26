@@ -2,7 +2,7 @@
 {% import "_icons.html" as icon %}
 {% block content %}
   <article>
-    {# Signing out ends the site session only; the broker link is untouched and waits for next time. #}
+    {# Signing out ends the site session only; broker links are untouched and wait for next time. #}
     <div class="signed-in-as">
       {% if user.is_admin %}<a href="/portfolio/invites"><small>Invite people</small></a>{% endif %}
       <small>Signed in as <b>{{ user.name }}</b></small>
@@ -12,44 +12,96 @@
     </div>
     <h2>Portfolio</h2>
     {% set schwab = links.get('schwab') %}
-    {% if schwab and schwab.connected %}
-      <header class="results-head">
-        <strong>Connected</strong>
-        <span class="result-stats">
-          <span>Broker <b>Schwab</b></span>
-          {% if schwab.expires_at %}
-            <span>Authorisation ends <b>{{ schwab.expires_at.strftime('%d %b %H:%M') }} UTC</b></span>
-          {% endif %}
-        </span>
-      </header>
+
+    {% if connected %}
       {# The Refresh button re-renders exactly this region, so it lives in the partial #}
       <div id="positions">{% include "_positions.html" %}</div>
+    {% endif %}
 
-      <form method="post" action="/portfolio/oauth/schwab/disconnect">
-        <button type="submit" class="secondary">Disconnect Schwab</button>
+    {# ---- the brokerages behind those accounts ------------------------------------------- #}
+    {% if schwab or brokerages or brokerages_error %}
+      <h4 class="brokerages-head">Linked brokerages</h4>
+      <ul class="brokerage-list">
+        {% if schwab and schwab.connected %}
+          <li>
+            <span><b>Schwab</b> <span class="badge badge--ok">connected</span>
+              {% if schwab.expires_at %}<small class="detail-note">authorisation ends
+                {{ schwab.expires_at.strftime('%d %b %H:%M') }} UTC</small>{% endif %}</span>
+            <form method="post" action="/portfolio/oauth/schwab/disconnect">
+              <button type="submit" class="secondary outline">Disconnect Schwab</button>
+            </form>
+          </li>
+        {% elif schwab %}
+          {# Their link, past its 7 days: the normal weekly condition, not an error. #}
+          <li>
+            <span><b>Schwab</b> <span class="badge">{{ icon.warning() }}Authorisation expired</span>
+              <small class="detail-note">Schwab authorisations last 7 days.</small></span>
+            <form method="get" action="/portfolio/oauth/schwab/connect">
+              <button type="submit" class="run-btn">Reconnect Schwab</button>
+            </form>
+          </li>
+        {% endif %}
+        {% for b in brokerages %}
+          <li>
+            <span><b>{{ b.name }}</b>
+              {% if b.disabled %}
+                <span class="badge">{{ icon.warning() }}needs reconnecting</span>
+                <small class="detail-note">the broker ended this link; its accounts are not
+                  shown until it is reconnected</small>
+              {% else %}<span class="badge badge--ok">connected</span>{% endif %}
+            </span>
+            <span class="brokerage-actions">
+              {% if b.disabled %}
+                <form method="post" action="/portfolio/brokerages/reconnect">
+                  <input type="hidden" name="connection_id" value="{{ b.id }}">
+                  <button type="submit" class="run-btn">Reconnect</button>
+                </form>
+              {% endif %}
+              {# The question rides in a data attribute: autoescaping makes a name safe in HTML,
+                 not inside a JavaScript string in an HTML attribute. #}
+              <form method="post" action="/portfolio/brokerages/remove"
+                    data-question="Unlink {{ b.name }}? Its accounts will disappear from this page."
+                    onsubmit="return confirm(this.dataset.question)">
+                <input type="hidden" name="connection_id" value="{{ b.id }}">
+                <button type="submit" class="secondary outline">Unlink</button>
+              </form>
+            </span>
+          </li>
+        {% endfor %}
+      </ul>
+      {% if brokerages_error %}
+        <p class="passkey-error">{{ icon.warning() }}{{ brokerages_error }}</p>
+      {% endif %}
+    {% endif %}
+
+    {# ---- ways to link one ---------------------------------------------------------------- #}
+    {% if snaptrade_on %}
+      {% if not (schwab or brokerages) %}
+        <p class="tab-lede">Link a brokerage account to see what it holds. You pick your broker
+          and sign in <b>at the broker</b> &mdash; this site never sees your broker password, and
+          only ever reads.</p>
+      {% endif %}
+      <form method="post" action="/portfolio/brokerages/link">
+        <button type="submit" class="{{ 'secondary' if (schwab or brokerages) else 'run-btn' }}">
+          {{ 'Link another brokerage' if (schwab or brokerages) else 'Link a brokerage' }}</button>
       </form>
-    {% elif schwab %}
-      {# Their link, past its 7 days: the normal weekly condition, not an error. #}
-      <header class="results-head">
-        <strong>{{ icon.warning() }}Authorisation expired</strong>
-      </header>
-      <p class="tab-lede">Schwab authorisations last 7 days. Reconnecting takes one click.</p>
-      <form method="get" action="/portfolio/oauth/schwab/connect">
-        <button type="submit" class="run-btn">Reconnect Schwab</button>
-      </form>
-    {% elif user.is_admin and configured.get('schwab') %}
-      <p class="tab-lede">Connect a brokerage account to see what it holds. You sign in at the
-        broker &mdash; this site never sees your broker credentials, and only ever reads.</p>
-      <form method="get" action="/portfolio/oauth/schwab/connect">
-        <button type="submit" class="run-btn">Connect Schwab</button>
-      </form>
-      <p class="detail-note">Schwab authorisations last 7 days, so this is a weekly click rather
-        than a one-off setup.</p>
-    {% elif user.is_admin %}
-      {# Nothing to connect to. Offering a button that errors is worse than saying so. #}
-      <p class="tab-lede">No brokerage is set up on this deployment yet, so there is nothing to
-        connect to.</p>
-    {% else %}
+    {% endif %}
+
+    {% if user.is_admin and not schwab %}
+      {% if configured.get('schwab') %}
+        <p class="tab-lede">Or connect the deployment's own Schwab app directly. You sign in at the
+          broker &mdash; this site never sees your broker credentials, and only ever reads.</p>
+        <form method="get" action="/portfolio/oauth/schwab/connect">
+          <button type="submit" class="{{ 'secondary' if snaptrade_on else 'run-btn' }}">Connect Schwab</button>
+        </form>
+        <p class="detail-note">Schwab authorisations last 7 days, so this is a weekly click rather
+          than a one-off setup.</p>
+      {% elif not snaptrade_on %}
+        {# Nothing to connect to. Offering a button that errors is worse than saying so. #}
+        <p class="tab-lede">No brokerage is set up on this deployment yet, so there is nothing to
+          connect to.</p>
+      {% endif %}
+    {% elif not (schwab or brokerages or snaptrade_on) %}
       <p class="tab-lede">No brokerage account is linked to your sign-in yet. Linking your own is
         coming; until then the screener, search and fundamentals are all yours to use.</p>
     {% endif %}

@@ -42,6 +42,9 @@ ALPACA = Provider(
 )
 SCHWAB = Provider("Schwab", "re-run `wheel-screener auth-login` to refresh the OAuth token")
 FMP = Provider("FMP", "check FMP__API_KEY")
+# No remedy on purpose: this message can reach a signed-in friend's page, and the fix (the
+# deployment's keys, or relinking) is not something to spell out in environment-variable names.
+SNAPTRADE = Provider("SnapTrade")
 UNKNOWN = Provider("The data provider")
 
 

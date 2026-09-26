@@ -409,7 +409,8 @@ in [docs/TODO.md](docs/TODO.md).
 **Deployed.** Live in production at **steadybull.net** — Dockerized (app + Caddy auto-TLS)
 on a DigitalOcean droplet, with **Alpaca** as the chain source (key/secret, no OAuth). The Portfolio tab
 is private: people sign in with a **passkey** from a one-time invite (`wheel-screener invite`),
-and only the person who linked the broker ever sees its account. A fail-closed HTTP Basic-Auth gate
+and only the person who linked the broker ever sees its account. People link their own
+brokerages through **SnapTrade** (read-only; off until its keys are configured). A fail-closed HTTP Basic-Auth gate
 is also built in and **scoped** — `AUTH__SCOPE=portfolio` leaves the screener public (`site`
 covers every path). The pipeline: local fundamentals → Alpaca (or Schwab) chains →
 ranked CSP shortlist, with the earnings blackout, conservative bid-based yields, an **absolute
