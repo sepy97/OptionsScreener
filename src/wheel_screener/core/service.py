@@ -50,7 +50,6 @@ from wheel_screener.core.pipeline.select_strike import (
 )
 from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.ports import (  # noqa: F401 - EtfUniverseProvider is a field type
-    BrokerageAccountProvider,
     ChainProvider,
     CompanyProfileProvider,
     DividendProvider,
@@ -114,6 +113,12 @@ class ScreenerService:
 
     Both delivery layers (CLI now, FastAPI later) call these methods — no pipeline
     logic is duplicated anywhere else.
+
+    Shared by every caller, and deliberately holds **no field that belongs to a user**: the broker
+    credential lives on :class:`~wheel_screener.core.portfolio.PortfolioService`, which is built
+    per request. Methods here take positions as arguments and judge them against market data, so
+    they are the same answer whoever is asking; anything that needs to know *whose* account it is
+    belongs on the other class.
     """
 
     fundamentals: FundamentalsProvider
@@ -122,8 +127,6 @@ class ScreenerService:
     reports: FundamentalReportProvider | None = None
     # optional: company identity/description. Context only — absence shows a bare ticker.
     profiles: CompanyProfileProvider | None = None
-    # optional: the linked brokerage. None when no broker is connected.
-    accounts: BrokerageAccountProvider | None = None
     # optional: optionable ETFs, which join the SAME screen rather than a separate one.
     # Without it the screen is stocks only, which is the pre-existing behaviour.
     etfs: EtfUniverseProvider | None = None
@@ -636,19 +639,6 @@ class ScreenerService:
             logger.warning("company profile unavailable for %s: %s", symbol, e)
             return None
 
-    def brokerage_accounts(self) -> list[BrokerageAccount]:
-        """Balances for every linked brokerage account.
-
-        Raises ``ProviderUnavailableError`` when no broker is linked, rather than returning an
-        empty list: "nothing connected" and "connected but you hold nothing" are different
-        answers and the caller must be able to tell them apart.
-        """
-        if self.accounts is None:
-            raise ProviderUnavailableError("no brokerage account is linked to this deployment")
-        accounts = self.accounts.accounts()
-        self._price_positions(accounts)
-        return accounts
-
     def _etf_survivors(self, criteria: ScreenCriteria) -> list[Underlying]:
         """ETFs joining the same list, having skipped every fundamental stage.
 
@@ -802,7 +792,7 @@ class ScreenerService:
         fresh = _suggestion(self._candidate(position.underlying, pick))
         return fresh.model_copy(update={"same_ticker": True}), ask
 
-    def _price_positions(self, accounts: list[BrokerageAccount]) -> None:
+    def price_positions(self, accounts: list[BrokerageAccount]) -> None:
         """Stamp each short option with its underlying's price, its ex-dividend dates and its
         early-assignment verdict — the assignment watch.
 

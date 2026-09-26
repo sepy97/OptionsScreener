@@ -17,6 +17,7 @@ from wheel_screener.adapters.local.provider import LocalFundamentalsProvider
 from wheel_screener.adapters.schwab.account import SchwabAccountProvider
 from wheel_screener.adapters.schwab.provider import SchwabChainProvider
 from wheel_screener.config import Settings
+from wheel_screener.core.portfolio import PortfolioService
 from wheel_screener.core.ports import (
     BrokerageAccountProvider,
     ChainProvider,
@@ -127,7 +128,6 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
         chains=_build_chains(settings),
         reports=_build_reports(settings),
         profiles=_build_profiles(fundamentals),
-        accounts=_build_accounts(settings),
         etfs=_build_etfs(settings),
         dividends=_build_dividends(settings, fundamentals),
         carry_rate=settings.portfolio.carry_rate,
@@ -136,6 +136,25 @@ def build_service(settings: Settings | None = None) -> ScreenerService:
             min_ratio=settings.swap.min_ratio, min_extra=settings.swap.min_extra,
             swap_cost=settings.swap.swap_cost, top_n=settings.swap.top_n,
         ),
+    )
+
+
+def build_portfolio(
+    settings: Settings | None = None, service: ScreenerService | None = None
+) -> PortfolioService:
+    """The account-facing service, bound to whatever broker credential this caller has.
+
+    Built PER REQUEST by the web app (see ``api.deps.get_portfolio``), and once per command by the
+    CLI. Cheap on purpose: the Schwab provider loads its token when a call is actually made, so
+    constructing one costs nothing but an object.
+
+    ``accounts`` being None — no credential configured — is a state this returns rather than
+    refuses, because "no broker linked" is a page the Portfolio tab knows how to render.
+    """
+    settings = settings or Settings()
+    return PortfolioService(
+        accounts=_build_accounts(settings),
+        screener=service if service is not None else build_service(settings),
     )
 
 

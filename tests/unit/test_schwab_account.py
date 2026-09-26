@@ -143,12 +143,17 @@ def test_a_vendor_explosion_becomes_a_provider_error() -> None:
         provider.accounts()
 
 
-def test_service_distinguishes_no_broker_from_no_holdings() -> None:
+def test_the_portfolio_distinguishes_no_broker_from_no_holdings() -> None:
+    from wheel_screener.core.portfolio import PortfolioService
     from wheel_screener.core.service import ScreenerService
 
-    svc = ScreenerService(fundamentals=object(), chains=object())
+    screener = ScreenerService(fundamentals=object(), chains=object())
+    assert not hasattr(screener, "accounts"), (
+        "the shared screener must hold no broker credential — see core/portfolio.py"
+    )
+    portfolio = PortfolioService(accounts=None, screener=screener)
     with pytest.raises(ProviderUnavailableError, match="no brokerage account is linked"):
-        svc.brokerage_accounts()
+        portfolio.brokerage_accounts()
 
 
 # ── positions ──────────────────────────────────────────────────────────────────────────────
