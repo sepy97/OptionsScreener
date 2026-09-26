@@ -30,7 +30,6 @@ from markupsafe import Markup
 from pydantic import BaseModel, ValidationError
 
 from wheel_screener import __version__
-from wheel_screener.adapters.schwab.link import SchwabOAuthLink
 from wheel_screener.adapters.snaptrade.client import SnapTradeClient
 from wheel_screener.api.deps import (
     current_session,
@@ -190,7 +189,6 @@ async def lifespan(app: FastAPI):
             settings.snaptrade.client_id, settings.snaptrade.consumer_key.get_secret_value(),
             timeout=settings.snaptrade.timeout_seconds,
         )
-    app.state.links = {SchwabOAuthLink(settings.schwab).broker: SchwabOAuthLink(settings.schwab)}
     # let pipeline INFO logs through so background jobs can capture stage progress
     logging.getLogger("wheel_screener.core").setLevel(logging.INFO)
     # invite tokens and OAuth codes travel in URLs; keep them out of the request log
@@ -664,45 +662,6 @@ def _probe(request: Request, probe: object) -> str | None:
     return detail
 
 
-# A Schwab refresh token lives 7 days. Two of them left is enough notice to reconnect before
-# the tab breaks, and few enough that the warning is not permanently on.
-BROKER_EXPIRY_WARNING_HOURS = 48
-
-
-def _broker_health(request: Request) -> tuple[list[dict], list[str]]:
-    """Per-broker link state, and warnings worth acting on but not worth failing over.
-
-    The link is the one part of this deployment that expires on a clock rather than breaking,
-    so it is the one part an operator cannot discover by waiting for an error — by then the
-    Portfolio tab is already dead. Surfacing the hours remaining is the whole point.
-    """
-    out, warnings = [], []
-    now = datetime.now(tz=UTC)
-    for name, link in (getattr(request.app.state, "links", None) or {}).items():
-        try:
-            status = link.status()
-        except Exception as e:  # noqa: BLE001 - health must never raise
-            out.append({"broker": name, "error": str(e)})
-            continue
-        hours = None
-        if status.expires_at is not None:
-            hours = round((status.expires_at - now).total_seconds() / 3600, 1)
-        out.append({
-            "broker": name,
-            "configured": status.configured,
-            "connected": status.connected,
-            "expires_at": status.expires_at.isoformat() if status.expires_at else None,
-            "expires_in_hours": hours,
-        })
-        if status.connected and hours is not None and hours <= BROKER_EXPIRY_WARNING_HOURS:
-            warnings.append(
-                f"{name} authorisation expires in {hours:.0f}h — reconnect on the Portfolio tab"
-            )
-        elif status.configured and not status.connected:
-            warnings.append(f"{name} is configured but not connected")
-    return out, warnings
-
-
 @app.get("/health")
 def health(
     request: Request,
@@ -733,19 +692,12 @@ def health(
     chains = next((p for p in providers if p["role"] == "option chains"), None)
     chain_ready = bool(chains["ready"]) if chains else False
     degraded = [p for p in providers if not p["ready"]]
-    brokers, warnings = _broker_health(request)
     return {
-        # A broker link deliberately does NOT move this. It expires every 7 days by design, and
-        # nothing a redeploy does will renew it — marking the app degraded would fail the
-        # container healthcheck and roll back a release over a credential that was always going
-        # to lapse. The warning below is the signal; the status stays about data connections.
         "status": "ok" if (store_loaded and not degraded) else "degraded",
         "store_loaded": store_loaded,
         "chain_source": settings.chain_source,
         "chain_ready": chain_ready,
         "providers": providers,
-        "brokers": brokers,
-        "warnings": warnings,
     }
 
 
@@ -1069,13 +1021,6 @@ def _stamp_swaps(request: Request, portfolio: PortfolioService, runner: JobRunne
     }
 
 
-def _link_for(request: Request, broker: str):
-    link = (getattr(request.app.state, "links", None) or {}).get(broker)
-    if link is None:
-        raise HTTPException(status_code=404, detail="unknown broker")
-    return link
-
-
 def _opt_date(raw: str):
     try:
         return date.fromisoformat(raw) if raw else None
@@ -1157,39 +1102,28 @@ def portfolio_exits(
 @app.get("/portfolio")
 def portfolio_page(
     request: Request,
-    settings: Settings = Depends(get_settings),
     portfolio: PortfolioService = Depends(get_portfolio),
     runner: JobRunner = Depends(get_job_runner),
 ):
-    """The Portfolio tab, for a signed-in person (the gate guarantees one). What it shows turns
-    on whether THEY own the broker link — never merely on whether one exists:
+    """The Portfolio tab, for a signed-in person (the gate guarantees one): THEIR brokerages,
+    linked through SnapTrade, and the accounts behind the ones that are working.
 
-    their link, healthy -> the account · their link, expired -> reconnect ·
-    no link of theirs -> connect (admins) or "nothing linked yet" (everyone else).
-
-    While a deployment has one Schwab token, a friend who signs in sees no account at all rather
-    than the owner's: the token file does not know whose it is, so ownership is recorded
-    separately and checked here and in ``get_portfolio``.
+    Accounts are read only when at least one link works; a broken one is listed with a Reconnect
+    button instead, since its numbers would be stale. Every link belongs to exactly one person —
+    SnapTrade scopes every call by that person's own secret — so there is no deployment-wide
+    broker to share, and nothing to keep a second person away from.
     """
     session = current_session(request)
-    users = request.app.state.users
-    links = getattr(request.app.state, "links", {}) or {}
-    mine = {name: link.status() for name, link in links.items()
-            if users.link_owner(name) == session.user.id}
     brokerages, brokerages_error = _snaptrade_connections(request)
-    connected = any(s.connected for s in mine.values()) or any(
-        not c["disabled"] for c in brokerages)
+    connected = any(not c["disabled"] for c in brokerages)
     accounts, error = _cached_balances(request, portfolio) if connected else ([], None)
     swaps = _stamp_swaps(request, portfolio, runner, accounts) if accounts else {}
-    configured = {name: link.status().configured for name, link in links.items()}
     return templates.TemplateResponse(
         request, "portfolio.html",
         {
             "active_tab": "portfolio",
             "session": session,
             "user": session.user,
-            "links": mine,
-            "configured": configured,
             "connected": connected,
             "accounts": accounts,
             "balances_error": error,
@@ -1327,92 +1261,16 @@ def brokerages_remove(request: Request, connection_id: str = Form("")):
     return RedirectResponse("/portfolio", status_code=303)
 
 
-def _admin_only(
-    request: Request, message: str = "Linking a brokerage is not available on your account yet."
-):
-    """The rendered refusal for a non-admin, or None when this person is an admin.
-
-    Linking a broker is admin-only because there is still one Schwab token per deployment: letting
-    anyone else link would overwrite the owner's — the slot problem v3.0.0 closed, reopened for
-    friends. Inviting is admin-only because an invite is an account.
-    """
+def _admin_only(request: Request, message: str):
+    """The rendered refusal for a non-admin, or None when this person is an admin. Inviting is
+    admin-only because an invite is an account. (Linking a brokerage is not: everyone links their
+    own, through SnapTrade.)"""
     session = current_session(request)
     if session is not None and session.user.is_admin:
         return None
     return templates.TemplateResponse(
         request, "_error.html", {"message": message}, status_code=403,
     )
-
-
-@app.get("/portfolio/oauth/{broker}/connect")
-def portfolio_connect(request: Request, broker: str, settings: Settings = Depends(get_settings)):
-    """Send the browser to the broker. The `state` is ours, recorded server-side and single-use."""
-    link = _link_for(request, broker)
-    if (refused := _admin_only(request)) is not None:
-        return refused
-    state = request.app.state.users.issue_state(broker, settings.portfolio.state_ttl_seconds)
-    try:
-        url = link.authorize_url(state)
-    except ProviderError as e:
-        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
-    return RedirectResponse(url, status_code=303)
-
-
-@app.get("/portfolio/oauth/{broker}/callback")
-def portfolio_callback(request: Request, broker: str, settings: Settings = Depends(get_settings)):
-    """Exchange the code, store the credential, and record that it is THIS person's.
-
-    It no longer signs anybody in — that is the passkey's job — so it cannot be used to get a
-    session, only to link a broker to the session that already exists. The incoming URL carries
-    the authorization code, so it is never logged or echoed back.
-    """
-    link = _link_for(request, broker)
-    if (refused := _admin_only(request)) is not None:
-        return refused
-    store = request.app.state.users
-    if store.consume_state(request.query_params.get("state")) != broker:
-        # unknown, expired, replayed, or issued for a different broker
-        return templates.TemplateResponse(
-            request, "_error.html",
-            {"message": "That sign-in link has expired or was already used. Please try again."},
-            status_code=400,
-        )
-    try:
-        link.complete(str(request.url), state=request.query_params.get("state") or "")
-    except ProviderError as e:
-        return templates.TemplateResponse(request, "_error.html", {"message": str(e)})
-
-    previous = store.link_owner(broker)
-    store.set_link_owner(broker, current_session(request).user.id)
-    # A relink may be a different account, so nothing cached from before it may be shown after —
-    # for this person, or for whoever owned the link until a moment ago.
-    for user in {_cache_user(request), previous} - {None}:
-        _balances_cache(request).clear(user)
-        _swap_cache(request).clear(user)
-    return RedirectResponse("/portfolio", status_code=303)
-
-
-@app.post("/portfolio/oauth/{broker}/disconnect")
-def portfolio_disconnect(request: Request, broker: str, settings: Settings = Depends(get_settings)):
-    """Unlink the broker: delete the credential and the record of whose it was.
-
-    The person stays signed in — ending the link and ending the session are separate now, and
-    signing out has its own button. Only the link's owner may do this; anyone else is shown the
-    same refusal as for a link that does not exist, so the page says nothing about whose it is.
-    """
-    link = _link_for(request, broker)
-    store = request.app.state.users
-    user = _cache_user(request)
-    if store.link_owner(broker) != user:
-        return templates.TemplateResponse(
-            request, "_error.html", {"message": "There is no linked brokerage to disconnect."},
-            status_code=404,
-        )
-    link.revoke()
-    store.clear_link_owner(broker)
-    _balances_cache(request).clear(user)
-    _swap_cache(request).clear(user)
-    return RedirectResponse("/portfolio", status_code=303)
 
 
 # --- Invites: the admin page -------------------------------------------------------------------

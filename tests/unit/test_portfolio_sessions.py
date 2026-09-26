@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from _softkey import SoftKey
+from cryptography.fernet import Fernet
 
 from wheel_screener.api.users import UserStore
 
@@ -71,44 +72,6 @@ def test_ending_one_persons_sessions_leaves_everyone_elses(tmp_path) -> None:
     assert s.session(theirs) is not None
 
 
-# --- OAuth state ----------------------------------------------------------------------------
-
-def test_state_is_single_use(tmp_path) -> None:
-    """A replayed redirect — the same callback URL opened twice — must not link twice."""
-    s = _store(tmp_path)
-    state = s.issue_state("schwab")
-    assert s.consume_state(state) == "schwab"
-    assert s.consume_state(state) is None
-
-
-def test_state_expires(tmp_path) -> None:
-    s = _store(tmp_path)
-    assert s.consume_state(s.issue_state("schwab", ttl_seconds=-1)) is None
-
-
-def test_unknown_state_is_refused(tmp_path) -> None:
-    s = _store(tmp_path)
-    assert s.consume_state("forged") is None and s.consume_state(None) is None
-
-
-def test_state_is_bound_to_its_broker(tmp_path) -> None:
-    s = _store(tmp_path)
-    assert s.consume_state(s.issue_state("tastytrade")) == "tastytrade"
-
-
-# --- who owns a link ------------------------------------------------------------------------
-
-def test_a_link_has_one_owner_and_can_change_hands(tmp_path) -> None:
-    s = _store(tmp_path)
-    sam, alex = s.create_user("Sam"), s.create_user("Alex")
-    assert s.link_owner("schwab") is None
-    s.set_link_owner("schwab", sam.id)
-    s.set_link_owner("schwab", alex.id)
-    assert s.link_owner("schwab") == alex.id
-    s.clear_link_owner("schwab")
-    assert s.link_owner("schwab") is None
-
-
 # --- the gate -------------------------------------------------------------------------------
 
 pytest.importorskip("fastapi")
@@ -118,13 +81,12 @@ from wheel_screener.api.app import _needs_portfolio_session, _safe_next  # noqa:
 
 @pytest.mark.parametrize("path", [
     "/portfolio", "/portfolio/", "/portfolio/positions", "/portfolio/anything/else",
-    "/portfolio/oauth/schwab/connect", "/portfolio/oauth/schwab/callback",
-    "/portfolio/oauth/schwab/disconnect",
+    "/portfolio/brokerages/link", "/portfolio/brokerages/return", "/portfolio/invites",
 ])
 def test_every_portfolio_route_needs_a_session(path: str) -> None:
-    """No exceptions any more. The connect and callback routes used to be open because the broker
-    sign-in WAS the site sign-in — which is how any visitor with a Schwab account could claim the
-    deployment's broker slot."""
+    """No exceptions. There used to be three — the Schwab connect and callback routes among them —
+    because the broker sign-in WAS the site sign-in, which is how any visitor with a Schwab account
+    could claim the deployment's broker slot."""
     assert _needs_portfolio_session(path) is True
 
 
@@ -138,8 +100,8 @@ def test_the_rest_of_the_site_is_untouched(path: str) -> None:
 def test_the_broker_and_sign_in_routes_are_rate_limited() -> None:
     from wheel_screener.api.ratelimit import is_expensive
 
-    assert is_expensive("GET", "/portfolio/oauth/schwab/callback")
-    assert is_expensive("GET", "/portfolio/oauth/schwab/connect")
+    assert is_expensive("POST", "/portfolio/brokerages/link")
+    assert is_expensive("POST", "/portfolio/brokerages/reconnect")
     for path in ("/auth/login/options", "/auth/login/verify", "/auth/register/options",
                  "/auth/register/verify"):
         assert is_expensive("POST", path), path
@@ -166,71 +128,61 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from wheel_screener.api.app import app  # noqa: E402
 from wheel_screener.api.passkeys import Passkeys  # noqa: E402
-from wheel_screener.core.models import BrokerLinkStatus  # noqa: E402
+from wheel_screener.api.secretbox import SecretBox  # noqa: E402
 
 ORIGIN = "http://testserver"  # what TestClient's requests present as their origin
 
 
-class _FakeLink:
-    broker = "schwab"
+class _Linked:
+    """A SnapTrade stand-in that only says what is linked: one healthy connection for anyone with
+    a SnapTrade identity, and no accounts of its own. The display tests override the portfolio
+    service for the accounts; this is what tells the page there are accounts to show."""
 
-    def __init__(self, connected=True):
-        self.connected, self.revoked, self.completed = connected, False, 0
+    def connections(self, user):
+        return [{"id": "conn-1", "brokerage": {"display_name": "Schwab"}, "disabled": False}]
 
-    def status(self):
-        return BrokerLinkStatus(
-            broker="schwab", configured=True, connected=self.connected,
-            expires_at=_later() if self.connected else None,
-        )
+    def accounts(self, user):
+        return []
 
-    def authorize_url(self, state):
-        return f"https://schwab.example/authorize?state={state}"
+    def balances(self, user, account_id):
+        return []
 
-    def complete(self, received_url, state):
-        self.completed += 1
-        self.connected = True
-        return self.status()
+    def positions(self, user, account_id):
+        return [], None
 
-    def revoke(self):
-        self.connected, self.revoked = False, True
+    def activities(self, user, account_id, start, end):
+        return []
 
 
-def _client(link=None):
+def _client():
     """A client over the real app, with its OWN user store: the lifespan would otherwise open the
-    repo's data/sessions.sqlite, and users and link owners would leak between tests."""
+    repo's data/sessions.sqlite, and users would leak between tests."""
     c = TestClient(app)
     c.__enter__()
     settings = app.state.settings
     settings.portfolio.cookie_secure = False  # TestClient speaks http
-    app.state.links = {"schwab": link or _FakeLink()}
     app.state.users = UserStore(tempfile.mkdtemp() + "/users.sqlite")
     app.state.passkeys = Passkeys(app.state.users, "testserver", "Steady Bull", ORIGIN)
+    app.state.snaptrade = _Linked()
+    app.state.secretbox = SecretBox(Fernet.generate_key().decode())
     return c
 
 
-def _as(c, name="Sam", *, admin=True, owns_link=True):
+def _as(c, name="Sam", *, admin=True, linked=True):
     """Sign `c` in as a new user, straight through the store (the passkey ceremony has tests of
-    its own below). Returns the user."""
+    its own below). ``linked``: they have linked a brokerage through SnapTrade. Returns the user."""
     store = app.state.users
     user = store.create_user(name, is_admin=admin)
     token, _ = store.create_session(user.id, timedelta(days=1))
     c.cookies.set(app.state.settings.portfolio.cookie_name, token)
-    if owns_link:
-        store.set_link_owner("schwab", user.id)
+    if linked:
+        store.set_snaptrade_secret(user.id, app.state.secretbox.seal(f"secret-of-{name}"))
     return user
 
 
 def _sign_in(c):
-    """Signed in as an admin who has linked Schwab — the state every account-display test needs."""
+    """Signed in, with a brokerage linked — the state every account-display test needs."""
     return _as(c)
-
-
-def _link_through_the_broker(c):
-    """Link Schwab the way a person does: connect, then the broker's redirect back."""
-    loc = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).headers["location"]
-    state = loc.split("state=")[-1]
-    c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}", follow_redirects=False)
-    return state
 
 
 def test_a_stranger_is_sent_to_sign_in() -> None:
@@ -240,157 +192,46 @@ def test_a_stranger_is_sent_to_sign_in() -> None:
         assert r.status_code == 303 and r.headers["location"] == "/login?next=/portfolio"
         body = c.get("/portfolio").text
         assert "Sign in with a passkey" in body
-        assert "Connect Schwab" not in body and "Disconnect Schwab" not in body
+        assert "Link a brokerage" not in body and "Linked brokerages" not in body
     finally:
         c.__exit__(None, None, None)
 
 
-def test_a_stranger_cannot_start_or_finish_a_broker_link() -> None:
-    """The v3.0.0 hole, closed at the source: these two routes are what claimed the slot."""
-    link = _FakeLink(connected=False)
-    c = _client(link)
-    try:
-        start = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False)
-        assert start.status_code == 303 and start.headers["location"].startswith("/login")
-        state = app.state.users.issue_state("schwab")  # even holding a genuine state
-        finish = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}",
-                       follow_redirects=False)
-        assert finish.status_code == 303 and finish.headers["location"].startswith("/login")
-        assert link.completed == 0 and app.state.users.link_owner("schwab") is None
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_an_admin_links_the_broker_and_it_is_recorded_as_theirs() -> None:
-    link = _FakeLink(connected=False)
-    c = _client(link)
-    try:
-        sam = _as(c, owns_link=False)
-        assert "Connect Schwab" in c.get("/portfolio").text
-        _link_through_the_broker(c)
-        assert link.completed == 1 and app.state.users.link_owner("schwab") == sam.id
-        assert "Disconnect Schwab" in c.get("/portfolio").text
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_the_callback_signs_nobody_in() -> None:
-    """It used to mint the session. Now it only links a broker to the session that exists."""
-    c = _client(_FakeLink(connected=False))
-    try:
-        _as(c, owns_link=False)
-        loc = c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).headers["location"]
-        r = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={loc.split('state=')[-1]}",
-                  follow_redirects=False)
-        assert "set-cookie" not in r.headers
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_a_forged_or_replayed_callback_links_nothing() -> None:
-    link = _FakeLink(connected=False)
-    c = _client(link)
-    try:
-        _as(c, owns_link=False)
-        r = c.get("/portfolio/oauth/schwab/callback?code=X&state=forged", follow_redirects=False)
-        assert r.status_code == 400 and link.completed == 0
-        state = _link_through_the_broker(c)
-        replay = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}",
-                       follow_redirects=False)
-        assert replay.status_code == 400 and link.completed == 1, "state is single use"
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_a_friend_is_never_shown_the_owners_account(monkeypatch) -> None:
-    """The rule that stands in for per-user credentials until Phase 3. The deployment's Schwab
-    token does not know whose it is; the recorded owner does, and nobody else gets the account —
-    neither on the page, nor from the dependency the account routes are built on."""
-    import wheel_screener.api.deps as deps
-    from wheel_screener.api.deps import get_portfolio
-
-    built = []
-    real = deps.build_portfolio
-
-    def spy(settings, service, *, linked=True):
-        built.append(linked)
-        return real(settings, service, linked=linked)
-
-    monkeypatch.setattr(deps, "build_portfolio", spy)
+def test_the_old_schwab_routes_are_gone() -> None:
+    """Linking goes through SnapTrade now. The direct-Schwab routes must not quietly survive — the
+    callback in particular was the one that could claim a broker slot."""
     c = _client()
     try:
-        _as(c, "Sam")  # the owner links Schwab…
-        _as(c, "Alex", admin=False, owns_link=False)  # …then a friend signs in on this client
-        body = c.get("/portfolio").text
-        assert "Disconnect Schwab" not in body and ">connected</span>" not in body
-        assert "No brokerage account is linked to your sign-in" in body
-        assert built and not any(built), "the friend's request was built with the credential"
-
-        class _Req:
-            app = c.app
-            cookies = {app.state.settings.portfolio.cookie_name:
-                       c.cookies.get(app.state.settings.portfolio.cookie_name)}
-
-        assert get_portfolio(_Req()).accounts is None
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_a_friend_can_neither_link_nor_unlink_the_broker() -> None:
-    link = _FakeLink()
-    c = _client(link)
-    try:
-        _as(c, "Sam")  # owns the link
-        _as(c, "Alex", admin=False, owns_link=False)
-        assert c.get("/portfolio/oauth/schwab/connect", follow_redirects=False).status_code == 403
-        state = app.state.users.issue_state("schwab")
-        r = c.get(f"/portfolio/oauth/schwab/callback?code=X&state={state}", follow_redirects=False)
-        assert r.status_code == 403 and link.completed == 0
-        assert c.post("/portfolio/oauth/schwab/disconnect",
-                      follow_redirects=False).status_code == 404
-        assert not link.revoked and app.state.users.link_owner("schwab") is not None
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_disconnecting_unlinks_the_broker_but_keeps_you_signed_in() -> None:
-    link = _FakeLink()
-    c = _client(link)
-    try:
         _sign_in(c)
-        assert "Disconnect Schwab" in c.get("/portfolio").text
-        c.post("/portfolio/oauth/schwab/disconnect", follow_redirects=False)
-        assert link.revoked, "disconnect must delete the credential"
-        assert app.state.users.link_owner("schwab") is None
-        body = c.get("/portfolio").text
-        assert "Connect Schwab" in body and "Signed in as" in body
+        for method, path in (("GET", "/portfolio/oauth/schwab/connect"),
+                             ("GET", "/portfolio/oauth/schwab/callback?code=X&state=Y"),
+                             ("POST", "/portfolio/oauth/schwab/disconnect")):
+            assert c.request(method, path, follow_redirects=False).status_code == 404, path
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_health_says_nothing_about_anyones_broker_links() -> None:
+    """It used to list the deployment's Schwab link, expiry included, on a public page. Links are
+    per person now, and none of them belong on /health."""
+    c = _client()
+    try:
+        body = c.get("/health").json()
+        assert "brokers" not in body and "warnings" not in body
     finally:
         c.__exit__(None, None, None)
 
 
 def test_signing_out_ends_the_session_and_leaves_the_link() -> None:
-    link = _FakeLink()
-    c = _client(link)
+    c = _client()
     try:
         sam = _sign_in(c)
         token = c.cookies.get(app.state.settings.portfolio.cookie_name)
         r = c.post("/auth/logout", follow_redirects=False)
         assert r.status_code == 303 and app.state.users.session(token) is None
-        assert not link.revoked and app.state.users.link_owner("schwab") == sam.id
+        assert app.state.users.snaptrade_secret(sam.id) is not None, "the brokerage stays linked"
         c.cookies.clear()
         assert c.get("/portfolio", follow_redirects=False).status_code == 303
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_an_expired_link_offers_reconnect_rather_than_an_error() -> None:
-    link = _FakeLink()
-    c = _client(link)
-    try:
-        _sign_in(c)
-        link.connected = False  # the weekly condition
-        body = c.get("/portfolio").text
-        assert "Reconnect" in body and "expired" in body.lower()
     finally:
         c.__exit__(None, None, None)
 
@@ -573,25 +414,6 @@ def test_balances_are_cached_so_a_refresh_does_not_re_ask_the_broker() -> None:
         c.__exit__(None, None, None)
 
 
-def test_disconnect_drops_the_cached_numbers() -> None:
-    """Cached balances must not outlive the session that was allowed to see them.
-
-    The cache is partitioned by session token now, so the assertion is that the partition is gone
-    rather than that the whole cache object is: one person disconnecting must not empty anybody
-    else's, and "no partitions at all" is what that looks like with a single signed-in user.
-    """
-    service = _AccountService([_account()])
-    c = _signed_in(service)
-    try:
-        c.get("/portfolio")
-        assert len(app.state.balances_cache) == 1  # cached for the session that read them
-        c.post("/portfolio/oauth/schwab/disconnect", follow_redirects=False)
-        assert len(app.state.balances_cache) == 0
-    finally:
-        app.dependency_overrides.clear()
-        c.__exit__(None, None, None)
-
-
 def test_an_anonymous_visitor_never_reaches_the_broker() -> None:
     service = _AccountService([_account()])
     c = _client()
@@ -615,129 +437,10 @@ def test_money_renders_unknown_as_a_dash_not_zero() -> None:
 
 # --- an unconfigured deployment --------------------------------------------------------------
 
-class _UnconfiguredLink(_FakeLink):
-    def status(self):
-        return BrokerLinkStatus(broker="schwab", configured=False, connected=False)
-
-    def authorize_url(self, state):
-        from wheel_screener.core.errors import ProviderUnavailableError
-
-        raise ProviderUnavailableError("This deployment has no Schwab application configured yet")
-
-
-def test_an_unconfigured_deployment_says_so_instead_of_offering_a_dead_button() -> None:
-    """'Nothing is linked' and 'there is nothing to link to' are different answers, and only the
-    second is the operator's problem — so the admin is told rather than handed a failure."""
-    c = _client(_UnconfiguredLink())
-    try:
-        _as(c, owns_link=False)
-        body = c.get("/portfolio").text
-        assert "Connect Schwab" not in body
-        assert "nothing to" in body
-        assert "SCHWAB__CLIENT_ID" not in body, "server config names are not for visitors"
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_connecting_anyway_fails_without_naming_environment_variables() -> None:
-    c = _client(_UnconfiguredLink())
-    try:
-        _as(c, owns_link=False)
-        body = c.get("/portfolio/oauth/schwab/connect").text
-        assert "no Schwab application configured" in body
-        assert "SCHWAB__CLIENT_SECRET" not in body
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_a_configured_deployment_still_offers_the_button() -> None:
-    c = _client(_FakeLink(connected=False))
-    try:
-        _as(c, owns_link=False)
-        assert "Connect Schwab" in c.get("/portfolio").text
-    finally:
-        c.__exit__(None, None, None)
-
-
-def test_a_loopback_callback_disables_the_web_sign_in() -> None:
-    """The callback defaults to 127.0.0.1 for the CLI's local login. Left that way on a server,
-    Schwab redirects the VISITOR'S browser to their own machine with the code attached — the
-    sign-in appears to work and lands nowhere. Treated as not configured instead."""
-    from wheel_screener.adapters.schwab.link import SchwabOAuthLink
-    from wheel_screener.config import SchwabSettings
-
-    def link(cb):
-        return SchwabOAuthLink(SchwabSettings(client_id="k", client_secret="s", callback_url=cb))
-
-    assert link("https://127.0.0.1:8182").status().configured is False
-    assert link("https://localhost:9000/x").status().configured is False
-    assert link("").status().configured is False
-    assert link("https://steadybull.net/portfolio/oauth/schwab/callback").status().configured
-
-
 # ── token file shape ───────────────────────────────────────────────────────────────────────
 # The Portfolio tab once read "Connected" with a live expiry while every Schwab call failed
 # with `unsupported_token_type: Unsupported token_type: 'access_token'`. Both halves were true:
 # status() only reads the OUTER creation_timestamp, which survives the mistake below.
-
-def _link(tmp_path, **kw):
-    from pydantic import SecretStr
-
-    from wheel_screener.adapters.schwab.link import SchwabOAuthLink
-    from wheel_screener.config import SchwabSettings
-
-    return SchwabOAuthLink(SchwabSettings(
-        client_id="id", client_secret=SecretStr("secret"),
-        callback_url="https://example.test/portfolio/oauth/schwab/callback",
-        token_path=str(tmp_path / "schwab_token.json"), **kw))
-
-
-def _capture_writer(link):
-    """The function schwab-py is handed, without running the OAuth exchange."""
-    import json as _json
-
-    def write_token(payload, *_args):
-        link._token_path.parent.mkdir(parents=True, exist_ok=True)
-        link._token_path.write_text(_json.dumps(payload))
-    return write_token
-
-
-def test_the_token_is_written_exactly_as_schwab_py_wraps_it(tmp_path) -> None:
-    """schwab-py's TokenMetadata.wrapped_token_write_func has ALREADY applied the
-    {creation_timestamp, token} envelope before calling us. Adding a second one produced a file
-    that authlib read as a token whose type was the literal string 'access_token'."""
-    import inspect
-    import json as _json
-
-    from wheel_screener.adapters.schwab.link import SchwabOAuthLink
-
-    src = inspect.getsource(SchwabOAuthLink.complete)
-    assert "json.dumps(payload)" in src
-    assert '"token": token' not in src, "re-wrapping schwab-py's envelope is the bug"
-
-    link = _link(tmp_path)
-    wrapped = {"creation_timestamp": 1_700_000_000,
-               "token": {"access_token": "A", "refresh_token": "R", "token_type": "Bearer"}}
-    _capture_writer(link)(wrapped)
-    assert _json.loads(link._token_path.read_text()) == wrapped
-
-
-def test_a_refresh_does_not_slide_the_seven_day_authorisation_clock(tmp_path) -> None:
-    """This writer is also the update_token hook, so it runs on every ~30-minute access-token
-    refresh. Stamping our own timestamp there reset the refresh token's 7-day life each time —
-    the tab would promise a week of authorisation forever while the credential died silently."""
-    import json as _json
-
-    link = _link(tmp_path)
-    write = _capture_writer(link)
-    granted = 1_700_000_000
-    write({"creation_timestamp": granted, "token": {"access_token": "A", "token_type": "Bearer"}})
-    # ...half an hour later schwab-py refreshes the access token and writes again
-    write({"creation_timestamp": granted, "token": {"access_token": "B", "token_type": "Bearer"}})
-    on_disk = _json.loads(link._token_path.read_text())
-    assert on_disk["creation_timestamp"] == granted, "the grant time must not move on refresh"
-    assert on_disk["token"]["access_token"] == "B"
-
 
 def test_a_double_wrapped_token_is_repaired_in_place(tmp_path) -> None:
     """The credential underneath is valid — the envelope is wrong, not the grant — so a deploy
@@ -1283,62 +986,6 @@ def test_the_grid_replaced_the_ladder_rather_than_joining_it() -> None:
 
 
 # ── ops: the link expires on a clock, so it has to be visible before it lapses ──────────────
-
-def _health_with(link) -> dict:
-    c = _client(link)
-    try:
-        return c.get("/health").json()
-    finally:
-        c.__exit__(None, None, None)
-
-
-class _Link(_FakeLink):
-    def __init__(self, connected=True, hours=None, configured=True):
-        super().__init__(connected)
-        self._hours, self._configured = hours, configured
-
-    def status(self):
-        expires = (datetime.now(tz=UTC) + timedelta(hours=self._hours)
-                   if self._hours is not None else None)
-        return BrokerLinkStatus(broker="schwab", configured=self._configured,
-                                connected=self.connected, expires_at=expires)
-
-
-def test_health_reports_how_long_the_broker_link_has_left() -> None:
-    """It is the one part of the deployment that expires on a clock rather than breaking, so it
-    is the one part an operator cannot find by waiting for an error."""
-    body = _health_with(_Link(hours=100))
-    schwab = next(b for b in body["brokers"] if b["broker"] == "schwab")
-    assert schwab["connected"] is True and 99 <= schwab["expires_in_hours"] <= 100
-    assert body["warnings"] == [], "four days out is not worth a warning"
-
-
-def test_health_warns_before_the_link_lapses_without_moving_the_status() -> None:
-    """Degrading here would fail the container healthcheck and roll back a release over a
-    credential that was always going to expire, which redeploying cannot renew. Compared
-    against a healthy link rather than to a literal, so the assertion is about the BROKER's
-    effect and not about whatever else the test app's providers are doing."""
-    healthy = _health_with(_Link(hours=100))
-    expiring = _health_with(_Link(hours=12))
-    assert expiring["status"] == healthy["status"], "the link must not move the status"
-    assert any("expires in 12h" in w for w in expiring["warnings"])
-    assert healthy["warnings"] == []
-
-
-def test_health_says_when_a_configured_broker_has_nobody_signed_in() -> None:
-    body = _health_with(_Link(connected=False, configured=True))
-    assert any("configured but not connected" in w for w in body["warnings"])
-
-
-def test_a_broker_that_cannot_be_read_does_not_break_health() -> None:
-    class _Angry(_FakeLink):
-        def status(self):
-            raise RuntimeError("token file unreadable")
-
-    body = _health_with(_Angry())
-    assert body["status"] == _health_with(_Link(hours=100))["status"]
-    assert next(b for b in body["brokers"] if b["broker"] == "schwab")["error"]
-
 
 def test_the_roll_grid_is_read_not_clicked() -> None:
     """Moving assignment odds into the row labels left the click-through with nothing the grid
@@ -1906,13 +1553,8 @@ def test_a_covered_calls_verdict_reaches_the_page_and_its_panel_opens() -> None:
 
 
 def test_the_password_gate_can_cover_the_portfolio_alone() -> None:
-    """The v3 phase-0 posture: anyone may screen, only the owner may link a broker.
-
-    The connect route is the one that matters. It is exempt from the SESSION gate by necessity — a
-    visitor cannot hold a session before signing in — so if the password did not cover it, any
-    visitor with a brokerage account of their own could complete the OAuth exchange, overwrite the
-    stored credential and end the owner's sessions.
-    """
+    """The gate that v3.0.0 put in front of the Portfolio while the Schwab sign-in was the way in.
+    Switched off in production since passkeys; the capability is kept, so it is still tested."""
     from wheel_screener.api.app import _Auth
 
     c = _client()
@@ -1921,8 +1563,7 @@ def test_the_password_gate_can_cover_the_portfolio_alone() -> None:
     try:
         # 401 without following redirects: the password gate runs OUTSIDE the session gate, so an
         # unauthenticated request is challenged rather than bounced to the Connect page first.
-        for path in ("/portfolio", "/portfolio/oauth/schwab/connect",
-                     "/portfolio/oauth/schwab/callback?state=x", "/portfolio/positions"):
+        for path in ("/portfolio", "/portfolio/invites", "/portfolio/positions"):
             r = c.get(path, follow_redirects=False)
             assert r.status_code == 401, path
             assert r.headers.get("www-authenticate", "").startswith("Basic")
@@ -1939,13 +1580,9 @@ def test_the_password_gate_can_cover_the_portfolio_alone() -> None:
 
 
 # --- keeping two people apart ---------------------------------------------------------------
-# The leak the per-user caches exist to close. With one Schwab token per deployment only one person
-# can see an account at a time — which is itself the stronger protection — so these tests hand the
-# link from one person to the other between page loads. That is a real scenario (an admin relinking
-# as someone else), and exactly when a cache keyed by anything but the person would leak: the
-# account on the other side of the hand-over is a different one, and the old numbers are still warm.
-# The owner is set straight in the store, deliberately bypassing the callback, whose clearing of
-# the previous owner's entries would otherwise hide a partition that does not work.
+# The leak the per-user caches exist to close: two people, each with their own linked brokerage,
+# loading the tab in turn. A cache keyed by anything but the person would hand the second one the
+# first one's numbers.
 
 
 def _two_people() -> tuple[tuple, tuple]:
@@ -1959,10 +1596,11 @@ def _two_people() -> tuple[tuple, tuple]:
 
 
 def _be(c, person) -> None:
-    """Use the page as this person, who now holds the broker link."""
+    """Use the page as this person, who has linked a brokerage of their own."""
     user, token = person
     c.cookies.set(app.state.settings.portfolio.cookie_name, token)
-    app.state.users.set_link_owner("schwab", user.id)
+    if app.state.users.snaptrade_secret(user.id) is None:
+        app.state.users.set_snaptrade_secret(user.id, app.state.secretbox.seal(user.id))
 
 
 def test_one_person_is_never_served_another_persons_balances() -> None:
@@ -2092,15 +1730,14 @@ def test_one_persons_refresh_does_not_cost_everybody_their_cache() -> None:
 def test_production_passkeys_name_the_site_people_actually_use() -> None:
     """A passkey is bound to a hostname and checked against the exact origin. Deployed with the
     localhost defaults, every sign-in would be refused — and nothing would say why until someone
-    tried. The broker's callback already names the production site, so the two must agree."""
+    tried."""
     compose = (pathlib.Path(__file__).parents[2] / "docker-compose.yml").read_text()
     env = dict(
         line.strip().split(": ", 1) for line in compose.splitlines()
-        if line.strip().startswith(("PASSKEYS__", "SCHWAB__CALLBACK_URL"))
+        if line.strip().startswith("PASSKEYS__")
     )
     assert env["PASSKEYS__RP_ID"] == "steadybull.net"
     assert env["PASSKEYS__ORIGIN"] == "https://steadybull.net"
-    assert env["SCHWAB__CALLBACK_URL"].startswith(env["PASSKEYS__ORIGIN"] + "/")
 
 
 def test_the_www_name_redirects_rather_than_serving_the_site() -> None:
@@ -2231,7 +1868,7 @@ def test_an_invite_needs_a_name() -> None:
 def test_only_an_admin_can_invite() -> None:
     c = _client()
     try:
-        _as(c, "Alex", admin=False, owns_link=False)
+        _as(c, "Alex", admin=False, linked=False)
         assert c.get("/portfolio/invites").status_code == 403
         assert c.post("/portfolio/invites", data={"name": "Mallory"}).status_code == 403
         assert c.post("/portfolio/invites", data={"name": "M", "admin": "1"}).status_code == 403
@@ -2250,7 +1887,7 @@ def test_a_member_cannot_cancel_invites_either() -> None:
         _as(c, "Sam")
         c.post("/portfolio/invites", data={"name": "Alex"})
         (pending,) = app.state.users.pending_invites()
-        _as(c, "Eve", admin=False, owns_link=False)
+        _as(c, "Eve", admin=False, linked=False)
         assert c.post("/portfolio/invites/cancel", data={"ref": pending.ref}).status_code == 403
         assert len(app.state.users.pending_invites()) == 1
     finally:
@@ -2287,3 +1924,22 @@ def test_an_expired_contract_says_expired_instead_of_a_negative_day_count() -> N
     finally:
         app.dependency_overrides.clear()
         c.__exit__(None, None, None)
+
+
+# --- the command line's own Schwab token -----------------------------------------------------
+
+def test_the_command_line_reads_its_token_s_expiry_from_the_grant(tmp_path) -> None:
+    """`doctor` reports how long the CLI's Schwab token has left. The clock is the GRANT time
+    schwab-py records, which access-token refreshes do not move."""
+    import json as _json
+
+    from wheel_screener.adapters.schwab.auth import token_expires_at
+    from wheel_screener.config import SchwabSettings
+
+    path = tmp_path / "token.json"
+    granted = datetime(2026, 9, 20, 12, 0, tzinfo=UTC)
+    path.write_text(_json.dumps({"creation_timestamp": granted.timestamp(), "token": {}}))
+    assert token_expires_at(SchwabSettings(token_path=str(path))) == granted + timedelta(days=7)
+    assert token_expires_at(SchwabSettings(token_path=str(tmp_path / "none.json"))) is None
+    path.write_text("not json")
+    assert token_expires_at(SchwabSettings(token_path=str(path))) is None

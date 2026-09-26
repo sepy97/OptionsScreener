@@ -14,11 +14,10 @@ steadybull.net {
 	request_body {
 		max_size 1MB
 	}
-	# Two kinds of URL carry a live credential: the OAuth callback (an authorization code in the
-	# query) and an invite link (the token is the path). Caddy keeps no access log unless a `log`
-	# directive is added, so today this skips nothing — it is here so that adding one later does not
-	# start recording credentials. The app redacts the same paths from its own request log.
-	@secret_urls path_regexp ^/portfolio/oauth/[^/]+/callback$|^/invite/
+	# An invite link carries a live credential: the token is the path. Caddy keeps no access log
+	# unless a `log` directive is added, so today this skips nothing — it is here so that adding one
+	# later does not start recording credentials. The app redacts the same path from its own log.
+	@secret_urls path_regexp ^/invite/
 	log_skip @secret_urls
 
 	# retry a failed dial for up to 20s so a request during the app's cold-start store-warm

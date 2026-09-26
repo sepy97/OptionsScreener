@@ -18,8 +18,6 @@ from test_portfolio_sessions import _as, _client, _reset_caches  # noqa: E402
 
 from wheel_screener.api.app import app  # noqa: E402
 from wheel_screener.api.secretbox import SecretBox  # noqa: E402
-from wheel_screener.core.errors import AuthExpiredError  # noqa: E402
-from wheel_screener.core.portfolio import AllAccounts  # noqa: E402
 
 PORTAL = "https://app.snaptrade.com/portal/abc"
 
@@ -104,7 +102,7 @@ def _link(c, fake, user):
 
 def test_the_first_link_registers_under_the_internal_id_and_goes_to_the_portal(snap) -> None:
     c, fake = snap
-    alex = _as(c, "Alex", admin=False, owns_link=False)
+    alex = _as(c, "Alex", admin=False, linked=False)
     assert "Link a brokerage" in c.get("/portfolio").text
     _link(c, fake, alex)
     assert list(fake.issued) == [alex.id], "registered by internal id — never a name or email"
@@ -121,7 +119,7 @@ def test_the_first_link_registers_under_the_internal_id_and_goes_to_the_portal(s
 
 def test_a_second_link_does_not_register_again(snap) -> None:
     c, fake = snap
-    alex = _as(c, "Alex", admin=False, owns_link=False)
+    alex = _as(c, "Alex", admin=False, linked=False)
     _link(c, fake, alex)
     _link(c, fake, alex)  # FakeSnapTrade.register_user refuses a second registration
     assert len(fake.portal_calls) == 2
@@ -129,7 +127,7 @@ def test_a_second_link_does_not_register_again(snap) -> None:
 
 def test_the_stored_secret_is_encrypted(snap) -> None:
     c, fake = snap
-    alex = _as(c, "Alex", admin=False, owns_link=False)
+    alex = _as(c, "Alex", admin=False, linked=False)
     _link(c, fake, alex)
     sealed = app.state.users.snaptrade_secret(alex.id)
     assert sealed and fake.issued[alex.id].encode() not in sealed
@@ -142,7 +140,7 @@ def test_the_stored_secret_is_encrypted(snap) -> None:
 
 def test_linked_accounts_appear_on_the_page(snap) -> None:
     c, fake = snap
-    alex = _as(c, "Alex", admin=False, owns_link=False)
+    alex = _as(c, "Alex", admin=False, linked=False)
     _link(c, fake, alex)
     fake.connections_of[alex.id] = [_connection("conn-a")]
     fake.accounts_of[alex.id] = [_account("Z-1111")]
@@ -156,11 +154,11 @@ def test_linked_accounts_appear_on_the_page(snap) -> None:
 
 def test_each_person_sees_only_their_own_linked_accounts(snap) -> None:
     c, fake = snap
-    alice = _as(c, "Alice", admin=False, owns_link=False)
+    alice = _as(c, "Alice", admin=False, linked=False)
     _link(c, fake, alice)
     fake.connections_of[alice.id] = [_connection("conn-alice")]
     fake.accounts_of[alice.id] = [_account("A-1111")]
-    bob = _as(c, "Bob", admin=False, owns_link=False)  # now signed in as Bob on this client
+    bob = _as(c, "Bob", admin=False, linked=False)  # now signed in as Bob on this client
     _link(c, fake, bob)
     fake.connections_of[bob.id] = [_connection("conn-bob", name="Robinhood")]
     fake.accounts_of[bob.id] = [_account("B-2222", institution="Robinhood")]
@@ -172,10 +170,10 @@ def test_each_person_sees_only_their_own_linked_accounts(snap) -> None:
 
 def test_nobody_can_reconnect_or_unlink_someone_elses_connection(snap) -> None:
     c, fake = snap
-    alice = _as(c, "Alice", admin=False, owns_link=False)
+    alice = _as(c, "Alice", admin=False, linked=False)
     _link(c, fake, alice)
     fake.connections_of[alice.id] = [_connection("conn-alice")]
-    bob = _as(c, "Bob", admin=False, owns_link=False)
+    bob = _as(c, "Bob", admin=False, linked=False)
     _link(c, fake, bob)
     for route in ("/portfolio/brokerages/remove", "/portfolio/brokerages/reconnect"):
         r = c.post(route, data={"connection_id": "conn-alice"}, follow_redirects=False)
@@ -187,7 +185,7 @@ def test_nobody_can_reconnect_or_unlink_someone_elses_connection(snap) -> None:
 
 def test_a_broken_connection_offers_a_reconnect_that_repairs_it_in_place(snap) -> None:
     c, fake = snap
-    alex = _as(c, "Alex", admin=False, owns_link=False)
+    alex = _as(c, "Alex", admin=False, linked=False)
     _link(c, fake, alex)
     fake.connections_of[alex.id] = [_connection("conn-a", disabled=True)]
     _reset_caches()
@@ -201,7 +199,7 @@ def test_a_broken_connection_offers_a_reconnect_that_repairs_it_in_place(snap) -
 
 def test_unlinking_removes_the_connection_and_the_cached_numbers(snap) -> None:
     c, fake = snap
-    alex = _as(c, "Alex", admin=False, owns_link=False)
+    alex = _as(c, "Alex", admin=False, linked=False)
     _link(c, fake, alex)
     fake.connections_of[alex.id] = [_connection("conn-a")]
     fake.accounts_of[alex.id] = [_account("Z-1111")]
@@ -217,7 +215,7 @@ def test_unlinking_removes_the_connection_and_the_cached_numbers(snap) -> None:
 def test_an_unlink_question_cannot_be_turned_into_script(snap) -> None:
     """A brokerage's name reaches a confirm() prompt; it must never be able to close the string."""
     c, fake = snap
-    alex = _as(c, "Alex", admin=False, owns_link=False)
+    alex = _as(c, "Alex", admin=False, linked=False)
     _link(c, fake, alex)
     fake.connections_of[alex.id] = [_connection("conn-a", name="Evil');alert(1);('")]
     _reset_caches()
@@ -232,41 +230,17 @@ def test_an_unlink_question_cannot_be_turned_into_script(snap) -> None:
 def test_without_snaptrade_keys_there_is_no_link_button_and_no_route(snap) -> None:
     c, _ = snap
     app.state.snaptrade = app.state.secretbox = None
-    _as(c, "Alex", admin=False, owns_link=False)
+    _as(c, "Alex", admin=False, linked=False)
     body = c.get("/portfolio").text
-    assert "Link a brokerage" not in body and "No brokerage account is linked" in body
+    assert "Link a brokerage" not in body and "not set up on this site yet" in body
     assert c.post("/portfolio/brokerages/link", follow_redirects=False).status_code == 404
 
 
 def test_a_secret_sealed_under_another_key_reads_as_not_linked(snap) -> None:
     """A rotated key, or a backup from elsewhere: offer the link again rather than crash."""
     c, fake = snap
-    alex = _as(c, "Alex", admin=False, owns_link=False)
+    alex = _as(c, "Alex", admin=False, linked=False)
     other = SecretBox(Fernet.generate_key().decode())
     app.state.users.set_snaptrade_secret(alex.id, other.seal("from-elsewhere"))
     body = c.get("/portfolio").text
     assert c.get("/portfolio").status_code == 200 and "Link a brokerage" in body
-
-
-# --- several sources at once --------------------------------------------------------------------
-
-class _Source:
-    def __init__(self, broker, accounts=(), error=None):
-        self.broker, self._accounts, self._error = broker, list(accounts), error
-
-    def accounts(self):
-        if self._error:
-            raise self._error
-        return self._accounts
-
-
-def test_one_broken_source_does_not_hide_the_others() -> None:
-    both = AllAccounts([_Source("schwab", error=AuthExpiredError("expired")),
-                        _Source("snaptrade", accounts=["fidelity-account"])])
-    assert both.accounts() == ["fidelity-account"]
-
-
-def test_every_source_failing_is_an_error() -> None:
-    with pytest.raises(AuthExpiredError):
-        AllAccounts([_Source("schwab", error=AuthExpiredError("expired")),
-                     _Source("snaptrade", error=AuthExpiredError("gone"))]).accounts()

@@ -1,4 +1,4 @@
-"""Who may use the Portfolio: users, their passkeys, invites, sessions, and who owns a broker link.
+"""Who may use the Portfolio: users, their passkeys, invites, sessions, and SnapTrade identities.
 
 Everything here is a server-side record, for the same reason the original session store was: a
 cookie carries nothing but a random identifier, so revoking something deletes a row and it is gone.
@@ -16,13 +16,12 @@ What is stored, and why it is safe to store it:
 * **challenges** — the random value a passkey ceremony signs. Single-use and short-lived, like the
   OAuth ``state`` below; replaying a captured response fails because its challenge is gone.
 * **user_sessions** — random token → user.
-* **oauth_state** — the broker OAuth ``state``, carried over from the previous store unchanged.
-* **broker_links** — which user a broker link belongs to. While there is one Schwab token per
-  deployment this is at most one row per broker, and it is what stops a signed-in user from being
-  shown somebody else's account.
+* **snaptrade_users** — each person's SnapTrade identity: the secret SnapTrade issued them,
+  encrypted with a key that is not in this file.
 
-Tables are only ever ADDED here, never altered. The previous release's ``sessions`` table is left
-where it is rather than dropped, so rolling back finds the shape it expects.
+Tables are only ever ADDED here, never altered or dropped. Tables an earlier release used and this
+one does not (``sessions``, ``oauth_state``, ``broker_links``) are left in place and ignored, so
+rolling back finds the shape it expects.
 """
 
 from __future__ import annotations
@@ -61,11 +60,6 @@ _SCHEMA = (
     "CREATE TABLE IF NOT EXISTS user_sessions ("
     " token TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),"
     " expires_at TEXT NOT NULL, created_at TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS oauth_state ("
-    " state TEXT PRIMARY KEY, broker TEXT NOT NULL, expires_at TEXT NOT NULL)",
-    "CREATE TABLE IF NOT EXISTS broker_links ("
-    " broker TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id),"
-    " created_at TEXT NOT NULL)",
     # A person's SnapTrade identity: registered under their user id, with the secret SnapTrade
     # issued, ENCRYPTED (api.secretbox) — the key is in the environment, not in this file.
     "CREATE TABLE IF NOT EXISTS snaptrade_users ("
@@ -355,54 +349,6 @@ class UserStore:
         """Every session one person holds — for when an account is compromised. Nobody else's."""
         with self._connect() as con:
             con.execute("DELETE FROM user_sessions WHERE user_id = ?", (user_id,))
-
-    # --- broker OAuth state ---------------------------------------------------------------
-
-    def issue_state(self, broker: str, ttl_seconds: int = 600) -> str:
-        state = secrets.token_urlsafe(_TOKEN_BYTES)
-        with self._connect() as con:
-            con.execute("DELETE FROM oauth_state WHERE expires_at <= ?", (_now().isoformat(),))
-            con.execute(
-                "INSERT INTO oauth_state (state, broker, expires_at) VALUES (?, ?, ?)",
-                (state, broker, (_now() + timedelta(seconds=ttl_seconds)).isoformat()),
-            )
-        return state
-
-    def consume_state(self, state: str | None) -> str | None:
-        """The broker this state was issued for, or None. SINGLE USE: consumed even on success,
-        so a replayed callback — the same redirect opened twice — cannot complete a second link."""
-        if not state:
-            return None
-        with self._connect() as con:
-            row = con.execute(
-                "SELECT broker, expires_at FROM oauth_state WHERE state = ?", (state,)
-            ).fetchone()
-            con.execute("DELETE FROM oauth_state WHERE state = ?", (state,))
-        if row is None or datetime.fromisoformat(row[1]) <= _now():
-            return None
-        return row[0]
-
-    # --- who owns a broker link -----------------------------------------------------------
-
-    def link_owner(self, broker: str) -> str | None:
-        with self._connect() as con:
-            row = con.execute(
-                "SELECT user_id FROM broker_links WHERE broker = ?", (broker,)
-            ).fetchone()
-        return row[0] if row else None
-
-    def set_link_owner(self, broker: str, user_id: str) -> None:
-        with self._connect() as con:
-            con.execute(
-                "INSERT INTO broker_links (broker, user_id, created_at) VALUES (?, ?, ?)"
-                " ON CONFLICT(broker) DO UPDATE SET user_id = excluded.user_id,"
-                " created_at = excluded.created_at",
-                (broker, user_id, _now().isoformat()),
-            )
-
-    def clear_link_owner(self, broker: str) -> None:
-        with self._connect() as con:
-            con.execute("DELETE FROM broker_links WHERE broker = ?", (broker,))
 
     # --- SnapTrade identities -------------------------------------------------------------
 

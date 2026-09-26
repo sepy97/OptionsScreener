@@ -173,42 +173,40 @@ def _report_broker(settings: Settings) -> None:
     """
     from datetime import UTC, datetime
 
-    from wheel_screener.adapters.schwab.link import SchwabOAuthLink
+    from wheel_screener.adapters.schwab.auth import token_expires_at
 
-    typer.echo("\nBroker link\n")
+    typer.echo("\nBrokerages\n")
+    typer.echo("  snaptrade  " + ("configured — people link their own brokerages on the site"
+                                  if settings.snaptrade.configured
+                                  else "not configured — the Portfolio offers no way to link"))
+    typer.echo("\nSchwab, for this command line (the website does not use it)\n")
+    if not settings.schwab.client_id or not settings.schwab.client_secret.get_secret_value():
+        typer.echo("  -  schwab     not configured (optional)")
+        return
     try:
-        status = SchwabOAuthLink(settings.schwab).status()
+        expires = token_expires_at(settings.schwab)
     except Exception as e:  # noqa: BLE001 - report, never crash the diagnostic
         typer.echo(f"  ?  schwab     could not be read: {e}")
         return
-
-    if not status.connected or status.expires_at is None:
-        if status.configured:
-            typer.echo("  XX schwab     no usable token — sign in on the Portfolio tab")
-        else:
-            typer.echo("  -  schwab     nobody has signed in, and the web flow is unavailable "
-                       "here (no credentials, or a loopback callback)")
+    if expires is None or expires <= datetime.now(tz=UTC):
+        typer.echo("  XX schwab     no usable token — run `wheel-screener auth-login`")
         return
 
-    hours = (status.expires_at - datetime.now(tz=UTC)).total_seconds() / 3600
-    when = f"expires in {hours:.0f}h ({status.expires_at:%d %b %H:%M} UTC)"
+    hours = (expires - datetime.now(tz=UTC)).total_seconds() / 3600
+    when = f"expires in {hours:.0f}h ({expires:%d %b %H:%M} UTC)"
     try:
         accounts = build_portfolio(settings).brokerage_accounts()
     except Exception as e:  # noqa: BLE001 - the failure IS the diagnostic
         typer.echo(f"  XX schwab     token on disk {when}, but the broker rejected it:")
         typer.echo(f"                {e}")
-        typer.echo("     sign in again on the Portfolio tab — authorising elsewhere revokes "
+        typer.echo("     run `wheel-screener auth-login` again — authorising elsewhere revokes "
                    "the previous token")
         return
 
     mark = "ok" if hours > 48 else "!!"
     typer.echo(f"  {mark} schwab     {len(accounts)} account(s), {when}")
     if hours <= 48:
-        typer.echo("     reconnect on the Portfolio tab; it is a click and doubles as the login")
-
-    if not status.configured:
-        typer.echo("     note: the WEB sign-in is unavailable here (loopback callback), so this "
-                   "token came from `auth-login` and must be renewed the same way")
+        typer.echo("     renew it soon with `wheel-screener auth-login`")
 
 
 @app.command()

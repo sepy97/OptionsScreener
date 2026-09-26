@@ -81,14 +81,8 @@ curl -sf https://steadybull.net/health
 ```
 
 Open https://steadybull.net — the screener loads with no prompt (it is public on purpose).
-Open **/portfolio** and you should get a Basic-Auth prompt: compose sets `AUTH__SCOPE=portfolio`, so
-the password covers the account data and the broker link and nothing else. If `AUTH__PASSWORD` is
-unset the **app refuses to start** (by design), so a healthy container means the gate is on.
-
-Why the portfolio needs it even though the tab already requires signing in with Schwab: the OAuth
-*connect* route cannot require a session (nobody has one before signing in), so without a password
-any visitor with a Schwab account of their own could complete the exchange, overwrite the stored
-token and end the owner's sessions. See [`MULTI_USER_PLAN.md`](MULTI_USER_PLAN.md) §1.
+Open **/portfolio** and you are sent to the passkey sign-in page (see **Signing in** below). The
+HTTP Basic-Auth gate still exists (`AUTH__SCOPE`) but is switched off in compose.
 
 ## Scheduled refresh (cron on the host)
 
@@ -123,59 +117,23 @@ docker compose up -d --build
 Later: `MINOR` for features, `PATCH` for hotfixes (both deploy), `MAJOR` when a release needs a
 manual migration step. (A GitHub Action to deploy automatically on a `vX.Y.Z` tag is step #6.)
 
-## Portfolio tab (optional)
+## Portfolio tab
 
 The tab appears for everyone, but only signed-in people get past it (see **Signing in** below),
-and only an admin can connect a broker — which needs Schwab credentials on the droplet. Without
-them the tab tells the admin there is nothing to connect to, and nothing else in the app is
-affected.
+and each of them links their own brokerages through SnapTrade (see **Linking brokerages through
+SnapTrade** below). Without SnapTrade keys the tab says linking is not set up, and nothing else
+in the app is affected.
 
-```
-# /srv/steadybull/.env
-SCHWAB__CLIENT_ID=...
-SCHWAB__CLIENT_SECRET=...
-```
+Users, passkeys, sessions and each person's encrypted SnapTrade identity live in one file on the
+mounted volume (`compose` sets `PORTFOLIO__SESSIONS_DB_PATH`) — a deploy replaces the container,
+so anything left inside it would be destroyed on every release. It is backed up nightly (see
+**Rollback & backups**).
 
-`SCHWAB__CALLBACK_URL` is set by `docker-compose.yml`, not `.env` — it defaults to a loopback
-address for the CLI's local login flow, and a deploy that inherited that default would send the
-visitor's browser to their own machine with the authorization code attached. The web sign-in stays
-disabled (the tab says the broker isn't set up) until the callback points at this site.
-
-```bash
-sudo mkdir -p /srv/steadybull/data/links
-sudo chown -R 10001:10001 /srv/steadybull/data/links
-```
-
-The users, passkeys and sessions, and the broker token, are written to the mounted volume
-(`compose` sets `PORTFOLIO__SESSIONS_DB_PATH` and `SCHWAB__TOKEN_PATH`) — a deploy replaces the
-container, so anything left inside it would be destroyed on every release. **Back that file up**:
-losing it loses every account, and a passkey cannot be re-issued from the server side (#66).
-
-The Schwab app must also have the **Accounts and Trading** product and must register
-`https://steadybull.net/portfolio/oauth/schwab/callback` as a callback URL.
-
-### The weekly reconnect
-
-Schwab refresh tokens last **7 days**. This is the only part of the deployment that stops working
-on a clock rather than by breaking, so it will not announce itself — the Portfolio tab simply goes
-quiet. Both diagnostics report the time remaining:
-
-```bash
-curl -s https://steadybull.net/health | jq '.brokers, .warnings'
-docker compose exec app wheel-screener doctor      # "Broker link" section
-```
-
-`/health` warns below 48 hours and **deliberately does not go `degraded`** for an expiring link: a
-non-200 there fails the container healthcheck and rolls back the release, which cannot renew a
-token that was always going to lapse.
-
-`doctor` goes further and **calls the broker** rather than reading the token file's age. A token
-can sit on disk, unexpired, and be useless — authorising anywhere else revokes the previous one,
-and a token written in the wrong shape loads without complaint and fails every request. Both look
-healthy to a presence check.
-
-Reconnecting is one click on the Portfolio tab. It no longer signs you in — the passkey does
-that, on its own 90-day clock — so the two expire independently.
+**The website does not connect to Schwab directly any more** (removed in v3.6.0). Schwab accounts
+link through SnapTrade like any other broker. The command line still can: `wheel-screener
+auth-login` on the operator's own machine, then `balances` / `doctor`. That needs
+`SCHWAB__CLIENT_ID` / `SCHWAB__CLIENT_SECRET` locally; the droplet's `.env` no longer needs them,
+and the Schwab developer app no longer needs the steadybull.net callback address.
 
 ### Signing in: passkeys and invites
 
@@ -198,9 +156,8 @@ privately — until it is used, whoever holds it can claim it.
 **A lost device, or a second one:** *New passkey link* on that person's row makes a link that adds
 a passkey to their account instead of creating one. Old passkeys keep working.
 
-Only admins can connect a broker, because there is still one Schwab token per deployment: anyone
-else linking would replace the owner's. A signed-in non-admin sees no account at all — the token
-does not know whose it is, so who linked it is recorded separately and checked on every request.
+Admins and members see the same Portfolio: everyone links their own brokerages. Being an admin
+only adds the Invites page.
 
 `PASSKEYS__RP_ID` and `PASSKEYS__ORIGIN` are set by `docker-compose.yml` to `steadybull.net`. A
 passkey is bound to that hostname, so it will not work on the droplet's IP or any other name.
@@ -214,13 +171,12 @@ one.) Until step 2, **nobody can reach the Portfolio**, you included.
 1. Deploy.
 2. `docker compose exec -T app wheel-screener invite "<you>" --admin`, and open the link.
 3. Save a passkey. You land on the Portfolio.
-4. **Reconnect Schwab once.** The token on disk has no recorded owner — it predates owners — so
-   the tab offers *Connect Schwab* rather than guessing it is yours.
+4. Link your brokerages from the Portfolio tab.
 5. Make a *New passkey link* for yourself on **Invite people** and open it on your other devices,
    unless your passkey already syncs to them through iCloud Keychain or Google Password Manager.
 
-Rolling back to v3.2.0 is safe: this release only adds tables. The old release finds its own
-session table untouched and goes back to signing in with Schwab.
+Rolling back is safe: releases only ever add tables to the accounts file, and leave the ones they
+stop using in place for an older release to find.
 
 ### Linking brokerages through SnapTrade
 
@@ -283,7 +239,7 @@ Schwab is OAuth and is refreshed with `auth-login`.
 
 | File | What it holds | Why it is copied |
 |---|---|---|
-| `accounts.sqlite` | who can sign in, their passkeys' **public** keys, who owns the broker link | Losing it loses every account: people would need new invites, and their old passkeys would be orphaned on their phones |
+| `accounts.sqlite` | who can sign in, their passkeys' **public** keys, each person's SnapTrade identity (encrypted) | Losing it loses every account: people would need new invites, and their old passkeys would be orphaned on their phones |
 | `jobs.sqlite` | past screens, including the precomputed ones | Screens are rebuilt four times a day, but the history is not |
 | `overlay_metrics.csv` | fundamentals refreshed after earnings | The bulk store does not have them |
 
@@ -303,7 +259,7 @@ tap.
 
 | File | Why not |
 |---|---|
-| `data/links/schwab_token.json` | It expires in 7 days, so a restored copy is dead on arrival more often than not — and it is **trading-capable**. Copying it into a backup that leaves the box widens the blast radius of a credential that a single click replaces. |
+| `data/links/schwab_token.json` | No longer used by the site (v3.6.0) — delete it if it is still there. It was trading-capable, and a copy of it had no business leaving the box. |
 | `data/fundamentals/` (except the overlay) | Rebuilt by the refresh job. |
 
 ### Getting it off the droplet — needs doing once, by hand
@@ -332,5 +288,5 @@ docker compose start app
 
 Remove the `-wal`/`-shm` files: they belong to the database being replaced, and SQLite would try to
 apply them to the restored one. The tables the backup left out are recreated empty on start.
-Everyone then signs in with their passkey as usual; if the Schwab token was lost too, the owner
-reconnects it.
+Everyone then signs in with their passkey as usual, and their brokerages are still linked —
+provided `SNAPTRADE__SECRET_KEY` is the same key the backup was made under.
