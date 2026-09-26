@@ -18,7 +18,7 @@ from wheel_screener.core.swap import (
 )
 
 TODAY = date(2026, 9, 21)
-YARDSTICK = 0.219  # the spec's example: the average yield of the three puts opened that day
+FRESH_YIELD = 0.219  # the spec's example: the average yield of the three puts opened that day
 
 
 def _pick(symbol: str, yld: float, strike: float = 100.0) -> SwapSuggestion:
@@ -56,7 +56,7 @@ def test_yield_is_the_yearly_rate_on_the_locked_cash() -> None:
 )
 def test_the_worked_example(symbol, strike, days, old_yield, spot, action, extra,
                             stopped_by) -> None:
-    r = review(_open(symbol, strike, days, old_yield, spot), _pick(symbol, YARDSTICK))
+    r = review(_open(symbol, strike, days, old_yield, spot), _pick(symbol, FRESH_YIELD))
     assert r.action is action, r.reason
     assert r.old_yield == pytest.approx(old_yield, abs=5e-4)
     if extra is not None:
@@ -67,7 +67,7 @@ def test_the_worked_example(symbol, strike, days, old_yield, spot, action, extra
 
 def test_a_put_the_stock_has_fallen_below_is_the_assignment_question() -> None:
     """AVGO in the example: out of scope, and for a reason worth saying rather than a bare No."""
-    r = review(_open("AVGO", 390.0, 4, 0.05, 380.0), _pick("AVGO", YARDSTICK))
+    r = review(_open("AVGO", 390.0, 4, 0.05, 380.0), _pick("AVGO", FRESH_YIELD))
     assert r.action is SwapAction.NOT_APPLICABLE and "assignment" in r.reason
 
 
@@ -112,18 +112,18 @@ def test_rule_2_stops_small_and_nearly_expired_positions() -> None:
 
 
 def test_the_extra_is_net_of_the_swap_cost() -> None:
-    free = review(_open("X", 130.0, 25, 0.062, 145.0), _pick("X", YARDSTICK),
+    free = review(_open("X", 130.0, 25, 0.062, 145.0), _pick("X", FRESH_YIELD),
                   params=SwapParams(swap_cost=0.0))
-    charged = review(_open("X", 130.0, 25, 0.062, 145.0), _pick("X", YARDSTICK),
+    charged = review(_open("X", 130.0, 25, 0.062, 145.0), _pick("X", FRESH_YIELD),
                      params=SwapParams(swap_cost=10.0))
     assert free.extra_premium - charged.extra_premium == pytest.approx(10.0)
 
 
 def test_the_ratio_and_extra_limits_are_tunable() -> None:
     put = _open("X", 130.0, 25, 0.062, 145.0)
-    assert review(put, _pick("X", YARDSTICK), params=SwapParams(min_ratio=4.0)).action is (
+    assert review(put, _pick("X", FRESH_YIELD), params=SwapParams(min_ratio=4.0)).action is (
         SwapAction.KEEP)
-    assert review(put, _pick("X", YARDSTICK), params=SwapParams(min_extra=500.0)).action is (
+    assert review(put, _pick("X", FRESH_YIELD), params=SwapParams(min_extra=500.0)).action is (
         SwapAction.KEEP)
 
 
@@ -145,7 +145,7 @@ def test_nothing_to_swap_into_means_keep() -> None:
 
 def test_a_swap_suggests_the_same_ticker_first_then_the_best_of_the_rest() -> None:
     others = [_pick("AAA", 0.40), _pick("BBB", 0.35), _pick("CCC", 0.30), _pick("DDD", 0.25)]
-    r = review(_open("X", 130.0, 25, 0.062, 145.0), _pick("X", YARDSTICK), others)
+    r = review(_open("X", 130.0, 25, 0.062, 145.0), _pick("X", FRESH_YIELD), others)
     assert [s.symbol for s in r.suggestions] == ["X", "AAA", "BBB", "CCC"]  # TOP_N = 3 others
     assert r.suggestions[0].same_ticker
 

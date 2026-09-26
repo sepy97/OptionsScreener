@@ -13,11 +13,14 @@ services:
     environment:
       # production posture (override anything from .env)
       CHAIN_SOURCE: alpaca # key/secret, no OAuth — the prod chain source
-      # PUBLIC instance: the login gate is intentionally OFF. AUTH__PASSWORD="" forces it off even
-      # if .env sets one; AUTH__REQUIRED=false so the app doesn't fail-closed. To re-enable auth:
-      # delete these two lines and set AUTH__PASSWORD in .env.
-      AUTH__REQUIRED: "false"
-      AUTH__PASSWORD: ""
+      # The SCREENER stays public; the PORTFOLIO needs the password. Scoping the gate rather than
+      # switching it on site-wide keeps the screener shareable while closing the broker slot: the
+      # OAuth connect route is what claims this deployment's single Schwab credential, so leaving
+      # it open let any visitor with a Schwab account of their own overwrite the stored token and
+      # end the owner's sessions. AUTH__PASSWORD comes from .env — with REQUIRED=true the app
+      # REFUSES TO START without it, so set it there BEFORE deploying this.
+      AUTH__REQUIRED: "true"
+      AUTH__SCOPE: portfolio
       # runtime paths -> the mounted volume
       DATA_DIR: /data/fundamentals
       EARNINGS_PATH: /data/earnings_calendar.csv

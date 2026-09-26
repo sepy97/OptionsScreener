@@ -6,6 +6,8 @@ Loaded from environment and ``.env``; nested fields use a ``__`` delimiter, e.g.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -108,11 +110,23 @@ class AuthSettings(BaseModel):
 
     ``required`` is the production fail-CLOSED switch: set ``AUTH__REQUIRED=true`` (the deploy
     container does) and the app REFUSES TO START if no password is configured — so a forgotten
-    secret crashes the deploy loudly instead of silently exposing the app."""
+    secret crashes the deploy loudly instead of silently exposing the app.
+
+    ``scope`` says WHICH paths the password covers:
+
+    * ``site`` — every path. The original posture, and right for a private deployment.
+    * ``portfolio`` — only ``/portfolio`` and below, so the screener stays shareable while account
+      data and the broker link need the password. This is not only about who may *read* balances:
+      the connect route is what claims the deployment's single broker slot, and leaving it open
+      lets any visitor with a brokerage account of their own overwrite the stored credential and
+      end the owner's sessions. A ``Literal`` on purpose — a misspelt scope should refuse to start
+      rather than quietly gate nothing.
+    """
 
     user: str = "admin"
     password: SecretStr = SecretStr("")
     required: bool = False  # fail closed: refuse to start unauthenticated when true
+    scope: Literal["site", "portfolio"] = "site"
 
 
 class RateLimitSettings(BaseModel):

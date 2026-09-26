@@ -9,7 +9,7 @@ store is slimmed to ~365 MB and lives on the host, mounted into the container �
 | File | Role |
 |---|---|
 | `Dockerfile` | app image (uv `--frozen --extra api`, uvicorn, non-root, healthcheck) |
-| `docker-compose.yml` | `app` + `caddy`; prod env (`AUTH__REQUIRED=true`, `CHAIN_SOURCE=alpaca`), `./data` volume |
+| `docker-compose.yml` | `app` + `caddy`; prod env (`AUTH__REQUIRED=true`, `AUTH__SCOPE=portfolio`, `CHAIN_SOURCE=alpaca`), `./data` volume |
 | `Caddyfile` | `steadybull.net` → reverse-proxy `app:8000`, automatic HTTPS |
 | `tools/slim_store.py` | build the deploy-size fundamentals store |
 
@@ -80,9 +80,15 @@ docker compose logs -f app          # watch it warm the store
 curl -sf https://steadybull.net/health
 ```
 
-Open https://steadybull.net — you should get a Basic-Auth prompt, then the dashboard. If
-`AUTH__PASSWORD` is unset the **app refuses to start** (by design), so a healthy container means the
-gate is on.
+Open https://steadybull.net — the screener loads with no prompt (it is public on purpose).
+Open **/portfolio** and you should get a Basic-Auth prompt: compose sets `AUTH__SCOPE=portfolio`, so
+the password covers the account data and the broker link and nothing else. If `AUTH__PASSWORD` is
+unset the **app refuses to start** (by design), so a healthy container means the gate is on.
+
+Why the portfolio needs it even though the tab already requires signing in with Schwab: the OAuth
+*connect* route cannot require a session (nobody has one before signing in), so without a password
+any visitor with a Schwab account of their own could complete the exchange, overwrite the stored
+token and end the owner's sessions. See [`MULTI_USER_PLAN.md`](MULTI_USER_PLAN.md) §1.
 
 ## Scheduled refresh (cron on the host)
 

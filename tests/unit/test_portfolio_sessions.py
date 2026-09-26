@@ -1613,3 +1613,36 @@ def test_a_covered_calls_verdict_reaches_the_page_and_its_panel_opens() -> None:
     assert "unknown position" not in panel
     assert "earning almost nothing" in panel and "Not a recommendation" in panel
     assert "frees no capital" in panel  # why it is not the put rule with the sides swapped
+
+
+def test_the_password_gate_can_cover_the_portfolio_alone() -> None:
+    """The v3 phase-0 posture: anyone may screen, only the owner may link a broker.
+
+    The connect route is the one that matters. It is exempt from the SESSION gate by necessity — a
+    visitor cannot hold a session before signing in — so if the password did not cover it, any
+    visitor with a brokerage account of their own could complete the OAuth exchange, overwrite the
+    stored credential and end the owner's sessions.
+    """
+    from wheel_screener.api.app import _Auth
+
+    c = _client()
+    app.state.auth = _Auth("admin", "s3cret")
+    app.state.auth_scope = "portfolio"
+    try:
+        # 401 without following redirects: the password gate runs OUTSIDE the session gate, so an
+        # unauthenticated request is challenged rather than bounced to the Connect page first.
+        for path in ("/portfolio", "/portfolio/oauth/schwab/connect",
+                     "/portfolio/oauth/schwab/callback?state=x", "/portfolio/positions"):
+            r = c.get(path, follow_redirects=False)
+            assert r.status_code == 401, path
+            assert r.headers.get("www-authenticate", "").startswith("Basic")
+        assert c.post("/portfolio/swaps/refresh", follow_redirects=False).status_code == 401
+        # the screener is untouched: a 404 means the request passed the gate and reached routing
+        assert c.get("/nope").status_code == 404
+        assert c.get("/health").status_code != 401
+        # with the password, the gate passes and the tab renders
+        assert c.get("/portfolio", auth=("admin", "s3cret")).status_code == 200
+    finally:
+        app.state.auth = None
+        app.state.auth_scope = "site"
+        c.__exit__(None, None, None)

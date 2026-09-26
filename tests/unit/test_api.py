@@ -1347,3 +1347,21 @@ def test_exports_carry_the_ex_dividend_columns(tmp_path) -> None:
     assert header[-3:] == ["ex_dividend", "dividend", "dividend_estimated"]
     assert lines[1].split(",")[-3:] == ["2026-08-05", "1.0", "True"]
     assert lines[2].split(",")[-3:] == ["", "", ""]
+
+
+def test_auth_covers_respects_the_scope() -> None:
+    from wheel_screener.api.app import _auth_covers
+
+    # site scope: everything but the liveness probe and the assets
+    assert _auth_covers("/", "site") and _auth_covers("/portfolio", "site")
+    assert not _auth_covers("/health", "site") and not _auth_covers("/static/app.css", "site")
+    # portfolio scope: the screener is open, the Portfolio and its OAuth entry points are not
+    assert not _auth_covers("/", "portfolio")
+    assert not _auth_covers("/search", "portfolio")
+    assert _auth_covers("/portfolio", "portfolio")
+    assert _auth_covers("/portfolio/positions", "portfolio")
+    assert _auth_covers("/portfolio/oauth/schwab/connect", "portfolio")
+    assert _auth_covers("/portfolio/oauth/schwab/callback", "portfolio")
+    # and the prefix boundary is a boundary, not a string prefix
+    assert not _auth_covers("/portfoliox", "portfolio")
+    assert not _auth_covers("/health", "portfolio")
