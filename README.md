@@ -407,9 +407,9 @@ in [docs/TODO.md](docs/TODO.md).
 ## Status
 
 **Deployed.** Live in production at **steadybull.net** — Dockerized (app + Caddy auto-TLS)
-on a DigitalOcean droplet, with **Alpaca** as the chain source (key/secret, no OAuth). An optional
-HTTP Basic-Auth gate (fail-closed) is built in but off for the public instance — one line in
-`docker-compose.yml` re-enables it. The pipeline: local fundamentals → Alpaca (or Schwab) chains →
+on a DigitalOcean droplet, with **Alpaca** as the chain source (key/secret, no OAuth). A fail-closed HTTP
+Basic-Auth gate is built in and **scoped**: `AUTH__SCOPE=portfolio` leaves the screener public while
+the Portfolio tab and the broker link require the password (`site` covers every path instead). The pipeline: local fundamentals → Alpaca (or Schwab) chains →
 ranked CSP shortlist, with the earnings blackout, conservative bid-based yields, an **absolute
 financial-strength rating** (0–100, shown beside a peer percentile), and a strength×yield ranking.
 A server-rendered **web UI** (FastAPI + HTMX) runs, cancels, and displays screens with live progress,

@@ -2,14 +2,16 @@
 
 **A living document.** Update it as decisions land and phases complete.
 
-**Target release: v3.0.0.** Source brief: [`MULTI_USER_BROKER_LINKING.md`](MULTI_USER_BROKER_LINKING.md)
+**Release line: v3.x.** Phase 0 (§1) ships as **v3.0.0** — the major bump is earned by the config
+change, and it marks where the multi-user line starts; the remaining phases land as 3.x. Source
+brief: [`MULTI_USER_BROKER_LINKING.md`](MULTI_USER_BROKER_LINKING.md)
 (vendored verbatim, 2026-09-25). That brief covers the infrastructure — login, the broker
 middleman, the tables, keeping users apart. This document covers what it does not: what in *this
 codebase* assumes one person, and in what order to take it apart. It also records what was checked
 against the vendors rather than assumed.
 
-**Status:** investigated; **Phase 0 built** (the password now covers /portfolio only — §1), not
-yet deployed. Supersedes the line in
+**Status:** investigated; **Phase 0 shipped as v3.0.0** (the password now covers /portfolio
+only — §1). Phases 1–4 not started. Supersedes the line in
 [`PORTFOLIO_PLAN.md`](PORTFOLIO_PLAN.md) §1b — "Multi-user is explicitly out of scope: one
 operator, one session at a time, no user table."
 
@@ -20,7 +22,7 @@ operator, one session at a time, no user table."
 | Login | passkeys + invite links, per the brief (§4) |
 | Broker linking | SnapTrade, keeping the direct Schwab adapter for the owner (§3) |
 | Database | SQLite, with one choke point and a two-user leak test in place of row-level security (§5) |
-| Release label | v3.0.0 |
+| Release label | v3.0.0 ships Phase 0; phases 1–4 are 3.x |
 
 ---
 
@@ -349,7 +351,7 @@ go out.
 
 ## 8. Build order
 
-**Phase 0 — close the slot. Done, not deployed.** `AUTH__SCOPE=portfolio` plus `AUTH__PASSWORD` in
+**Phase 0 — close the slot. Shipped, v3.0.0.** `AUTH__SCOPE=portfolio` plus `AUTH__PASSWORD` in
 the droplet's `.env`. See §1.
 
 **Phase 1 — identity.** `users`, `invites`, `credentials`, `user_id` on `sessions`; passkey

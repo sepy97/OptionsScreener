@@ -99,6 +99,31 @@ def _path_exempt(path: str) -> bool:
     return path == "/health" or path == "/static" or path.startswith("/static/")
 
 
+_PORTFOLIO_PREFIX = "/portfolio"
+
+
+def _under_portfolio(path: str) -> bool:
+    """Whether a path belongs to the Portfolio feature.
+
+    `startswith("/portfolio")` alone would also claim /portfoliox and /portfolio-export, so the
+    boundary is explicit: the prefix itself, or something beneath it.
+    """
+    return path == _PORTFOLIO_PREFIX or path.startswith(_PORTFOLIO_PREFIX + "/")
+
+
+def _auth_covers(path: str, scope: str) -> bool:
+    """Whether this path needs the password. See ``AuthSettings.scope``.
+
+    Under the ``portfolio`` scope the screener stays open and everything under /portfolio needs
+    credentials — the OAuth connect and callback routes included. Those two are exempt from the
+    *session* gate (a visitor cannot have a session before signing in), so without this they would
+    be the one way in: connecting is what claims the deployment's single broker slot.
+    """
+    if _path_exempt(path):
+        return False
+    return _under_portfolio(path) if scope == "portfolio" else True
+
+
 def _check_basic_auth(header: str | None, auth: _Auth) -> bool:
     """Constant-time check of an ``Authorization: Basic`` header against the credentials."""
     if not header or not header.startswith("Basic "):
@@ -122,8 +147,11 @@ async def lifespan(app: FastAPI):
     app.state.settings = settings
     app.state.service = service
     app.state.auth = _resolve_auth(settings)  # raises if AUTH__REQUIRED but no password (prod)
+    app.state.auth_scope = settings.auth.scope
     if app.state.auth is None:
         logger.warning("web auth DISABLED (no AUTH__PASSWORD) — set AUTH__REQUIRED=true in prod")
+    elif settings.auth.scope == "portfolio":
+        logger.info("web auth covers /portfolio only; the screener is public")
     app.state.rate_limiter = (
         SlidingWindowLimiter(settings.rate_limit.per_minute)
         if settings.rate_limit.enabled else None
@@ -149,33 +177,15 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Wheel Screener API", version=__version__, lifespan=lifespan)
 
 
-@app.middleware("http")
-async def _basic_auth_gate(request: Request, call_next):
-    """Reject requests without valid Basic-Auth credentials when the gate is enabled."""
-    auth = getattr(request.app.state, "auth", None)
-    if auth is not None and not _path_exempt(request.url.path):
-        if not _check_basic_auth(request.headers.get("Authorization"), auth):
-            return Response(
-                status_code=401,
-                headers={"WWW-Authenticate": 'Basic realm="wheel-screener"'},
-            )
-    return await call_next(request)
-
-
-
 # Everything the Portfolio owns lives under /portfolio, so ONE rule gates it. The rule denies by
 # default: only the entry points a visitor needs *before* having a session are exempt, and they are
 # matched exactly rather than by prefix. An exempt-by-prefix rule is how the callback — which
 # carries the authorization code — ends up unprotected by accident.
-_PORTFOLIO_PREFIX = "/portfolio"
 _PORTFOLIO_OPEN = re.compile(r"^/portfolio$|^/portfolio/oauth/[a-z0-9_-]+/(connect|callback)$")
 
 
 def _needs_portfolio_session(path: str) -> bool:
-    # `startswith("/portfolio")` alone would also claim /portfoliox and /portfolio-export, so the
-    # boundary is explicit: the prefix itself, or something beneath it.
-    under = path == _PORTFOLIO_PREFIX or path.startswith(_PORTFOLIO_PREFIX + "/")
-    return under and not _PORTFOLIO_OPEN.match(path)
+    return _under_portfolio(path) and not _PORTFOLIO_OPEN.match(path)
 
 
 def current_session(request: Request):
@@ -187,12 +197,30 @@ def current_session(request: Request):
     return store.get(request.cookies.get(settings.portfolio.cookie_name))
 
 
+# Registered BEFORE the password gate on purpose. Starlette runs the last-added middleware
+# outermost, so registering this first puts it INSIDE the password check: an unauthenticated
+# request is challenged rather than redirected, and never reaches the session store.
 @app.middleware("http")
 async def _portfolio_session_gate(request: Request, call_next):
     """No session, no account data."""
     if _needs_portfolio_session(request.url.path) and current_session(request) is None:
         return RedirectResponse("/portfolio", status_code=303)
     return await call_next(request)
+
+
+@app.middleware("http")
+async def _basic_auth_gate(request: Request, call_next):
+    """Reject requests without valid Basic-Auth credentials when the gate is enabled."""
+    auth = getattr(request.app.state, "auth", None)
+    scope = getattr(request.app.state, "auth_scope", "site")
+    if auth is not None and _auth_covers(request.url.path, scope):
+        if not _check_basic_auth(request.headers.get("Authorization"), auth):
+            return Response(
+                status_code=401,
+                headers={"WWW-Authenticate": 'Basic realm="wheel-screener"'},
+            )
+    return await call_next(request)
+
 
 
 _MAX_BODY_BYTES = 1_000_000  # 1 MB — the POST forms are tiny; reject anything absurd
