@@ -240,8 +240,10 @@ class SchwabAccountProvider:
                 else:
                     kind = PositionKind.LONG_OPTION
                 # A short put commits strike x 100 per contract, whatever the broker's margin
-                # requirement says. This is a CASH-secured view on purpose.
-                collateral = (osi.strike * 100 * short_qty) if short_qty else None
+                # requirement says. This is a CASH-secured view on purpose. A short call commits
+                # no cash — shares secure it — so it carries no collateral figure.
+                collateral = (osi.strike * 100 * short_qty
+                              if short_qty and osi.option_type is OptionType.PUT else None)
                 out.append(Position(
                     symbol=symbol,
                     underlying=str(instrument.get("underlyingSymbol") or osi.underlying),

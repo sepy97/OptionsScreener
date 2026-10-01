@@ -2075,3 +2075,68 @@ def test_joining_counts_as_signing_in() -> None:
         assert "<td>never</td>" not in c.get("/admin").text
     finally:
         c.__exit__(None, None, None)
+
+
+# --- covered calls, and phones -----------------------------------------------------------------
+
+def _calls_page(shares: int, contracts: int) -> str:
+    from datetime import date as _date
+
+    from wheel_screener.core.models import OptionType, Position, PositionKind
+
+    account = _account()
+    account.positions = [Position(
+        symbol="CENX  261016C00045000", underlying="CENX", kind=PositionKind.SHORT_CALL,
+        asset_type="OPTION", option_type=OptionType.CALL, quantity=contracts, strike=45.0,
+        expiration=_date(2026, 10, 16), dte=16, market_value=-127.5,
+    )]
+    if shares:
+        account.positions.append(Position(symbol="CENX", underlying="CENX",
+                                          kind=PositionKind.SHARES, asset_type="EQUITY",
+                                          quantity=shares, market_value=11_517.0))
+    c = _signed_in(_AccountService([account]))
+    try:
+        return c.get("/portfolio").text
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
+
+
+def test_a_covered_call_shows_the_shares_behind_it_not_a_dollar_figure() -> None:
+    """Seen on a real account: CENX x3 showed $13,500 of "collateral" — strike x 100 x contracts,
+    which reads as cash tied up. A covered call is secured by shares."""
+    body = _calls_page(shares=300, contracts=3)
+    assert "300 shares" in body and "$13,500.00" not in body
+
+
+def test_an_uncovered_call_is_flagged() -> None:
+    """A short call without the shares has no ceiling on what it can cost."""
+    assert "not covered" in _calls_page(shares=0, contracts=1)
+    assert "only 100 of 300 shares" in _calls_page(shares=100, contracts=3)
+
+
+def test_the_phone_column_rule_touches_only_the_screeners_table() -> None:
+    """It hid columns 7-9 and 12 of EVERY table on a phone: on the Portfolio, Collateral, Value
+    and Assignment; on the Admin tab, the column holding the buttons."""
+    import re
+
+    root = pathlib.Path(__file__).parents[2]
+    css = re.sub(r"/\*.*?\*/", "", (root / "src/wheel_screener/api/static/custom.css").read_text(),
+                 flags=re.S)
+    for selector in re.findall(r"[^{}]*nth-child\(\d+\)[^{}]*\{\s*display:\s*none", css):
+        for part in selector.split(","):
+            if "nth-child" in part:
+                assert ".results-table" in part, f"unscoped column rule: {part.strip()}"
+
+
+def test_card_tables_label_every_value_for_a_phone() -> None:
+    """On a phone a row becomes a card and each value shows its column's name; a value without
+    one would be a bare number with nothing to say what it is."""
+    import re
+
+    body = _calls_page(shares=300, contracts=3)
+    table = body[body.index('<table class="cards">'):body.index("</table>")]
+    body_rows = table.split("<tbody>")[1].split("</tbody>")[0]
+    for row in re.findall(r"<tr[^>]*>.*?</tr>", body_rows, re.S):
+        cells = re.findall(r"<td([^>]*)>", row)
+        assert cells and all("data-label" in c or "card-head" in c for c in cells), cells

@@ -61,8 +61,10 @@
         {% set open_options = a.positions | selectattr('is_option') | list %}
         {% if open_options %}
           <h4>Open options</h4>
+          {# `cards`: on a phone each row becomes a card, every value under its column's name
+             (data-label) — the table stays a table on anything wider. #}
           <figure>
-          <table>
+          <table class="cards">
             <thead><tr>
               <th>Symbol</th><th>Position</th><th>Strike</th><th>Expiry</th><th>DTE</th>
               <th>Contracts</th><th>Collateral</th><th>Value</th><th>Assignment</th>
@@ -87,18 +89,33 @@
                     hx-on::before-request="let d=this.nextElementSibling;
                       if(d&&d.classList.contains('detail')){d.remove();event.preventDefault();}"
                   {% endif %}>
-                  <td><b>{{ p.underlying }}</b></td>
-                  <td>{{ p.position_label }}</td>
-                  <td>{{ p.strike | money }}</td>
-                  <td>{{ p.expiration.strftime('%d %b') if p.expiration else '—' }}</td>
+                  <td class="card-head"><b>{{ p.underlying }}</b>
+                    <span class="card-only"> &middot; {{ p.position_label }}</span></td>
+                  <td data-label="Position" class="card-hide">{{ p.position_label }}</td>
+                  <td data-label="Strike">{{ p.strike | money }}</td>
+                  <td data-label="Expiry">{{ p.expiration.strftime('%d %b') if p.expiration else '—' }}</td>
                   {# An expired contract is still listed until the broker processes expirations
                      (a Friday expiry, over the weekend); say so rather than print "-1". #}
-                  <td>{% if p.expired %}<span class="badge"
+                  <td data-label="DTE">{% if p.expired %}<span class="badge"
                       title="{{ 'expired worthless — its cash is free again, and not counted as committed' if p.expired_worthless else 'expired — waiting for the broker to settle it' }}">expired</span>
                       {%- else %}{{ p.dte if p.dte is not none else '—' }}{% endif %}</td>
-                  <td>{{ p.quantity | int }}</td>
-                  <td>{{ p.collateral | money }}</td>
-                  <td>{{ p.market_value | money }}</td>
+                  <td data-label="Contracts">{{ p.quantity | int }}</td>
+                  {# A short put is secured by cash; a short call by SHARES, so its cell says
+                     which — and says loudly when they are not there, since an uncovered short
+                     call has no ceiling on what it can cost. #}
+                  <td data-label="Collateral">
+                    {%- if p.kind == 'short_call' %}
+                      {% set needed = (p.quantity * 100) | int %}
+                      {% set held = a.shares_held(p.underlying) | int %}
+                      {% if held >= needed %}<span class="detail-note"
+                          title="covered: {{ held }} {{ p.underlying }} shares held">{{ needed }} shares</span>
+                      {% elif held > 0 %}<span class="badge badge--neg"
+                          title="a short call needs 100 shares per contract to be covered">only {{ held }} of {{ needed }} shares</span>
+                      {% else %}<span class="badge badge--neg"
+                          title="no {{ p.underlying }} shares in this account: the call is uncovered">not covered</span>{% endif %}
+                    {%- else %}{{ p.collateral | money }}{% endif -%}
+                  </td>
+                  <td data-label="Value">{{ p.market_value | money }}</td>
                   {# EARLY assignment is the one question every short option shares: the holder
                      exercises before expiry when that gains more than the time value left.
                      Only shown when it is a live prospect, and the ex-dividend date beside it
@@ -106,7 +123,7 @@
                   {% set ea = p.early_assignment %}
                   {% set early_warn = ea is not none and ea.risk in ('likely', 'possible') %}
                   {% set dv = p|position_dividend_view %}
-                  <td class="assign-cell"><div class="assign-stack">
+                  <td class="assign-cell card-two" data-label="Assignment"><div class="assign-stack">
                     {% set is_call = p.kind == 'short_call' %}
                     {% if p.kind not in ('short_put', 'short_call') %}
                       {# a long option is exercised by choice, and shares are not assigned #}
@@ -135,7 +152,7 @@
                     {% if early_warn %}{{ am.badge(ea, true) }}{% endif %}
                     {% if dv %}{{ divm.pill(dv, p.kind == 'short_call') }}{% endif %}
                   </div></td>
-                  <td class="close-cell">{{ sw.cell(p) }}</td>
+                  <td class="close-cell" data-label="Close?">{{ sw.cell(p) }}</td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -143,14 +160,14 @@
               <tr>
                 {# Taken from the account, not summed over the rows, so this total and the
                    Capacity cell above can never disagree on screen. #}
-                <th colspan="6">Total collateral committed</th>
-                <th>{{ a.committed_collateral | money }}</th>
+                <th colspan="6" class="card-head">Total collateral committed</th>
+                <th data-label="Collateral">{{ a.committed_collateral | money }}</th>
                 {# A sum that quietly skips the rows it could not price is a WRONG number, not
                    an approximate one — it reads as the whole book. Withheld unless every open
                    contract has a mark. #}
                 {% set marks = open_options | map(attribute='market_value') | list %}
-                <th>{{ (marks | sum) | money if none not in marks else '—' }}</th>
-                <th></th><th></th>
+                <th data-label="Value">{{ (marks | sum) | money if none not in marks else '—' }}</th>
+                <th class="card-hide"></th><th class="card-hide"></th>
               </tr>
             </tfoot>
           </table>
@@ -163,7 +180,7 @@
         {% if holdings %}
           <h4>Holdings</h4>
           <figure>
-          <table>
+          <table class="cards">
             <thead><tr>
               <th>Holding</th><th>Type</th><th>Quantity</th><th>Avg cost</th>
               <th>Value</th><th>Covered calls</th>
@@ -171,17 +188,17 @@
             <tbody>
               {% for p in holdings | sort(attribute='market_value', reverse=true) %}
                 <tr>
-                  <td>
+                  <td class="card-head">
                     <b>{{ p.label }}</b>
                     {% if p.symbol_is_cusip %}
                       <br><span class="detail-note">{{ p.symbol }}</span>
                     {% endif %}
                   </td>
-                  <td><span class="badge">{{ p.asset_label }}</span></td>
-                  <td>{{ p.quantity | int }}</td>
-                  <td>{{ p.average_price | money }}</td>
-                  <td>{{ p.market_value | money }}</td>
-                  <td>
+                  <td data-label="Type"><span class="badge">{{ p.asset_label }}</span></td>
+                  <td data-label="Quantity">{{ p.quantity | int }}</td>
+                  <td data-label="Avg cost">{{ p.average_price | money }}</td>
+                  <td data-label="Value">{{ p.market_value | money }}</td>
+                  <td data-label="Covered calls">
                     {% set lots = p.covered_call_lots %}
                     {% if lots is none %}
                       {# not writable at all -- a different statement from "zero" #}

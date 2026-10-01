@@ -560,6 +560,11 @@ class BrokerageAccount(BaseModel):
     balances: AccountBalances = Field(default_factory=AccountBalances)
     positions: list[Position] = Field(default_factory=list)
 
+    def shares_held(self, symbol: str) -> float:
+        """Shares of ``symbol`` in this account — what a covered call on it is secured by."""
+        return sum(p.quantity for p in self.positions
+                   if p.kind is PositionKind.SHARES and p.underlying == symbol)
+
     @property
     def committed_collateral(self) -> float:
         """Cash already spoken for by open short puts.

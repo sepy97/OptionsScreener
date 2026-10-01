@@ -218,8 +218,12 @@ def test_short_calls_and_shares_are_told_apart() -> None:
     )).accounts()[0]
     kinds = {p.kind for p in acct.positions}
     assert kinds == {PositionKind.SHORT_CALL, PositionKind.SHARES}
-    # a short CALL commits shares, not cash — it must not eat the collateral pool
+    # a short CALL commits shares, not cash — it must not eat the collateral pool, nor carry a
+    # dollar figure that reads as cash tied up
     assert acct.committed_collateral == 0.0
+    call = next(p for p in acct.positions if p.kind is PositionKind.SHORT_CALL)
+    assert call.collateral is None
+    assert acct.shares_held("AAPL") == 300.0
     shares = next(p for p in acct.positions if p.kind is PositionKind.SHARES)
     assert shares.quantity == 300.0 and shares.average_price == 180.0
 

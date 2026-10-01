@@ -40,7 +40,9 @@
   {% endif %}
   {% if job.result %}
   <figure>
-    <table>
+    {# `results-table`: on a phone this stays a table — its headers do the sorting — but only the
+       columns that decide anything stay; the rest are one tap away in the symbol's detail card. #}
+    <table class="results-table">
       <thead>
         <tr>
           {{ sortlink("Symbol", "symbol") }}{{ sortlink("Strike", "strike") }}
