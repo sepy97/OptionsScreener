@@ -229,8 +229,10 @@ class SnapTradeAccountProvider:
             average_price=None if cost is None else abs(cost),
             strike=strike, expiration=expiration, dte=(expiration - today).days,
             # A short put commits strike x 100 per contract — a CASH-secured view on purpose,
-            # whatever the broker's margin requirement says. Same rule as the Schwab adapter.
-            collateral=strike * STANDARD_MULTIPLIER * quantity if short else None,
+            # whatever the broker's margin requirement says. A short call commits no cash: it is
+            # secured by shares, which the page reads from the holdings. Same rule as Schwab's.
+            collateral=(strike * STANDARD_MULTIPLIER * quantity
+                        if short and option_type is OptionType.PUT else None),
         )
 
     # --- when each option was opened -----------------------------------------------------

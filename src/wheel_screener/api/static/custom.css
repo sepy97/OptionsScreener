@@ -231,11 +231,14 @@ td .badge--div { margin-right: 0.35rem; padding: 0 0.4rem; font-size: 0.68rem; c
   .app-header__inner { flex-direction: column; align-items: flex-start; gap: 0.1rem; }
   table { font-size: 0.8125rem; }
   th, td { padding: 0.45rem 0.5rem; }
-  /* drop reference columns (Bid=7, Mid=8, OI=9, Peers=12) — keep the primary Strength (11) */
-  thead th:nth-child(7), tbody td:nth-child(7),
-  thead th:nth-child(8), tbody td:nth-child(8),
-  thead th:nth-child(9), tbody td:nth-child(9),
-  thead th:nth-child(12), tbody td:nth-child(12) { display: none; }
+  /* The screener's results ONLY: drop reference columns (Bid=7, Mid=8, OI=9, Peers=12), keep the
+     primary Strength (11). This rule once matched every table on the site, and on the Portfolio
+     those column numbers are Collateral, Value and Assignment — and on the Admin tab, the column
+     holding the buttons. */
+  .results-table thead th:nth-child(7), .results-table tbody td:nth-child(7),
+  .results-table thead th:nth-child(8), .results-table tbody td:nth-child(8),
+  .results-table thead th:nth-child(9), .results-table tbody td:nth-child(9),
+  .results-table thead th:nth-child(12), .results-table tbody td:nth-child(12) { display: none; }
   .segmented label { padding: 0.4rem 0.3rem; font-size: 0.8125rem; }
   .segmented label small { font-size: 0.6875rem; }
 }
@@ -539,4 +542,62 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 .admin-status > div { display: contents; }
 .admin-status dt { font-weight: 600; }
 .admin-status dd { margin: 0; }
+
+/* --- phones -------------------------------------------------------------------------------- */
+/* Only shown inside a card: a table already has a column for it. */
+.card-only { display: none; }
+
+@media (max-width: 640px) {
+  /* The tabs wrap instead of pushing every page wider than the screen. */
+  .app-nav__inner { flex-wrap: wrap; gap: 0; }
+  .nav-tab { white-space: nowrap; padding-left: 0.6rem; padding-right: 0.6rem; }
+
+  /* Give content the screen: the desktop gutters took a quarter of a phone's width. */
+  .app-header .container, .app-nav .container, main.container {
+    padding-left: 0.6rem; padding-right: 0.6rem; max-width: 100%;
+  }
+  main.container > article { padding: 1rem 0.75rem; }
+
+  /* The screener stays a table — its headers sort it — keeping Symbol, Strike, DTE, Yield and
+     Score, the ranking it is sorted by. Strength (its header alone is wider than a phone can
+     spare) and the rest are one tap away in the symbol's detail card. */
+  .results-table thead th:nth-child(3), .results-table tbody td:nth-child(3),
+  .results-table thead th:nth-child(5), .results-table tbody td:nth-child(5),
+  .results-table thead th:nth-child(6), .results-table tbody td:nth-child(6),
+  .results-table thead th:nth-child(11), .results-table tbody td:nth-child(11) { display: none; }
+
+  /* `table.cards`: each row becomes a card. The first cell is its heading; every other value
+     sits under its column's name, three to a line. */
+  table.cards thead { display: none; }
+  table.cards, table.cards tbody, table.cards tfoot { display: block; width: 100%; }
+  table.cards tr:not(.detail) {
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.4rem 0.75rem;
+    padding: 0.7rem 0.25rem; border-bottom: 1px solid var(--border);
+  }
+  table.cards td, table.cards th {
+    display: block; padding: 0; border: 0; white-space: normal; text-align: left !important;
+    background: none;
+  }
+  table.cards [data-label]::before {
+    content: attr(data-label); display: block; margin-bottom: 0.1rem;
+    font-size: 0.6875rem; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase;
+    color: var(--pico-muted-color);
+  }
+  table.cards .card-head { grid-column: 1 / -1; font-size: 0.95rem; }
+  table.cards .card-wide { grid-column: 1 / -1; }
+  table.cards .card-two { grid-column: span 2; }
+  table.cards .assign-stack { justify-content: flex-start; }
+
+  .results-table th, .results-table td { padding-left: 0.35rem; padding-right: 0.35rem; }
+
+  /* Status: each label above its value, and a long command allowed to break. */
+  .admin-status { grid-template-columns: 1fr; gap: 0; }
+  .admin-status dt { margin-top: 0.6rem; }
+  .admin-status dd, .admin-status code { overflow-wrap: anywhere; }
+  table.cards .card-hide { display: none; }
+  table.cards .card-only { display: inline; }
+  table.cards tr.detail { display: block; }
+  table.cards tr.detail > td { display: block; padding: 0.5rem 0; }
+  table.cards .admin-actions button { margin: 0.25rem 0.25rem 0 0; }
+}
 

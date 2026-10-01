@@ -98,6 +98,7 @@ def test_calls_and_longs_are_told_apart() -> None:
             _option("AAPL  261016P00200000", "PUT", "200", "2026-10-16", "3", underlying="AAPL")]
     short_call, long_put = _one(rows).positions
     assert short_call.kind is PositionKind.SHORT_CALL
+    assert short_call.collateral is None, "a call is secured by shares, not by cash"
     assert long_put.kind is PositionKind.LONG_OPTION and long_put.collateral is None
 
 

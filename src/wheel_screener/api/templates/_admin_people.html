@@ -26,20 +26,20 @@
 {% endif %}
 
 <figure>
-<table class="admin-table">
+<table class="admin-table cards">
   <thead><tr><th>Name</th><th>Role</th><th>Joined</th><th>Last signed in</th><th>Passkeys</th>
     <th>Brokerage</th><th></th></tr></thead>
   <tbody>
     {% for row in people %}
       {% set person = row.user %}
       <tr>
-        <td>{{ person.name }}{% if person.id == me.id %} <small>(you)</small>{% endif %}</td>
-        <td>{{ "admin" if person.is_admin else "member" }}</td>
-        <td>{{ row.joined.strftime('%d %b %Y') }}</td>
-        <td>{{ row.last_seen | ago if row.last_seen else 'never' }}</td>
-        <td>{{ row.passkeys }}</td>
-        <td>{{ "linked" if row.linked else "—" }}</td>
-        <td class="admin-actions">
+        <td class="card-head">{{ person.name }}{% if person.id == me.id %} <small>(you)</small>{% endif %}</td>
+        <td data-label="Role">{{ "admin" if person.is_admin else "member" }}</td>
+        <td data-label="Joined">{{ row.joined.strftime('%d %b %Y') }}</td>
+        <td data-label="Last signed in">{{ row.last_seen | ago if row.last_seen else 'never' }}</td>
+        <td data-label="Passkeys">{{ row.passkeys }}</td>
+        <td data-label="Brokerage">{{ "linked" if row.linked else "—" }}</td>
+        <td class="admin-actions card-wide">
           <button type="button" class="secondary outline"
                   hx-post="/admin/invites" hx-vals='{"for_user": "{{ person.id }}"}'
                   hx-target="#people" hx-swap="innerHTML"
@@ -69,16 +69,16 @@
 <h4>Invites waiting to be used</h4>
 {% if pending %}
   <figure>
-  <table class="invite-table">
+  <table class="invite-table cards">
     <thead><tr><th>Name</th><th>What it does</th><th>Expires</th><th></th></tr></thead>
     <tbody>
       {% for i in pending %}
         <tr>
-          <td>{{ i.name }}</td>
-          <td>{% if i.for_user %}adds a passkey to {{ names.get(i.for_user, "an account") }}
+          <td class="card-head">{{ i.name }}</td>
+          <td data-label="What it does">{% if i.for_user %}adds a passkey to {{ names.get(i.for_user, "an account") }}
               {% elif i.is_admin %}creates an admin{% else %}creates an account{% endif %}</td>
-          <td>{{ i.expires_at.strftime('%d %b %H:%M') }} UTC</td>
-          <td>
+          <td data-label="Expires">{{ i.expires_at.strftime('%d %b %H:%M') }} UTC</td>
+          <td class="card-wide">
             <button type="button" class="secondary outline"
                     hx-post="/admin/invites/cancel" hx-vals='{"ref": "{{ i.ref }}"}'
                     hx-target="#people" hx-swap="innerHTML"
