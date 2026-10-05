@@ -444,6 +444,7 @@ def refresh_screen(
 ) -> None:
     """Run a screen and store it where the web dashboard reads 'latest results' — so a cron'd
     run keeps the UI instant (precompute), instead of the user waiting on a live pull."""
+    from wheel_screener.api.blocklist import BlocklistStore
     from wheel_screener.api.jobs import JobRunner, JobStore
 
     settings = Settings()
@@ -453,7 +454,8 @@ def refresh_screen(
         min_score=min_score,
         min_annualized_yield=(min_yield if min_yield > 0 else None),
     )
-    runner = JobRunner(build_service(settings), JobStore(settings.jobs_db_path))
+    runner = JobRunner(build_service(settings), JobStore(settings.jobs_db_path),
+                       BlocklistStore(settings.jobs_db_path))
     job = runner.get(runner.run_blocking(criteria))
     n = len(job.get("result") or [])
     typer.echo(f"Stored screen ({job['status']}, {n} candidates) — the dashboard now shows it.")

@@ -76,6 +76,24 @@ form label small { font-weight: 400; color: var(--pico-muted-color); }
   border-radius: var(--radius-sm); padding: 0 0.85rem;
 }
 .advanced summary { cursor: pointer; font-weight: 600; font-size: 0.875rem; padding: 0.5rem 0; color: var(--wheel-accent); }
+/* the shared blocklist inside Advanced filters: one chip per ticker, each with its own remove */
+.blocklist { margin: 0.75rem 0 1rem; }
+.blocklist fieldset[role="group"] { margin-bottom: 0.4rem; max-width: 28rem; }
+.blocklist-error { color: var(--neg); display: block; margin-bottom: 0.4rem; }
+.blocklist-chips { display: flex; flex-wrap: wrap; gap: 0.35rem; padding: 0; margin: 0; }
+.blocklist-chips li {
+  list-style: none; margin: 0; display: inline-flex; align-items: center; gap: 0.15rem;
+  padding: 0.1rem 0.15rem 0.1rem 0.55rem; border: 1px solid var(--border);
+  border-radius: 999px; font-size: 0.8rem; font-family: var(--pico-font-family-monospace);
+}
+.blocklist-chips .chip-remove {
+  all: unset; cursor: pointer; padding: 0 0.4rem; line-height: 1.4; border-radius: 999px;
+  color: var(--pico-muted-color);
+}
+.blocklist-chips .chip-remove:hover, .blocklist-chips .chip-remove:focus-visible {
+  color: var(--neg); background: var(--neg-soft);
+}
+.results-blocklist { color: var(--pico-muted-color); }
 .run-btn {
   width: 100%; margin-top: 1rem; font-weight: 600;
   background: var(--wheel-accent); border-color: var(--wheel-accent);

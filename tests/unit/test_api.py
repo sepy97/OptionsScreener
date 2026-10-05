@@ -1499,3 +1499,79 @@ def test_a_cancel_that_collected_nothing_says_so_not_criteria_advice(tmp_path) -
     body = _client(runner).get(f"/runs/{_job(runner, 'cancelled', [])}/progress").text
     assert "Cancelled before any candidates were collected" in body
     assert "Try a higher max-DTE" not in body and "0 candidates" not in body
+
+
+# --- the blocklist, in Advanced filters ------------------------------------------------------
+
+def _blocklist_runner(service: _FakeService, tmp_path) -> JobRunner:
+    from wheel_screener.api.blocklist import BlocklistStore
+
+    path = str(tmp_path / "jobs.sqlite")
+    return JobRunner(service, JobStore(path), BlocklistStore(path))
+
+
+def test_the_form_shows_the_blocklist_and_leaves_its_tickers_out_by_default(tmp_path) -> None:
+    runner = _blocklist_runner(_FakeService(), tmp_path)
+    runner.blocklist.add("GME")
+    page = _client(runner).get("/").text
+    assert 'id="blocklist"' in page and ">GME<" in page
+    assert re.search(r'name="use_blocklist" value="true" id="bl-on"\s+checked', page)
+
+
+def test_tickers_are_added_and_removed_from_the_page(tmp_path) -> None:
+    runner = _blocklist_runner(_FakeService(), tmp_path)
+    client = _client(runner)
+    r = client.post("/blocklist", data={"blocklist_add": "gme, amc"})
+    assert r.status_code == 200 and ">AMC<" in r.text and ">GME<" in r.text
+    # the remove button sits inside the run form, so send what the form would add around it
+    r = client.post("/blocklist/remove", data={"blocklist_symbol": "GME", "min_dte": "14"})
+    assert r.status_code == 200 and ">GME<" not in r.text
+    assert runner.blocklist.symbols() == ["AMC"]
+
+
+def test_a_refused_edit_is_shown_with_what_was_typed(tmp_path) -> None:
+    runner = _blocklist_runner(_FakeService(), tmp_path)
+    r = _client(runner).post("/blocklist", data={"blocklist_add": "GME, <b>x</b>"})
+    assert r.status_code == 200, "htmx swaps only a 2xx; an error code would show nothing"
+    assert "not a ticker" in r.text and "<b>x</b>" not in r.text  # escaped, not rendered
+    assert runner.blocklist.symbols() == [], "nothing is added when any part is refused"
+
+
+def test_a_run_uses_the_list_unless_switched_off(tmp_path) -> None:
+    service = _FakeService()
+    runner = _blocklist_runner(service, tmp_path)
+    runner.blocklist.add("GME")
+    client = _client(runner)
+    job_id = _job_id_from(client.post("/runs", data={"blocklist_add": "half-typed"}).text)
+    runner.wait(job_id)
+    assert service.seen_criteria.blocked_symbols == frozenset({"GME"})
+    job_id = _job_id_from(client.post("/runs", data={"use_blocklist": "false"}).text)
+    runner.wait(job_id)
+    assert service.seen_criteria.blocked_symbols == frozenset()
+
+
+def test_the_json_api_uses_the_list_by_default(tmp_path) -> None:
+    service = _FakeService()
+    runner = _blocklist_runner(service, tmp_path)
+    runner.blocklist.add("GME")
+    client = _client(runner)
+    runner.wait(client.post("/screen", json={}).json()["job_id"])
+    assert service.seen_criteria.blocked_symbols == frozenset({"GME"})
+    runner.wait(client.post("/screen", json={"use_blocklist": False}).json()["job_id"])
+    assert service.seen_criteria.blocked_symbols == frozenset()
+
+
+def test_the_results_say_what_the_blocklist_left_out(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    _done_job(runner, _candidate("AAA"))
+    runner.store.set_progress("j", ["blocklist: 2 ticker(s) on the list",
+                                    "blocklist: left out 1 name(s) — GME"])
+    assert "blocklist left out GME" in _client(runner).get("/runs/j/progress").text
+    runner.store.set_progress("j", ["blocklist: off for this screen"])
+    assert "blocklist off for this screen" in _client(runner).get("/runs/j/progress").text
+
+
+def test_editing_the_list_is_rate_limited() -> None:
+    from wheel_screener.api.ratelimit import is_expensive
+
+    assert is_expensive("POST", "/blocklist") and is_expensive("POST", "/blocklist/remove")

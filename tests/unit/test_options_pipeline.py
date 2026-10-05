@@ -962,3 +962,37 @@ def test_a_cancel_after_the_chain_pull_skips_the_dividend_lookup(monkeypatch):
                                  date(2026, 6, 22), cancel=stop)
     assert [r.symbol for r in results] == ["AAA"], "what was collected is kept"
     assert dividends.asked == []
+
+
+# --- the blocklist: tickers the screen never looks at -------------------------------------
+
+class _CountingChains(_FakeChains):
+    def __init__(self, chain):
+        super().__init__(chain)
+        self.pulled: list[str] = []
+
+    def get_chain(self, symbol, filt):
+        self.pulled.append(symbol)
+        return super().get_chain(symbol, filt)
+
+
+class _OneEtf:
+    def etf_universe(self, criteria):
+        return [Underlying(symbol="SPY", is_etf=True)]
+
+
+def test_a_blocked_name_is_left_out_before_anything_is_fetched_for_it():
+    chain = _chain([_put(90, -0.20, 40, 1.9)])
+    chains = _CountingChains(chain)
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains, etfs=_OneEtf())
+    crit = ScreenCriteria(top_n=10, min_dte=30, max_dte=45,
+                          blocked_symbols=frozenset({"AAA", "SPY"}))
+    assert service.run_screen(crit, date(2026, 6, 22)) == []
+    assert chains.pulled == [], "no chain is pulled for a blocked name, stock or ETF"
+
+
+def test_an_empty_blocklist_changes_nothing():
+    chains = _CountingChains(_chain([_put(90, -0.20, 40, 1.9)]))
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains, etfs=_OneEtf())
+    service.run_screen(ScreenCriteria(top_n=10, min_dte=30, max_dte=45), date(2026, 6, 22))
+    assert sorted(chains.pulled) == ["AAA", "SPY"]

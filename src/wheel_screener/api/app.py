@@ -31,6 +31,7 @@ from pydantic import BaseModel, ValidationError
 
 from wheel_screener import __version__
 from wheel_screener.adapters.snaptrade.client import SnapTradeClient
+from wheel_screener.api.blocklist import BlocklistError, BlocklistStore
 from wheel_screener.api.deps import (
     current_session,
     get_job_runner,
@@ -169,7 +170,8 @@ async def lifespan(app: FastAPI):
         SlidingWindowLimiter(settings.rate_limit.per_minute)
         if settings.rate_limit.enabled else None
     )
-    app.state.job_runner = JobRunner(service, JobStore(settings.jobs_db_path))
+    app.state.job_runner = JobRunner(
+        service, JobStore(settings.jobs_db_path), BlocklistStore(settings.jobs_db_path))
     # credentialed connections, built once: a probe owns an HTTP client
     app.state.probes = build_probes(settings, service)
     app.state.probe_cache = {}
@@ -520,6 +522,34 @@ def _funnel(job: object) -> list[dict]:
 templates.env.filters["funnel"] = _funnel
 
 
+_BLOCKLIST_LINE = re.compile(r"^blocklist: (\d+) ticker")
+_BLOCKLIST_LEFT_OUT = re.compile(r"^blocklist: left out (\d+) name\(s\) — (.*)$")
+
+
+def _blocklist_note(job: object) -> str | None:
+    """What the blocklist did to a finished screen, from its captured log lines; None for a screen
+    from before the blocklist existed, or one whose list was empty."""
+    if not isinstance(job, dict):
+        return None
+    lines = [str(line) for line in job.get("progress") or []]
+    if "blocklist: off for this screen" in lines:
+        return "blocklist off for this screen"
+    if not any(_BLOCKLIST_LINE.match(line) for line in lines):
+        return None
+    left_out: list[str] = []
+    for line in lines:
+        m = _BLOCKLIST_LEFT_OUT.match(line)
+        if m:
+            left_out += [s.strip() for s in m.group(2).split(",") if s.strip()]
+    if not left_out:
+        return None
+    shown = ", ".join(left_out[:8]) + (f" +{len(left_out) - 8} more" if len(left_out) > 8 else "")
+    return f"blocklist left out {shown}"
+
+
+templates.env.filters["blocklist_note"] = _blocklist_note
+
+
 def _last_field_size(job: object) -> int | None:
     """How many names cleared fundamentals on the last run.
 
@@ -716,7 +746,7 @@ def health(
 def start_screen(req: ScreenRequest, runner: JobRunner = Depends(get_job_runner)) -> dict:
     """Start a screen as a background job; returns a job id to poll. 409 if one is running."""
     try:
-        job_id = runner.start(req.to_criteria())
+        job_id = runner.start(req.to_criteria(), use_blocklist=req.use_blocklist)
     except JobBusyError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     return {"job_id": job_id, "status": "running", "poll": f"/screen/{job_id}"}
@@ -802,6 +832,7 @@ def screener_page(request: Request, runner: JobRunner = Depends(get_job_runner))
             "mine_cancelling": runner.is_cancelling(mine["job_id"]) if mine else False,
             "mine_summary": _results_summary(mine.get("result")) if mine else None,
             "defaults": ScreenRequest(), "latest": latest, "latest_age": age,
+            "blocklist": runner.blocklist.symbols() if runner.blocklist else [],
             "last_field_size": _last_field_size(latest),
             "expiries": expiry_ladder(date.today(), DTE_HORIZON_DAYS),
             "next_monthly": next_monthly(date.today(), DTE_HORIZON_DAYS),
@@ -1620,6 +1651,7 @@ def start_run(
     top_n: str = Form(""),  # blank = MAX (no cap)
     fundamental_weight: float = Form(0.5),
     include_etfs: bool = Form(True),
+    use_blocklist: bool = Form(True),
     min_dollar_volume: str = Form("25,000,000"),   # accountant-formatted; commas stripped below
     min_yield: str = Form("0.10"),
     min_dte: int = Form(14),
@@ -1639,7 +1671,7 @@ def start_run(
     try:
         req = ScreenRequest(
             top_n=_opt_int(top_n), fundamental_weight=fundamental_weight,
-            include_etfs=include_etfs,
+            include_etfs=include_etfs, use_blocklist=use_blocklist,
             min_dollar_volume=float((min_dollar_volume or "").replace(",", "").strip() or 0),
             min_yield=_opt_float(min_yield),
             min_dte=min_dte, max_dte=max_dte,
@@ -1657,7 +1689,7 @@ def start_run(
             request, "_error.html", {"message": f"invalid input: {e}"}
         )
     try:
-        job_id = runner.start(req.to_criteria())
+        job_id = runner.start(req.to_criteria(), use_blocklist=req.use_blocklist)
     except JobBusyError as e:
         # One screen at a time, site-wide. Was a 409 that htmx dropped, so a second Run — the
         # natural thing to press after a Cancel — did nothing at all.
@@ -1678,6 +1710,40 @@ def start_run(
         samesite="lax", secure=_cookie_secure(request),
     )
     return response
+
+
+def _blocklist_fragment(request: Request, runner: JobRunner, **context):
+    symbols = runner.blocklist.symbols() if runner.blocklist else []
+    return templates.TemplateResponse(
+        request, "_blocklist.html", {"blocklist": symbols, **context})
+
+
+@app.post("/blocklist")
+def blocklist_add(
+    request: Request, blocklist_add: str = Form(""), runner: JobRunner = Depends(get_job_runner),
+):
+    """Add tickers to the shared blocklist. Answers 200 with the list either way — an htmx swap
+    shows nothing for an error code — and a refused edit carries its reason."""
+    if runner.blocklist is None:
+        return _blocklist_fragment(request, runner, error="the blocklist is unavailable")
+    try:
+        added = runner.blocklist.add(blocklist_add)
+    except BlocklistError as e:
+        return _blocklist_fragment(request, runner, error=str(e), typed=blocklist_add)
+    if added:
+        logger.info("blocklist: added %s", ", ".join(added))
+    return _blocklist_fragment(request, runner)
+
+
+@app.post("/blocklist/remove")
+def blocklist_remove(
+    request: Request, blocklist_symbol: str = Form(""),
+    runner: JobRunner = Depends(get_job_runner),
+):
+    if runner.blocklist is not None and blocklist_symbol:
+        runner.blocklist.remove(blocklist_symbol)
+        logger.info("blocklist: removed %s", blocklist_symbol.upper()[:12])
+    return _blocklist_fragment(request, runner)
 
 
 @app.get("/runs/{job_id}/progress")

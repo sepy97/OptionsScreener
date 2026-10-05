@@ -17,8 +17,20 @@ def build_universe(provider: FundamentalsProvider, criteria: ScreenCriteria) -> 
     is unavailable) caps the deep fetch by market cap.
     """
     universe = provider.screen_universe(criteria)
+    universe = drop_blocked(universe, criteria)
     logger.info(
         "universe: %d names ($%g-%g, %s)",
         len(universe), criteria.min_price, criteria.max_price, "/".join(criteria.exchanges),
     )
     return universe
+
+
+def drop_blocked(names: list[Underlying], criteria: ScreenCriteria) -> list[Underlying]:
+    """Leave out every name on the blocklist the screen started with."""
+    if not criteria.blocked_symbols:
+        return names
+    kept = [u for u in names if u.symbol.upper() not in criteria.blocked_symbols]
+    if len(kept) < len(names):
+        logger.info("blocklist: left out %d name(s) — %s", len(names) - len(kept),
+                    ", ".join(sorted({u.symbol for u in names} - {u.symbol for u in kept})))
+    return kept

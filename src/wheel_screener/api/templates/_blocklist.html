@@ -1,0 +1,28 @@
+{# The shared blocklist, inside the run form's Advanced filters. Its buttons post only their own
+   field (hx-params), not the whole run form around them, and they are type="button" so a click
+   never starts a screen. Enter in the box adds rather than submitting the form. #}
+<div id="blocklist" class="blocklist">
+  <fieldset role="group">
+    <input type="text" id="blocklist_add" name="blocklist_add" value="{{ typed|default('') }}"
+           placeholder="add tickers — e.g. GME, AMC" autocomplete="off" autocapitalize="characters"
+           aria-label="Tickers to add to the blocklist"
+           {% if error %}aria-invalid="true"{% endif %}
+           onkeydown="if (event.key === 'Enter') event.preventDefault()"
+           hx-post="/blocklist" hx-trigger="keydown[key=='Enter']" hx-params="blocklist_add"
+           hx-target="#blocklist" hx-swap="outerHTML">
+    <button type="button" class="secondary" hx-post="/blocklist" hx-include="#blocklist_add"
+            hx-params="blocklist_add" hx-target="#blocklist" hx-swap="outerHTML">Add</button>
+  </fieldset>
+  {% if error %}<small class="blocklist-error" role="alert">{{ error }}</small>{% endif %}
+  {% if blocklist %}
+  <ul class="blocklist-chips" aria-label="Tickers on the blocklist">
+    {% for s in blocklist %}
+    <li>{{ s }}<button type="button" class="chip-remove" aria-label="Remove {{ s }}"
+        hx-post="/blocklist/remove" hx-vals='{{ {"blocklist_symbol": s}|tojson }}'
+        hx-params="blocklist_symbol" hx-target="#blocklist" hx-swap="outerHTML">&times;</button></li>
+    {% endfor %}
+  </ul>
+  {% else %}
+  <small>The list is empty.</small>
+  {% endif %}
+</div>
