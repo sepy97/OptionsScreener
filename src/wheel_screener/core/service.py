@@ -268,10 +268,27 @@ class ScreenerService:
 
         Bounded by ``criteria.max_runtime_seconds`` and an optional ``cancel`` event (for a
         web layer to abort on client disconnect); both yield partial, ranked results.
+
+        ``cancel`` is checked between EVERY stage, not only inside the chain pull. It used to be
+        looked at there alone, so a cancel pressed during fundamentals waited out the
+        fundamentals, the earnings calendar and the ETF list first, while the page said it was
+        finishing a chain pull that had not started.
         """
+        def cancelled(where: str) -> bool:
+            if cancel is not None and cancel.is_set():
+                logger.info("screen cancelled %s", where)
+                return True
+            return False
+
         guard = self._build_guard(criteria, today)
+        if cancelled("before fundamentals; nothing collected"):
+            return []
         survivors = self.screen_fundamentals(criteria, today, guard)
+        if cancelled("after fundamentals; nothing collected"):
+            return []
         survivors = survivors + self._etf_survivors(criteria)
+        if cancelled("before the chain pull; nothing collected"):
+            return []
         filt = self._chain_filter(criteria, OptionType.PUT)  # the screen is CSP-only
         deadline = (
             time.monotonic() + criteria.max_runtime_seconds
@@ -339,7 +356,8 @@ class ScreenerService:
         )
         # After the last filter (the score floor lives inside rank), so only the names actually
         # shown cost a lookup. A flag, not a filter: it removes nothing and reorders nothing.
-        if ranked:
+        # Skipped on a cancel — the person asked to stop, and the results are marked partial.
+        if ranked and not cancelled("after the chain pull; skipping the ex-dividend lookup"):
             histories = self._dividend_histories(sorted({c.symbol for c in ranked}))
             self._stamp_dividends(ranked, today, histories)
         return ranked

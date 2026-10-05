@@ -750,6 +750,34 @@ def cancel_screen(
 # --- HTML (HTMX) UI -------------------------------------------------------------------------
 
 
+# The visitor's own latest screen, by job id — so leaving the tab and coming back finds it again.
+# The browser already has the id (its progress poll uses it); the cookie only remembers it across
+# page loads. Works signed out, since the screener is public.
+_MY_SCREEN = "ws_screen"
+_MY_SCREEN_SECONDS = 24 * 3600
+_JOB_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
+def _cookie_secure(request: Request) -> bool:
+    """Secure unless the deployment says otherwise (local http development does)."""
+    settings = getattr(request.app.state, "settings", None)
+    return settings.portfolio.cookie_secure if settings is not None else True
+
+
+def _my_screen(request: Request, runner: JobRunner) -> dict | None:
+    """This visitor's latest screen, if it is still worth showing: running, or finished with
+    candidates. A cancel that collected nothing, or a failure, is not something to come back to."""
+    job_id = request.cookies.get(_MY_SCREEN) or ""
+    if not _JOB_ID.match(job_id):
+        return None
+    job = runner.get(job_id)
+    if job is None:
+        return None
+    if job["status"] == "running" or (job["status"] in ("done", "cancelled") and job.get("result")):
+        return job
+    return None
+
+
 @app.get("/")
 def screener_page(request: Request, runner: JobRunner = Depends(get_job_runner)):
     """The Screener tab (home): the run form + the latest precomputed results."""
@@ -760,10 +788,19 @@ def screener_page(request: Request, runner: JobRunner = Depends(get_job_runner))
     latest = (runner.store.latest_done(source=SOURCE_REFRESH)
               or runner.store.latest_done())
     age, stale = _humanize_age(latest["created_at"]) if latest else ("", False)
+    # ...and above it, the visitor's OWN latest screen, so starting one and coming back from
+    # another tab finds it — still running (reattached, polling) or finished.
+    mine = _my_screen(request, runner)
+    if mine is not None and latest is not None and mine["job_id"] == latest["job_id"]:
+        mine = None  # already the one shown below
     return templates.TemplateResponse(
         request, "screener.html",
         {
             "active_tab": "screener",
+            "mine": mine,
+            "mine_age": _humanize_age(mine["created_at"])[0] if mine else "",
+            "mine_cancelling": runner.is_cancelling(mine["job_id"]) if mine else False,
+            "mine_summary": _results_summary(mine.get("result")) if mine else None,
             "defaults": ScreenRequest(), "latest": latest, "latest_age": age,
             "last_field_size": _last_field_size(latest),
             "expiries": expiry_ladder(date.today(), DTE_HORIZON_DAYS),
@@ -1614,17 +1651,33 @@ def start_run(
             min_score=_opt_float(min_score),
         )
     except (ValidationError, ValueError) as e:
+        # 200, not 422: this answers an htmx form, and htmx shows only successful responses — a
+        # 4xx here left the page silently unchanged. The JSON API (/screen) keeps its codes.
         return templates.TemplateResponse(
-            request, "_error.html", {"message": f"invalid input: {e}"}, status_code=422
+            request, "_error.html", {"message": f"invalid input: {e}"}
         )
     try:
         job_id = runner.start(req.to_criteria())
     except JobBusyError as e:
-        return templates.TemplateResponse(
-            request, "_error.html", {"message": str(e)}, status_code=409
-        )
+        # One screen at a time, site-wide. Was a 409 that htmx dropped, so a second Run — the
+        # natural thing to press after a Cancel — did nothing at all.
+        mine = _my_screen(request, runner)
+        if mine is not None and mine["job_id"] == e.active_id:
+            # their own screen, still running or still stopping after a cancel: show it
+            return templates.TemplateResponse(
+                request, "_progress.html",
+                {"job": mine, "cancelling": runner.is_cancelling(e.active_id)},
+            )
+        return templates.TemplateResponse(request, "_error.html", {"message": (
+            "Another screen is running right now — one runs at a time, and it usually takes a "
+            "few minutes. Try again shortly.")})
     job = {"job_id": job_id, "status": "running", "progress": []}
-    return templates.TemplateResponse(request, "_progress.html", {"job": job})
+    response = templates.TemplateResponse(request, "_progress.html", {"job": job})
+    response.set_cookie(
+        _MY_SCREEN, job_id, max_age=_MY_SCREEN_SECONDS, path="/", httponly=True,
+        samesite="lax", secure=_cookie_secure(request),
+    )
+    return response
 
 
 @app.get("/runs/{job_id}/progress")

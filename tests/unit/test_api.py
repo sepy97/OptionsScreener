@@ -502,23 +502,34 @@ def test_run_failure_renders_typed_error(tmp_path) -> None:
     assert "AuthExpiredError" in client.get(f"/runs/{job_id}/progress").text
 
 
-def test_run_busy_renders_409(tmp_path) -> None:
+def test_a_second_run_while_one_is_running_is_answered_not_dropped(tmp_path) -> None:
+    """Was a 409, which htmx does not show — so a second Run, the natural thing to press after a
+    Cancel, did nothing at all (#182). Now: your own screen shows its progress; someone else's
+    gets a sentence."""
+    from fastapi.testclient import TestClient
+
     gate = threading.Event()
     runner = _runner(_FakeService(gate=gate), tmp_path)
     client = _client(runner)
     first = client.post("/runs", data={"top_n": 10})
-    assert first.status_code == 200
-    busy = client.post("/runs", data={"top_n": 10})
-    assert busy.status_code == 409 and "already running" in busy.text
-    gate.set()
-    runner.wait(_job_id_from(first.text))
+    job_id = _job_id_from(first.text)
+    assert first.status_code == 200 and first.cookies.get("ws_screen") == job_id
+    try:
+        stranger = TestClient(app).post("/runs", data={"top_n": 10})
+        assert stranger.status_code == 200 and "Another screen is running" in stranger.text
+        mine = TestClient(app, cookies={"ws_screen": job_id}).post("/runs", data={"top_n": 10})
+        assert mine.status_code == 200 and job_id in mine.text and "Screening" in mine.text
+    finally:
+        gate.set()
+        runner.wait(job_id)
 
 
-def test_invalid_form_renders_422(tmp_path) -> None:
+def test_invalid_form_input_is_shown_not_dropped(tmp_path) -> None:
+    """A 422 here was dropped by htmx just like the busy 409: the page stayed silently as it was."""
     r = _client(_runner(_FakeService(), tmp_path)).post(
         "/runs", data={"min_dte": 60, "max_dte": 30}
     )
-    assert r.status_code == 422 and "invalid input" in r.text
+    assert r.status_code == 200 and "invalid input" in r.text
 
 
 def test_run_form_accepts_comma_formatted_dollar_volume(tmp_path) -> None:
@@ -1428,3 +1439,63 @@ def test_runs_record_who_started_them(tmp_path) -> None:
     refresh = runner.run_blocking(ScreenCriteria())
     assert runner.get(web)["source"] == SOURCE_WEB
     assert runner.get(refresh)["source"] == SOURCE_REFRESH
+
+
+# --- coming back to your own screen (#183), and a cancel that collected nothing (#182) ----------
+
+def _job(runner: JobRunner, status: str, symbols: list[str], minutes_ago: int = 2,
+         source: str = "web") -> str:
+    import uuid
+    from datetime import timedelta
+
+    job_id = uuid.uuid4().hex
+    started = datetime.now(tz=UTC) - timedelta(minutes=minutes_ago)
+    runner.store.create(job_id, started.isoformat(), source)
+    if status != "running":
+        runner.store.finish(job_id, status,
+                            result=[_candidate(s).model_dump(mode="json") for s in symbols])
+    return job_id
+
+
+def _dashboard(runner: JobRunner, mine: str | None) -> str:
+    from fastapi.testclient import TestClient
+
+    _client(runner)  # installs the runner and service overrides
+    cookies = {"ws_screen": mine} if mine else {}
+    return TestClient(app, cookies=cookies).get("/").text
+
+
+def test_coming_back_to_a_running_screen_reattaches_its_progress(tmp_path) -> None:
+    """Start a screen, go to another tab, come back: the run section was empty, as if the screen
+    had been lost, though it carried on."""
+    runner = _runner(_FakeService(), tmp_path)
+    mine = _job(runner, "running", [])
+    body = _dashboard(runner, mine)
+    assert f'hx-get="/runs/{mine}/progress"' in body and "Screening" in body
+
+
+def test_coming_back_to_a_finished_screen_shows_it_above_the_scheduled_one(tmp_path) -> None:
+    """Since v3.2.0 the dashboard shows the scheduled screen, so a stranger's cannot take it over
+    — which also hid the visitor's OWN fresher screen behind a two-day-old one."""
+    from wheel_screener.api.jobs import SOURCE_REFRESH
+
+    runner = _runner(_FakeService(), tmp_path)
+    _job(runner, "done", ["CRON"], minutes_ago=2 * 24 * 60, source=SOURCE_REFRESH)
+    mine = _job(runner, "done", ["MINE"])
+    body = _dashboard(runner, mine)
+    assert "Your screen" in body
+    assert body.index("MINE") < body.index("CRON"), "yours first, the scheduled one below"
+    assert "Your screen" not in _dashboard(runner, None), "a stranger is not shown anyone's"
+
+
+def test_a_cancel_that_collected_nothing_is_not_brought_back(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    assert "Your screen" not in _dashboard(runner, _job(runner, "cancelled", []))
+    assert "Your screen" not in _dashboard(runner, "../../etc/passwd")  # not a job id at all
+
+
+def test_a_cancel_that_collected_nothing_says_so_not_criteria_advice(tmp_path) -> None:
+    runner = _runner(_FakeService(), tmp_path)
+    body = _client(runner).get(f"/runs/{_job(runner, 'cancelled', [])}/progress").text
+    assert "Cancelled before any candidates were collected" in body
+    assert "Try a higher max-DTE" not in body and "0 candidates" not in body
