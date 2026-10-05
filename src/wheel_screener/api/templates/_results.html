@@ -11,8 +11,12 @@
 {% endmacro %}
 <article id="results-{{ job.job_id }}">
   <header class="results-head">
-    <strong>{{ n }} candidate{{ '' if n == 1 else 's' }}</strong>
-    {% if job.status == "cancelled" %}<span class="badge badge--neg">cancelled — partial</span>{% endif %}
+    {% if job.status == "cancelled" and not n %}
+      <strong>Cancelled</strong>
+    {% else %}
+      <strong>{{ n }} candidate{{ '' if n == 1 else 's' }}</strong>
+      {% if job.status == "cancelled" %}<span class="badge badge--neg">cancelled — partial</span>{% endif %}
+    {% endif %}
     {% if summary %}
     <span class="result-stats">
       {% if summary.yield_max is not none %}<span>yield
@@ -92,6 +96,10 @@
       </tbody>
     </table>
   </figure>
+  {% elif job.status == "cancelled" %}
+  {# Not the advice below: a cancelled run matched nothing because it was stopped, and telling
+     the person to loosen their criteria answers a question they did not ask. #}
+  <p class="empty-state">Cancelled before any candidates were collected.</p>
   {% else %}
   <p class="empty-state">No candidates matched. Try a higher max-DTE, a lower min-yield,
      a lower min&nbsp;$-volume, or more names.</p>

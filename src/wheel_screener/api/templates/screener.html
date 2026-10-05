@@ -6,7 +6,16 @@
     {% include "_form.html" %}
   </article>
 
-  <section id="run"></section>
+  {# The visitor's own latest screen, found again after they left the tab: still running (the
+     progress keeps polling from where it is) or finished. Empty for someone who has not run one. #}
+  <section id="run">
+    {% if mine and mine.status == "running" %}
+      {% with job = mine, cancelling = mine_cancelling %}{% include "_progress.html" %}{% endwith %}
+    {% elif mine %}
+      <h2>Your screen <small>{{ mine_age }}</small></h2>
+      {% with job = mine, summary = mine_summary %}{% include "_results.html" %}{% endwith %}
+    {% endif %}
+  </section>
 
   {% if latest %}
   <section>

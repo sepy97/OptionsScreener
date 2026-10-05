@@ -920,3 +920,45 @@ def test_a_covered_call_is_asked_the_cheaper_question_and_costs_no_chain_call():
     assert earning.swap.action is SwapAction.KEEP and earning.swap.used_up is False
     assert shares.swap is None
     assert chains.requested_types == []  # the mark answers it; no chain pulled
+
+
+# --- cancelling a screen (#182) ------------------------------------------------------------------
+
+def test_a_cancel_before_the_chain_pull_stops_without_pulling_anything():
+    """It used to be checked only INSIDE the chain pull, so a cancel pressed during fundamentals
+    waited out fundamentals, the earnings calendar and the ETF list first."""
+    import threading
+
+    chains = _FakeChains(_chain([_put(90, -0.20, 40, 1.9)]))
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    stop = threading.Event()
+    stop.set()
+    assert service.run_screen(ScreenCriteria(top_n=10, min_dte=30, max_dte=45),
+                              date(2026, 6, 22), cancel=stop) == []
+    assert chains.requested_types == [], "nothing should be pulled after a cancel"
+
+
+def test_a_cancel_after_the_chain_pull_skips_the_dividend_lookup(monkeypatch):
+    """The person asked to stop; the results are partial anyway, and the lookup costs calls.
+    The cancel lands as ranking runs — after every chain is in, before the dividend lookup."""
+    import threading
+
+    import wheel_screener.core.service as service_module
+
+    stop = threading.Event()
+    real_rank = service_module.rank
+
+    def rank_then_cancel(*args, **kwargs):
+        stop.set()
+        return real_rank(*args, **kwargs)
+
+    monkeypatch.setattr(service_module, "rank", rank_then_cancel)
+    dividends = _FakeDividends()
+    service = ScreenerService(
+        fundamentals=_FakeFundamentals(),
+        chains=_FakeChains(_chain([_put(90, -0.20, 40, 1.9)])), dividends=dividends,
+    )
+    results = service.run_screen(ScreenCriteria(top_n=10, min_dte=30, max_dte=45),
+                                 date(2026, 6, 22), cancel=stop)
+    assert [r.symbol for r in results] == ["AAA"], "what was collected is kept"
+    assert dividends.asked == []
