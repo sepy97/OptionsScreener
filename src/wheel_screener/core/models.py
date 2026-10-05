@@ -256,6 +256,10 @@ class ScreenCriteria(BaseModel):
     # Screen ETFs alongside stocks. They skip the fundamental stages entirely and join the
     # same ranked list, so a strong yield on XLF competes with one on a stock on equal terms.
     include_etfs: bool = True
+    # Tickers left out of the screen entirely — the shared blocklist, as it stood when the screen
+    # started. Dropped before any fundamentals or chains are fetched for them, stocks and ETFs
+    # alike. Filled in by whoever starts the run; the engine only applies it.
+    blocked_symbols: frozenset[str] = frozenset()
     # optional IV floor on the selected put (None = off). Elevated IV = richer premium; when set,
     # a contract must have a known implied vol at or above this fraction (0.40 == 40%) to qualify.
     min_iv: float | None = None

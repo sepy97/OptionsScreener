@@ -58,6 +58,8 @@ def is_expensive(method: str, path: str) -> bool:
     if method == "POST" and path in ("/portfolio/brokerages/link",
                                      "/portfolio/brokerages/reconnect"):
         return True  # each one reaches SnapTrade, and a first link registers the person there
+    if method == "POST" and path in ("/blocklist", "/blocklist/remove"):
+        return True  # anyone can edit the shared list; a brake on one visitor rewriting it fast
     if method == "POST" and path == "/portfolio/swaps/refresh":
         return True  # re-prices every open put: a chain pull each, plus the broker
     if method == "POST" and path.startswith("/auth/"):

@@ -160,6 +160,21 @@
         <small>optional — 0.40 = 40% implied-vol floor</small>
       </label>
     </div>
+    <hr>
+    <fieldset class="seg-field">
+      <legend>Blocklist</legend>
+      <div class="segmented">
+        <input type="radio" name="use_blocklist" value="true" id="bl-on"
+               {% if defaults.use_blocklist %}checked{% endif %}>
+        <label for="bl-on">Leave them out<small>default</small></label>
+        <input type="radio" name="use_blocklist" value="false" id="bl-off"
+               {% if not defaults.use_blocklist %}checked{% endif %}>
+        <label for="bl-off">Include them<small>this screen only</small></label>
+      </div>
+      <small>Tickers the screen never looks at. One list shared by everyone using the
+        screener, and saved: each screen uses the list as it stands when the screen starts.</small>
+    </fieldset>
+    {% include "_blocklist.html" %}
   </details>
   <button type="submit" class="run-btn">Run screen</button>
 </form>

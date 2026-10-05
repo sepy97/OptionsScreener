@@ -24,6 +24,8 @@
       {% if summary.dte_max is not none %}<span>DTE <b>{{ summary.dte_min }}–{{ summary.dte_max }}</b></span>{% endif %}
     </span>
     {% endif %}
+    {% set bl = job|blocklist_note %}
+    {% if bl %}<small class="results-blocklist">{{ bl }}</small>{% endif %}
     {% if job.result %}
     <a href="/runs/{{ job.job_id }}/export.csv" role="button" class="secondary outline export-btn"
        download>{{ icon.download() }} Export CSV</a>

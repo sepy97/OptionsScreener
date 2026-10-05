@@ -48,7 +48,7 @@ from wheel_screener.core.pipeline.select_strike import (
     select_top_contracts,
     signed_target_delta,
 )
-from wheel_screener.core.pipeline.universe import build_universe
+from wheel_screener.core.pipeline.universe import build_universe, drop_blocked
 from wheel_screener.core.ports import (  # noqa: F401 - EtfUniverseProvider is a field type
     ChainProvider,
     CompanyProfileProvider,
@@ -669,7 +669,7 @@ class ScreenerService:
         if not criteria.include_etfs or self.etfs is None:
             return []
         try:
-            return self.etfs.etf_universe(criteria)
+            return drop_blocked(self.etfs.etf_universe(criteria), criteria)
         except ProviderError as e:
             # A screen that returns stocks is worth more than one that returns an error page.
             logger.warning("etf universe unavailable (%s); screening stocks only", e)

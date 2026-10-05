@@ -18,9 +18,14 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from wheel_screener.api.blocklist import BlocklistStore
 from wheel_screener.core.errors import ProviderError
 from wheel_screener.core.models import ScreenCriteria
 from wheel_screener.core.service import ScreenerService
+
+# Under the core logger on purpose: its INFO lines are what a job's progress captures, and the
+# blocklist line is how the results know whether the screen used the list.
+_logger = logging.getLogger("wheel_screener.core.blocklist")
 
 _JOB_RETENTION_DAYS = 30  # prune finished jobs older than this so the table stays bounded
 
@@ -199,15 +204,18 @@ class _ProgressHandler(logging.Handler):
 
 
 class JobRunner:
-    def __init__(self, service: ScreenerService, store: JobStore) -> None:
+    def __init__(
+        self, service: ScreenerService, store: JobStore, blocklist: BlocklistStore | None = None,
+    ) -> None:
         self._service = service
         self.store = store
+        self.blocklist = blocklist
         self._lock = threading.Lock()
         self._active: str | None = None
         self._cancels: dict[str, threading.Event] = {}
         self._threads: dict[str, threading.Thread] = {}
 
-    def start(self, criteria: ScreenCriteria) -> str:
+    def start(self, criteria: ScreenCriteria, *, use_blocklist: bool = True) -> str:
         with self._lock:
             if self._active is not None:
                 raise JobBusyError(self._active)
@@ -218,7 +226,8 @@ class JobRunner:
         try:
             self.store.create(job_id, datetime.now(tz=UTC).isoformat(), SOURCE_WEB)
             thread = threading.Thread(
-                target=self._run_and_release, args=(job_id, criteria, cancel), daemon=True
+                target=self._run_and_release, args=(job_id, criteria, cancel, use_blocklist),
+                daemon=True,
             )
             self._threads[job_id] = thread
             thread.start()
@@ -232,16 +241,16 @@ class JobRunner:
         return job_id
 
     def _run_and_release(
-        self, job_id: str, criteria: ScreenCriteria, cancel: threading.Event
+        self, job_id: str, criteria: ScreenCriteria, cancel: threading.Event, use_blocklist: bool,
     ) -> None:
         """Thread target for start(): run the job, then release the single-in-flight slot."""
         try:
-            self._run(job_id, criteria, cancel)
+            self._run(job_id, criteria, cancel, use_blocklist)
         finally:
             with self._lock:
                 self._active = None
 
-    def run_blocking(self, criteria: ScreenCriteria) -> str:
+    def run_blocking(self, criteria: ScreenCriteria, *, use_blocklist: bool = True) -> str:
         """Run a screen synchronously and store it; returns the job id. For a one-shot caller
         (CLI / cron precompute) that wants the result persisted for the web to serve — unlike
         start(), no thread and no single-in-flight gate (so it never touches ``_active``)."""
@@ -250,7 +259,8 @@ class JobRunner:
         self._cancels[job_id] = cancel
         try:
             self.store.create(job_id, datetime.now(tz=UTC).isoformat(), SOURCE_REFRESH)
-            self._run(job_id, criteria, cancel)  # cleans up _cancels/_threads in its finally
+            # _run cleans up _cancels/_threads in its finally
+            self._run(job_id, criteria, cancel, use_blocklist)
         except Exception:
             self._cancels.pop(job_id, None)  # store.create failed before _run could clean up
             raise
@@ -280,11 +290,27 @@ class JobRunner:
         if thread is not None:
             thread.join(timeout)
 
-    def _run(self, job_id: str, criteria: ScreenCriteria, cancel: threading.Event) -> None:
+    def _with_blocklist(self, criteria: ScreenCriteria, use_blocklist: bool) -> ScreenCriteria:
+        """The blocklist as it stands right now — read as the screen starts, so the latest edit
+        is the one applied. The line logged here is also what the results show about it."""
+        if self.blocklist is None:
+            return criteria
+        if not use_blocklist:
+            _logger.info("blocklist: off for this screen")
+            return criteria
+        symbols = frozenset(self.blocklist.symbols())
+        _logger.info("blocklist: %d ticker(s) on the list", len(symbols))
+        return criteria.model_copy(update={"blocked_symbols": symbols})
+
+    def _run(
+        self, job_id: str, criteria: ScreenCriteria, cancel: threading.Event,
+        use_blocklist: bool = True,
+    ) -> None:
         handler = _ProgressHandler(self.store, job_id)
         core_logger = logging.getLogger("wheel_screener.core")
         core_logger.addHandler(handler)
         try:
+            criteria = self._with_blocklist(criteria, use_blocklist)
             results = self._service.run_screen(criteria, date.today(), cancel=cancel)
             status = "cancelled" if cancel.is_set() else "done"
             self.store.finish(

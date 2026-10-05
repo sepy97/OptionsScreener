@@ -22,6 +22,9 @@ class ScreenRequest(BaseModel):
     # Radios rather than a checkbox: an unchecked box submits NOTHING, so a default-on
     # checkbox is one that cannot be turned off. A pair of radios always sends a value.
     include_etfs: bool = Field(True, description="Screen ETFs in the same list as stocks.")
+    # On unless switched off for this one screen. Not part of the criteria: the list itself is
+    # read when the screen starts, so the latest edit applies (see api.blocklist).
+    use_blocklist: bool = Field(True, description="Leave out the tickers on the blocklist.")
     min_dollar_volume: float = Field(
         25_000_000.0, ge=0.0, description="Skip stocks below this avg daily $-volume (0=off)."
     )
