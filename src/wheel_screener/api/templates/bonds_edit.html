@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+  {% import "_icons.html" as icon %}
+  <article>
+    <header class="results-head">
+      <h2>Edit your bond watchlist</h2>
+      <a href="/bonds" role="button" class="secondary outline export-btn">Back to the calendar</a>
+    </header>
+    {% if error %}<p role="alert">{{ icon.warning() }} {{ error }}</p>{% endif %}
+    {% if report %}
+    <div class="bond-report">
+      <p><strong>Saved {{ report.count }} bond{{ '' if report.count == 1 else 's' }}.</strong>
+        {% if report.reused %}{{ report.reused }} code{{ '' if report.reused == 1 else 's' }} kept
+        from the previous watchlist.{% endif %}</p>
+      {% if report.resolved %}
+      <p>Looked up by name — check that everything matched correctly:</p>
+      <pre>{{ report.resolved|join("\n") }}</pre>
+      {% endif %}
+      {% if report.problems %}
+      <p>{{ icon.warning() }} Not found:</p>
+      <ul>{% for p in report.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+      {% endif %}
+    </div>
+    {% endif %}
+    <form method="post" action="/bonds/watchlist" enctype="multipart/form-data">
+      <label>Watchlist
+        <textarea name="text" rows="18" spellcheck="false" class="bond-textarea"
+                  placeholder="code,name,matdate,qty">{{ text }}</textarea>
+        <small>saved with the ISINs it finds: fix a wrong match by editing its code, or clear a
+          code to look that bond up again</small>
+      </label>
+      <label>…or upload a file
+        <input type="file" name="file" accept=".csv,.txt,text/csv,text/plain">
+        <small>replaces the text above — UTF-8 or Windows-1251 (cbonds / Excel exports)</small>
+      </label>
+      <button type="submit" class="run-btn">Save and look up ISINs</button>
+    </form>
+    <details class="advanced">
+      <summary>Watchlist formats</summary>
+      <ul class="bond-help">
+        <li><b>CSV with a header.</b> Columns: <code>code</code> (or isin / secid / ticker) —
+          ISIN or MOEX code; <code>name</code> — the bond name as MOEX and cbonds write it,
+          "issuer, series", e.g. <code>АФК Система, 001P-06</code> — if code is empty, the ISIN
+          is looked up by name (and maturity date, if given); <code>matdate</code> — maturity
+          date, helps find the right bond by name; <code>qty</code> — how many bonds you hold,
+          to compute totals. Only one of code or name is required; Russian column names (as in
+          cbonds exports) work too.</li>
+        <li><b>Plain text:</b> one bond per line, optionally followed by a quantity. Anything
+          after <code>#</code> is a comment.</li>
+        <li>Both ISINs (<code>RU000A1038V6</code>) and MOEX codes (<code>SU26238RMFS4</code>)
+          work. Matured bonds MOEX no longer lists get the code <code>-</code> so they aren't
+          looked up again.</li>
+      </ul>
+    </details>
+  </article>
+{% endblock %}

@@ -619,3 +619,56 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
   table.cards .admin-actions button { margin: 0.25rem 0.25rem 0 0; }
 }
 
+
+/* --- bond calendar tab --- */
+.results-head h2 { margin: 0; font-size: 1.05rem; }
+.bond-intro { color: var(--pico-muted-color); font-size: 0.875rem; margin: 0.5rem 0 0.75rem; }
+.bond-period { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.5rem 1rem; }
+.bond-period label { margin: 0; }
+.bond-period input[type="date"] { margin: 0.25rem 0 0; }
+.bond-period .bond-all { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.35rem; font-weight: 600; }
+.bond-period .bond-all input { margin: 0; flex-shrink: 0; }
+.bond-period .bond-all span { display: flex; flex-direction: column; white-space: nowrap; }
+.bond-period .run-btn { width: auto; margin: 0; padding-inline: 1.5rem; }
+.bond-refresh { font-size: 0.8rem; color: var(--pico-muted-color); }
+.bond-downloads { margin-left: auto; display: inline-flex; flex-wrap: wrap; gap: 0.4rem; }
+.bond-downloads .export-btn { margin: 0; }
+.bond-note { margin: 0 0 0.5rem; font-size: 0.8rem; color: var(--pico-muted-color); }
+.bond-problems { margin: 0 0 0.75rem; font-size: 0.85rem; }
+.bond-problems summary { color: var(--neg); font-weight: 600; cursor: pointer; }
+.bond-problems ul { margin: 0.35rem 0 0; }
+/* the table rules above right-align / mute / hide columns by position for the screener table;
+   this table is laid out by class instead (same specificity, later in the file — so it wins) */
+.bond-table thead th, .bond-table tbody td { text-align: left; color: inherit; display: table-cell; }
+.bond-table .num { text-align: right; font-variant-numeric: tabular-nums; }
+.bond-table td small { color: var(--pico-muted-color); }
+.bond-table .bond-isin { font-family: var(--pico-font-family-monospace); font-size: 0.72rem; }
+.bond-table .bond-note-cell { white-space: normal; min-width: 11rem; font-size: 0.8rem; color: var(--pico-muted-color); }
+.bond-table tr.bond-month th {
+  background: var(--sunken); text-align: left; font-weight: 700; font-size: 0.8rem;
+  text-transform: uppercase; letter-spacing: 0.03em; padding-top: 0.7rem;
+}
+.bond-table tr.soon td:first-child { box-shadow: inset 3px 0 0 var(--wheel-accent); font-weight: 600; }
+.ev {
+  display: inline-block; padding: 0.05rem 0.5rem; border-radius: 999px;
+  font-size: 0.75rem; font-weight: 600; line-height: 1.6;
+  background: var(--sunken); color: var(--ink);
+}
+.ev-coupon { background: var(--wheel-accent-soft); color: var(--wheel-accent-strong); }
+.ev-principal { background: var(--wheel-accent); color: #fff; }
+.ev-offer { background: var(--warn-soft); color: var(--warn); }
+.ev-deadline { background: var(--neg-soft); color: var(--neg); }
+.bond-cash { margin-top: 1.25rem; }
+.bond-cash h3 { font-size: 0.95rem; margin-bottom: 0.5rem; }
+.bond-cash h3 small { font-weight: 400; color: var(--pico-muted-color); }
+.bond-cash-table { width: auto; min-width: 16rem; }
+.bond-textarea { font-family: var(--pico-font-family-monospace); font-size: 0.8rem; }
+.bond-report { margin-bottom: 1rem; padding: 0.75rem 1rem; background: var(--sunken); border-left: 3px solid var(--wheel-accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.bond-report pre { white-space: pre-wrap; font-size: 0.8rem; margin: 0.25rem 0 0.5rem; padding: 0.5rem; }
+.bond-report p { margin: 0 0 0.25rem; }
+.bond-help { font-size: 0.85rem; }
+.bond-feed { margin: 0 0 1rem; padding: 0.75rem 1rem; background: #fff; border: 1px solid var(--border); border-left: 3px solid var(--wheel-accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.bond-feed .invite-link a[role="button"] { width: auto; margin: 0; white-space: nowrap; }
+@media (max-width: 820px) {
+  .bond-downloads { margin-left: 0; }
+}

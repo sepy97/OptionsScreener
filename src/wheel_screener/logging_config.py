@@ -70,11 +70,13 @@ def _file_handler(settings: LogSettings) -> logging.Handler | None:
 
 # --- secrets in request lines ----------------------------------------------------------------
 # uvicorn's access log records every request's full path, query string included. An invite link
-# carries a live credential in its path (the token, a bearer credential until used), so that part
-# is redacted rather than the log turned off — it is the only request log the app keeps.
+# carries a live credential in its path (the token, a bearer credential until used), and so does a
+# bond-calendar feed link (it reads someone's calendar), so that part is redacted rather than the
+# log turned off — it is the only request log the app keeps.
 _SECRET_PATHS = (
     # (pattern, replacement) applied to the path as logged
     (re.compile(r"^(/invite/)[^/?#]+"), r"\1<redacted>"),
+    (re.compile(r"^(/feeds/bonds/)[^/?#]+"), r"\1<redacted>"),
 )
 
 

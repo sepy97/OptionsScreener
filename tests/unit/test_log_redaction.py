@@ -12,6 +12,8 @@ from wheel_screener.logging_config import RedactSecretsFilter, redact_path
 @pytest.mark.parametrize("path, logged", [
     ("/invite/VRSnKDqZqvxhcwHM3Sr6", "/invite/<redacted>"),
     ("/invite/VRSnKDqZqvxhcwHM3Sr6?x=1", "/invite/<redacted>?x=1"),
+    ("/feeds/bonds/VRSnKDqZqvxhcwHM3Sr6.ics", "/feeds/bonds/<redacted>"),  # reads a calendar
+    ("/bonds/calendar.ics?all=1", "/bonds/calendar.ics?all=1"),
     # everything else is logged as it was
     ("/portfolio", "/portfolio"),
     ("/search?symbol=AAPL", "/search?symbol=AAPL"),

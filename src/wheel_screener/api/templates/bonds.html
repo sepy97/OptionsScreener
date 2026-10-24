@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block scripts %}<script src="/static/copy.js" defer></script>{% endblock %}
+{% block content %}
+  <article>
+    <header class="results-head">
+      <h2>Bond calendar</h2>
+      <span class="fund-note">{{ count }} bond{{ '' if count == 1 else 's' }} in your watchlist</span>
+      <a href="/bonds/watchlist" role="button" class="secondary outline export-btn">Edit watchlist</a>
+    </header>
+    <p class="bond-intro">Coupons, offers (the application window and the buyback), amortizations
+      and redemptions for the bonds in your watchlist — from the Moscow Exchange (MOEX ISS).</p>
+    <form method="get" action="/bonds" class="bond-period">
+      <label>From
+        <input type="date" name="from" value="{{ period.date_from or default_from }}">
+      </label>
+      <label>To
+        <input type="date" name="to" value="{{ period.date_to or default_to }}">
+      </label>
+      <label class="bond-all">
+        <input type="checkbox" name="all" value="1" {% if period.whole %}checked{% endif %}>
+        <span>Whole calendar<small>from issue to maturity, matured bonds included</small></span>
+      </label>
+      <button type="submit" class="run-btn">Show</button>
+    </form>
+  </article>
+
+  <div id="bond-feed"></div>
+
+  <section id="bond-calendar" hx-get="/bonds/events?{{ period.query }}" hx-trigger="load"
+           hx-swap="innerHTML">
+    <article aria-busy="true">Loading the calendar from MOEX…</article>
+  </section>
+{% endblock %}

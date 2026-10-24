@@ -1,0 +1,92 @@
+{% import "_icons.html" as icon %}
+{% if empty_watchlist %}
+<article>
+  <p class="empty-state">Your watchlist is empty — <a href="/bonds/watchlist">add bonds</a> by
+     ISIN, MOEX code or name.</p>
+</article>
+{% else %}
+{% set n = events|length %}
+{% set cols = 8 if has_qty else 6 %}
+<article>
+  <header class="results-head">
+    <strong>{{ n }} event{{ '' if n == 1 else 's' }}</strong>
+    <span class="result-stats">
+      <span>{{ period.label }}</span>
+      <span>updated <b>{{ age }}</b></span>
+    </span>
+    <a href="#" class="bond-refresh" hx-get="/bonds/events?{{ period.query }}&refresh=1"
+       hx-target="#bond-calendar" hx-swap="innerHTML" title="rebuild from MOEX now">refresh</a>
+    <span class="bond-downloads">
+      <a href="/bonds/export.csv?{{ period.query }}" role="button" class="secondary outline export-btn"
+         download>{{ icon.download() }} CSV</a>
+      <a href="/bonds/export.csv?{{ period.query }}&sep=%3B" role="button"
+         class="secondary outline export-btn" download
+         title="semicolon-separated with decimal commas — for Excel in a Russian locale">{{ icon.download() }} CSV for Excel</a>
+      <a href="/bonds/calendar.ics?{{ period.query }}" role="button"
+         class="secondary outline export-btn" download
+         title="import into Apple / Google Calendar">{{ icon.download() }} .ics</a>
+      <button type="button" class="secondary outline export-btn" hx-post="/bonds/feed"
+              hx-target="#bond-feed" hx-swap="innerHTML"
+              {% if has_feed %}hx-confirm="Make a new feed link? The one you already use stops working."{% endif %}
+              title="a private link your calendar app subscribes to — it re-fetches a rolling year ahead on its own">{{ 'New feed link' if has_feed else 'Subscribe' }}</button>
+    </span>
+  </header>
+  {% for note in notes %}<p class="bond-note">{{ note }}</p>{% endfor %}
+  {% if problems %}
+  <details class="bond-problems"{% if problems|length <= 5 %} open{% endif %}>
+    <summary>{{ icon.warning() }} Could not process {{ problems|length }}
+      bond{{ '' if problems|length == 1 else 's' }}</summary>
+    <ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  {% if events %}
+  <figure>
+    <table class="bond-table">
+      <thead>
+        <tr>
+          <th>Date</th><th>Event</th><th>Bond</th>
+          <th class="num">Per bond</th><th class="num">Coupon</th>
+          {% if has_qty %}<th class="num">Qty</th><th class="num">Total</th>{% endif %}
+          <th class="bond-note-cell">Note</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for month, items in months %}
+        <tr class="bond-month"><th colspan="{{ cols }}">{{ month.strftime("%B %Y") }}</th></tr>
+        {% for e in items %}
+        {% set style, gloss = bond_events.get(e.kind, ("", "")) %}
+        {% set days = (e.date - today).days %}
+        <tr{% if 0 <= days <= soon_days %} class="soon"{% endif %}>
+          <td>{{ e.date.isoformat() }} <small>{{ e.date.strftime("%a") }}</small></td>
+          <td><span class="ev {{ style }}" title="{{ gloss }}">{{ e.kind }}</span></td>
+          <td>{{ e.name }}<br><small class="bond-isin" title="MOEX code {{ e.secid }}">{{ e.isin }}</small></td>
+          <td class="num">{% if e.amount is not none %}{{ e.amount|bond_fmt }} {{ e.cur }}{% endif %}</td>
+          <td class="num">{% if e.rate is not none %}{{ e.rate|bond_fmt }}%{% endif %}</td>
+          {% if has_qty %}
+          <td class="num">{{ e.qty|bond_qty }}</td>
+          <td class="num">{% if e.total is not none %}<b>{{ e.total|bond_fmt }} {{ e.cur }}</b>{% endif %}</td>
+          {% endif %}
+          <td class="bond-note-cell">{{ e.note }}</td>
+        </tr>
+        {% endfor %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </figure>
+  {% else %}
+  <p class="empty-state">No events for {{ period.label }}.</p>
+  {% endif %}
+  {% if cash %}
+  <section class="bond-cash">
+    <h3>Expected payments by month <small>coupons + principal, before tax</small></h3>
+    <table class="bond-cash-table">
+      <tbody>
+        {% for month, cur, total in cash %}
+        <tr><td>{{ month }}</td><td class="num">{{ total|bond_fmt }} {{ cur }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+  {% endif %}
+</article>
+{% endif %}

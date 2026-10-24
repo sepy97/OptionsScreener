@@ -376,6 +376,18 @@ The engine reuses this project's `FMP__API_KEY` — there is one key and one quo
 disk-cached for a day (`FUNDCORE__CACHE_TTL_SECONDS`), because a report only changes when the
 company files.
 
+## The Bond calendar tab
+
+The web version of `bond_calendar.py`: for a watchlist of Russian bonds, the coupons, offers (the
+application window and the buyback), amortizations and redemptions, from the Moscow Exchange's
+open ISS API — no key. Each signed-in person has their own watchlist (signing in is the same
+passkey as the Portfolio); paste or upload it in any format the script reads, and bonds given only
+by name get their ISINs looked up once, on save. The tab shows a year ahead by default (or chosen
+dates, or the whole calendar), with expected payments by month when quantities are given, and
+downloads the script's CSV and `.ics`. A private feed link lets a calendar app subscribe; it is
+shown once and stored only as a hash. Calendars are built on demand (~5 s for ~80 bonds) and
+cached for three hours (`BONDS__CACHE_TTL_SECONDS`).
+
 ## How it's built
 
 Hexagonal **ports & adapters**: a framework-free `core/` (models, pipeline, ranking,
@@ -388,6 +400,7 @@ src/wheel_screener/
   core/      models · ports · fundamentals · ranking · errors · service
              pipeline/ (universe · rate_fundamentals · pull_chains · select_strike · rank)
   adapters/  fmp/ · schwab/ · alpaca/ · local/ · fundcore/ · http.py · cache.py · errors.py
+  bonds/     bond_calendar (MOEX ISS — the ported script) · service   # the Bond calendar tab
   cli/  api/   config.py   composition.py   logging_config.py
 tools/   fmp_bulk_import.py     # one-time whole-market bulk loader
 docs/    PLAN.md · TODO.md

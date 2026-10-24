@@ -225,6 +225,14 @@ first time someone links one, check their Portfolio against the broker's own app
 option's strike, expiry and contract count, and the opening dates. Anything wrong there is a
 mapping fix in `adapters/snaptrade/account.py`, whose notes say what each field was assumed to be.
 
+## Bond calendar tab
+
+Nothing to configure: it reads the open MOEX ISS API (no key), and each person's watchlist lives in
+the jobs database (`/data/jobs.sqlite`, so the nightly backup carries it). The droplet must reach
+`iss.moex.com` — check once with
+`docker compose exec -T app python -c "import urllib.request; print(urllib.request.urlopen('https://iss.moex.com/iss/index.json').status)"`.
+Calendar-feed links are built from `PASSKEYS__ORIGIN`, like invite links.
+
 ## Diagnosing a broken data connection
 
 ```bash

@@ -57,7 +57,7 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI/Typer idiomatically use these calls as argument defaults.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Body", "typer.Option", "typer.Argument"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Body", "fastapi.File", "typer.Option", "typer.Argument"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
