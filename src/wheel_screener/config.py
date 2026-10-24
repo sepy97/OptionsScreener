@@ -218,6 +218,16 @@ class SwapSettings(BaseModel):
     top_n: int = 3  # other-ticker suggestions to show alongside the same-ticker pick
 
 
+class BondSettings(BaseModel):
+    """The Bond calendar tab — an event calendar for a person's watchlist of Russian bonds
+    (MOEX ISS: open, no key). Each signed-in person has their own watchlist, kept in the jobs
+    database."""
+
+    cache_ttl_seconds: int = 3 * 3600  # schedules change rarely; coupon amounts get announced
+    workers: int = 16  # bonds loaded at once (each thread keeps its own MOEX connection)
+    remind_days: int = 3  # .ics reminder before an offer's last application day
+
+
 class LogSettings(BaseModel):
     """Diagnostic logging. The console level follows -v/-vv; the rotating file always
     captures ``file_level`` and up, so cron'd runs leave a recoverable history."""
@@ -249,6 +259,7 @@ class Settings(BaseSettings):
     passkeys: PasskeySettings = Field(default_factory=PasskeySettings)
     snaptrade: SnapTradeSettings = Field(default_factory=SnapTradeSettings)
     swap: SwapSettings = Field(default_factory=SwapSettings)
+    bonds: BondSettings = Field(default_factory=BondSettings)
 
     # option-chain source: "schwab" (OAuth, ~120/min) or "alpaca" (key/secret, ~1000/min)
     chain_source: str = "schwab"

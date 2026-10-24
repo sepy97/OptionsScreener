@@ -1,0 +1,13 @@
+{# The calendar-feed link, shown ONCE: only its hash is stored, so it can't be shown again. #}
+<div class="bond-feed">
+  <strong>Your calendar feed</strong>
+  <div class="invite-link">
+    <input type="text" id="bond-feed-link" value="{{ link }}" readonly
+           aria-label="Calendar feed link" onfocus="this.select()">
+    <button type="button" class="secondary" data-copy="bond-feed-link">Copy</button>
+    <a href="{{ webcal }}" role="button" class="secondary outline">Subscribe</a>
+  </div>
+  <p class="detail-note">Add it to Apple or Google Calendar as a subscribed calendar ("From URL"):
+    it re-fetches a rolling year ahead on its own. Copy it now — it is shown only once, and anyone
+    with it can read your calendar. Making a new link turns this one off.</p>
+</div>

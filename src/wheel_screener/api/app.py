@@ -20,9 +20,20 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
-from fastapi import Body, Depends, FastAPI, Form, HTTPException, Request, Response
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -32,8 +43,10 @@ from pydantic import BaseModel, ValidationError
 from wheel_screener import __version__
 from wheel_screener.adapters.snaptrade.client import SnapTradeClient
 from wheel_screener.api.blocklist import BlocklistError, BlocklistStore
+from wheel_screener.api.bond_watchlists import MAX_BONDS, BondWatchlistStore
 from wheel_screener.api.deps import (
     current_session,
+    get_bonds,
     get_job_runner,
     get_portfolio,
     get_service,
@@ -48,6 +61,8 @@ from wheel_screener.api.schemas import ScreenRequest
 from wheel_screener.api.secretbox import SecretBox
 from wheel_screener.api.usercache import PerUserCache
 from wheel_screener.api.users import UserStore
+from wheel_screener.bonds import bond_calendar as bc
+from wheel_screener.bonds.service import BondCalendarService
 from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
 from wheel_screener.core.dividends import DividendImpact
@@ -172,6 +187,10 @@ async def lifespan(app: FastAPI):
     )
     app.state.job_runner = JobRunner(
         service, JobStore(settings.jobs_db_path), BlocklistStore(settings.jobs_db_path))
+    # the Bond calendar: builds cached across people; each person's watchlist in the jobs database
+    app.state.bonds = BondCalendarService(
+        cache_ttl_seconds=settings.bonds.cache_ttl_seconds, workers=settings.bonds.workers)
+    app.state.bond_watchlists = BondWatchlistStore(settings.jobs_db_path)
     # credentialed connections, built once: a probe owns an HTTP client
     app.state.probes = build_probes(settings, service)
     app.state.probe_cache = {}
@@ -213,8 +232,24 @@ app = FastAPI(title="Wheel Screener API", version=__version__, lifespan=lifespan
 # That is exactly what let any visitor with a Schwab account of their own claim the deployment's
 # broker slot. Signing in is a passkey now, on routes outside this prefix, so linking a broker is
 # something only a signed-in person can start.
+#
+# The Bond calendar is per-person in the same way — each signed-in person has their own watchlist —
+# so /bonds is gated by the same rule, also without exceptions. Its calendar feed (for calendar
+# apps, which cannot sign in) lives outside the prefix, at /feeds/bonds/<token>.
+_BONDS_PREFIX = "/bonds"
+
+
+def _under_bonds(path: str) -> bool:
+    return path == _BONDS_PREFIX or path.startswith(_BONDS_PREFIX + "/")
+
+
 def _needs_portfolio_session(path: str) -> bool:
-    return _under_portfolio(path)
+    return _under_portfolio(path) or _under_bonds(path)
+
+
+def _signin_home(path: str) -> str:
+    """The tab a gated path belongs to — where signing in returns a fragment request to."""
+    return _BONDS_PREFIX if _under_bonds(path) else _PORTFOLIO_PREFIX
 
 
 def _safe_next(raw: str | None) -> str:
@@ -237,8 +272,9 @@ async def _portfolio_session_gate(request: Request, call_next):
             # ended. A 303 would be followed invisibly by the browser's XHR, and htmx would swap
             # the whole sign-in page into a table cell. HX-Redirect navigates the page instead —
             # and back to the tab, not to a fragment that makes no sense on its own.
-            return Response(status_code=401, headers={"HX-Redirect": "/login?next=/portfolio"})
-        target = "/portfolio"
+            home = _signin_home(request.url.path)
+            return Response(status_code=401, headers={"HX-Redirect": f"/login?next={home}"})
+        target = _signin_home(request.url.path)
         if request.method == "GET":
             target = request.url.path + (f"?{request.url.query}" if request.url.query else "")
         return RedirectResponse(f"/login?next={quote(target, safe='/')}", status_code=303)
@@ -586,15 +622,17 @@ def _humanize_age(created_at: str) -> tuple[str, bool]:
     if created.tzinfo is None:
         created = created.replace(tzinfo=UTC)
     secs = max((datetime.now(tz=UTC) - created).total_seconds(), 0.0)
+    return (_age_label(secs), secs > _STALE_AFTER_SECONDS)
+
+
+def _age_label(secs: float) -> str:
     if secs < 90:
-        label = "just now"
-    elif secs < 3600:
-        label = f"{int(secs // 60)}m ago"
-    elif secs < 86400:
-        label = f"{int(secs // 3600)}h ago"
-    else:
-        label = f"{int(secs // 86400)}d ago"
-    return (label, secs > _STALE_AFTER_SECONDS)
+        return "just now"
+    if secs < 3600:
+        return f"{int(secs // 60)}m ago"
+    if secs < 86400:
+        return f"{int(secs // 3600)}h ago"
+    return f"{int(secs // 86400)}d ago"
 
 
 def _results_summary(results: list | None) -> dict | None:
@@ -1488,6 +1526,7 @@ def admin_remove(request: Request, user_id: str = Form("")):
                     f"Could not remove {target.name}'s brokerage links at SnapTrade ({e}). "
                     "Nothing was changed — try again."))
     users.remove_user(target.id)
+    request.app.state.bond_watchlists.forget(target.id)
     _balances_cache(request).clear(target.id)
     _swap_cache(request).clear(target.id)
     return _people(request, notice=f"{target.name} no longer has access.{note}")
@@ -1525,8 +1564,9 @@ def login_page(request: Request, next: str = "/portfolio"):  # noqa: A002 - the 
     target = _safe_next(next)
     if current_session(request) is not None:
         return RedirectResponse(target, status_code=303)
+    tab = "bonds" if _under_bonds(target.split("?")[0]) else "portfolio"
     return templates.TemplateResponse(
-        request, "login.html", {"active_tab": "portfolio", "next": target}
+        request, "login.html", {"active_tab": tab, "next": target}
     )
 
 
@@ -1849,3 +1889,244 @@ def cancel_run(request: Request, job_id: str, runner: JobRunner = Depends(get_jo
     return templates.TemplateResponse(
         request, "_progress.html", {"job": fresh, "cancelling": runner.is_cancelling(job_id)},
     )
+
+
+# --- The Bond calendar tab: each person's watchlist of Russian bonds, and its MOEX calendar -----
+# Everything under /bonds is signed-in only (the session gate above) and acts on the signed-in
+# person's own watchlist — the user id comes from the session, never from the request. The one
+# way in without a session is the calendar feed, outside the prefix, which takes a token.
+
+# the script's event types stay Russian (they are also the .ics IDs); each gets a style and an
+# English gloss for the tooltip. Offer dates are the ones that need action — the last day to
+# apply most of all.
+_BOND_EVENTS: dict[str, tuple[str, str]] = {
+    bc.COUPON: ("ev-coupon", "Coupon"),
+    bc.AMORTIZATION: ("ev-principal", "Amortization — part of the face value repaid"),
+    bc.REDEMPTION: ("ev-principal", "Redemption — the face value repaid"),
+    bc.OFFER_OPENS: ("ev-offer", "Offer: applications open"),
+    bc.OFFER_LAST_DAY: ("ev-deadline", "Offer: last day to apply — brokers cut off earlier"),
+    bc.OFFER_DAY: ("ev-deadline", "Offer: the day to apply"),
+    bc.OFFER_BUYBACK: ("ev-offer", "Offer: the issuer buys back the bonds tendered"),
+}
+templates.env.globals["bond_events"] = _BOND_EVENTS
+templates.env.filters["bond_fmt"] = bc.fmt
+templates.env.filters["bond_qty"] = bc.fmt_qty
+
+_SOON_DAYS = 7  # events this close are highlighted
+
+
+@dataclass(frozen=True)
+class _BondPeriod:
+    """The script's period flags: a year ahead from today by default, --from/--to, or --all."""
+
+    date_from: date | None
+    date_to: date | None
+
+    @property
+    def whole(self) -> bool:
+        return self.date_from is None
+
+    @property
+    def label(self) -> str:
+        return "the whole calendar" if self.whole else f"{self.date_from} to {self.date_to}"
+
+    @property
+    def query(self) -> str:
+        """The period as a query string, so downloads and refreshes match what's shown."""
+        if self.whole:
+            return "all=1"
+        return urlencode({"from": self.date_from.isoformat(), "to": self.date_to.isoformat()})
+
+
+def _iso_date(raw: str) -> date | None:
+    try:
+        return date.fromisoformat((raw or "").strip())
+    except ValueError:
+        return None
+
+
+def _bond_period(whole: bool, raw_from: str, raw_to: str) -> _BondPeriod:
+    if whole:
+        return _BondPeriod(None, None)
+    start = _iso_date(raw_from) or date.today()
+    end = _iso_date(raw_to) or bc.one_year_after(start)
+    return _BondPeriod(min(start, end), max(start, end))
+
+
+def _by_month(events: list[dict]) -> list[tuple[date, list[dict]]]:
+    """Events grouped under their month, in order — the script's "── 2026-10 ──" sections."""
+    groups: list[tuple[date, list[dict]]] = []
+    for e in events:
+        month = e["date"].replace(day=1)
+        if not groups or groups[-1][0] != month:
+            groups.append((month, []))
+        groups[-1][1].append(e)
+    return groups
+
+
+def _my_watchlist(request: Request) -> tuple[str, str]:
+    """(user id, watchlist text) of the signed-in person — the gate guarantees there is one."""
+    user_id = current_session(request).user.id
+    return user_id, request.app.state.bond_watchlists.text(user_id)
+
+
+def _decode_upload(raw: bytes) -> str:
+    """cbonds and Excel exports are UTF-8 or, in Russian Windows locales, cp1251."""
+    try:
+        return raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return raw.decode("cp1251", errors="replace")
+
+
+def _bond_events_context(bonds: BondCalendarService, text: str, period: _BondPeriod,
+                         refresh: bool = False) -> dict:
+    run, age = bonds.calendar(text, period.date_from, period.date_to, refresh=refresh)
+    return {
+        "period": period, "events": run.events, "months": _by_month(run.events),
+        "problems": run.problems, "notes": run.notes, "cash": bc.monthly_cash(run.events),
+        "has_qty": any(e["qty"] for e in run.events), "age": _age_label(age),
+        "today": date.today(), "soon_days": _SOON_DAYS,
+    }
+
+
+@app.get("/bonds")
+def bonds_page(
+    request: Request,
+    whole: bool = Query(False, alias="all"),
+    raw_from: str = Query("", alias="from"),
+    raw_to: str = Query("", alias="to"),
+):
+    """The Bond calendar tab: period controls; the calendar itself loads via GET /bonds/events."""
+    _, text = _my_watchlist(request)
+    today = date.today()
+    return templates.TemplateResponse(
+        request, "bonds.html",
+        {
+            "active_tab": "bonds", "period": _bond_period(whole, raw_from, raw_to),
+            "count": len(bc.parse_watchlist(text)), "default_from": today,
+            "default_to": bc.one_year_after(today),
+        },
+    )
+
+
+@app.get("/bonds/events")
+def bonds_events(
+    request: Request,
+    whole: bool = Query(False, alias="all"),
+    raw_from: str = Query("", alias="from"),
+    raw_to: str = Query("", alias="to"),
+    refresh: bool = False,
+    bonds: BondCalendarService = Depends(get_bonds),
+):
+    """The calendar fragment: events grouped by month + expected payments (cached builds)."""
+    period = _bond_period(whole, raw_from, raw_to)
+    user_id, text = _my_watchlist(request)
+    if not bc.parse_watchlist(text):
+        return templates.TemplateResponse(
+            request, "_bond_events.html", {"empty_watchlist": True, "period": period})
+    context = _bond_events_context(bonds, text, period, refresh)
+    context["has_feed"] = request.app.state.bond_watchlists.has_feed(user_id)
+    return templates.TemplateResponse(request, "_bond_events.html", context)
+
+
+@app.get("/bonds/export.csv")
+def bonds_export(
+    request: Request,
+    whole: bool = Query(False, alias="all"),
+    raw_from: str = Query("", alias="from"),
+    raw_to: str = Query("", alias="to"),
+    sep: str = ",",
+    bonds: BondCalendarService = Depends(get_bonds),
+) -> Response:
+    """The script's CSV table; ``sep=;`` gives decimal commas for Excel in a Russian locale."""
+    period = _bond_period(whole, raw_from, raw_to)
+    _, text = _my_watchlist(request)
+    run, _ = bonds.calendar(text, period.date_from, period.date_to)
+    return Response(
+        content=bc.csv_text(run.events, ";" if sep == ";" else ",").encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="bond_calendar.csv"'},
+    )
+
+
+def _bond_ics(request: Request, bonds: BondCalendarService, text: str,
+              period: _BondPeriod) -> Response:
+    run, _ = bonds.calendar(text, period.date_from, period.date_to)
+    return Response(
+        content=bc.ics_calendar(run.events, request.app.state.settings.bonds.remind_days),
+        media_type="text/calendar; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="bonds.ics"'},
+    )
+
+
+@app.get("/bonds/calendar.ics")
+def bonds_ics(
+    request: Request,
+    whole: bool = Query(False, alias="all"),
+    raw_from: str = Query("", alias="from"),
+    raw_to: str = Query("", alias="to"),
+    bonds: BondCalendarService = Depends(get_bonds),
+) -> Response:
+    """The script's .ics, for the period shown — to import once."""
+    _, text = _my_watchlist(request)
+    return _bond_ics(request, bonds, text, _bond_period(whole, raw_from, raw_to))
+
+
+@app.post("/bonds/feed")
+def bonds_feed_new(request: Request):
+    """Make this person's calendar-feed link — shown once, here; the previous one stops working."""
+    user_id = current_session(request).user.id
+    token = request.app.state.bond_watchlists.new_feed(user_id)
+    origin = request.app.state.settings.passkeys.origin.rstrip("/")
+    link = f"{origin}/feeds/bonds/{token}.ics"
+    return templates.TemplateResponse(
+        request, "_bond_feed.html",
+        {"link": link, "webcal": "webcal://" + link.split("://", 1)[-1]},
+    )
+
+
+@app.get("/feeds/bonds/{token}.ics")
+def bonds_feed(token: str, request: Request,
+               bonds: BondCalendarService = Depends(get_bonds)) -> Response:
+    """A person's calendar for calendar apps, which cannot sign in: the token stands in for the
+    session. A rolling year from today, so a subscribed calendar keeps itself current."""
+    text = request.app.state.bond_watchlists.text_for_feed(token)
+    if text is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return _bond_ics(request, bonds, text, _bond_period(False, "", ""))
+
+
+@app.get("/bonds/watchlist")
+def bonds_watchlist_page(request: Request):
+    """Edit your watchlist: paste or upload it in any format the script reads."""
+    _, text = _my_watchlist(request)
+    return templates.TemplateResponse(
+        request, "bonds_edit.html", {"active_tab": "bonds", "text": text})
+
+
+@app.post("/bonds/watchlist")
+def bonds_watchlist_save(
+    request: Request,
+    text: str = Form(""),
+    file: UploadFile | None = File(None),
+    bonds: BondCalendarService = Depends(get_bonds),
+):
+    """Save your watchlist, looking ISINs up by name; the page then shows what matched."""
+    user_id, previous = _my_watchlist(request)
+    if file is not None and file.filename:
+        text = _decode_upload(file.file.read())
+    items = bc.parse_watchlist(text)
+    error = None
+    if not items:
+        error = "No bonds found in that watchlist — nothing saved."
+    elif len(items) > MAX_BONDS:
+        error = f"A watchlist holds at most {MAX_BONDS} bonds — nothing saved."
+    if error is not None:
+        return templates.TemplateResponse(
+            request, "bonds_edit.html", {"active_tab": "bonds", "text": text, "error": error},
+            status_code=422,
+        )
+    resolved, report = bonds.resolve(text, previous)
+    request.app.state.bond_watchlists.save(user_id, resolved)
+    return templates.TemplateResponse(
+        request, "bonds_edit.html", {"active_tab": "bonds", "text": resolved, "report": report})

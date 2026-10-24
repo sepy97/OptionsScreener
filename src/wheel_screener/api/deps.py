@@ -1,4 +1,5 @@
-"""FastAPI dependencies — expose the process-singleton ScreenerService + Settings.
+"""FastAPI dependencies — expose the process singletons (ScreenerService, the bond calendar,
+Settings).
 
 The singleton is built ONCE in the app lifespan (see app.py) and stashed on ``app.state``;
 these read it per request (no per-request rebuild of the data store). Tests swap them out
@@ -14,6 +15,7 @@ from wheel_screener.adapters.snaptrade.client import SnapTradeUser
 from wheel_screener.api.jobs import JobRunner
 from wheel_screener.api.secretbox import SecretBoxError
 from wheel_screener.api.users import Session
+from wheel_screener.bonds.service import BondCalendarService
 from wheel_screener.config import Settings
 from wheel_screener.core.portfolio import PortfolioService
 from wheel_screener.core.service import ScreenerService
@@ -29,6 +31,10 @@ def get_settings(request: Request) -> Settings:
 
 def get_job_runner(request: Request) -> JobRunner:
     return request.app.state.job_runner
+
+
+def get_bonds(request: Request) -> BondCalendarService:
+    return request.app.state.bonds
 
 
 def current_session(request: Request) -> Session | None:

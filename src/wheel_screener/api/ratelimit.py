@@ -66,7 +66,14 @@ def is_expensive(method: str, path: str) -> bool:
         return True  # every passkey step writes a challenge or a session; a brake on hammering
     if path.startswith("/invite/"):
         return True  # an invite token is a bearer credential — don't let anyone guess at them fast
-    return method == "GET" and path == "/search/export.csv"  # a fresh search behind a download
+    if path.startswith("/feeds/bonds/"):
+        return True  # a bearer link too — and behind it, a MOEX build when the cache is cold
+    if method == "POST" and path in ("/bonds/watchlist", "/bonds/feed"):
+        return True  # saving looks ISINs up on MOEX; a feed link is a new credential
+    # a fresh search behind a download; the bond calendar (a MOEX build when the cache is cold)
+    return method == "GET" and path in (
+        "/search/export.csv", "/bonds/events", "/bonds/export.csv", "/bonds/calendar.ics"
+    )
 
 
 def client_ip(forwarded_for: str | None, peer: str) -> str:
