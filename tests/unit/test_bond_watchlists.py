@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sqlite3
 
+import pytest
+
 from wheel_screener.api.bond_watchlists import BondWatchlistStore
 
 
@@ -48,3 +50,31 @@ def test_forget_removes_the_list_and_the_feed(tmp_path) -> None:
     token = store.new_feed("sam")
     store.forget("sam")
     assert store.text("sam") == "" and store.text_for_feed(token) is None
+
+
+def test_an_edit_saves_what_the_change_returns_and_nothing_if_it_raises(tmp_path) -> None:
+    store = _store(tmp_path)
+    assert store.edit("sam", lambda text: text + "X1\n") == "X1\n"  # no list yet: starts empty
+    assert store.edit("sam", lambda text: text + "X2\n") == "X1\nX2\n"
+    token = store.new_feed("sam")
+
+    def refuse(text: str) -> str:
+        raise ValueError("no")
+
+    with pytest.raises(ValueError):
+        store.edit("sam", refuse)
+    assert store.text("sam") == "X1\nX2\n" and store.text_for_feed(token) == "X1\nX2\n"
+
+
+def test_edits_at_once_each_see_the_others_result(tmp_path) -> None:
+    import threading
+
+    store = _store(tmp_path)
+    store.save("sam", "")
+    threads = [threading.Thread(target=store.edit, args=("sam", lambda t, i=i: t + f"B{i}\n"))
+               for i in range(20)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(store.text("sam").split()) == sorted(f"B{i}" for i in range(20))

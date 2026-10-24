@@ -1,0 +1,30 @@
+{# Search results under the Add box, from `s` (GET /bonds/search, or after an edit). #}
+{% import "_icons.html" as icon %}
+{% if s.error %}
+<p class="bond-flash bond-flash--error" role="alert">{{ icon.warning() }} {{ s.error }}</p>
+{% elif s.q and not s.results %}
+<p class="bond-search-none">No bond matches “{{ s.q }}”. Try its ISIN, or fewer words of the name.</p>
+{% elif s.results %}
+<ul class="bond-results">
+  {% for b in s.results %}
+  <li>
+    <span class="bond-result-name">{{ b.name }}
+      <small><span class="bond-isin">{{ b.code }}</span>{% if b.secid != b.code %} · {{ b.secid }}{% endif %}
+        {%- if b.matdate %} · matures {{ b.matdate }}{% endif %}
+        {%- if b.coupon %} · coupon {{ '%g'|format(b.coupon) }}%{% endif %}
+        {%- if b.currency and b.currency != 'RUB' %} · {{ b.currency }}{% endif %}
+        {%- if not b.traded %} · not traded{% endif %}</small>
+    </span>
+    {% if b.known_as(s.in_list) %}
+    <span class="bond-in-list">{{ icon.check() }} in your watchlist</span>
+    {% else %}
+    <button type="button" class="secondary" aria-label="Add {{ b.name }}"
+            hx-post="/bonds/watchlist/add" hx-vals='{{ {"code": b.code}|tojson }}'
+            hx-include="#bond-q" hx-target="#bond-list" hx-swap="innerHTML"
+            hx-sync="#bond-list:queue all">Add</button>
+    {% endif %}
+  </li>
+  {% endfor %}
+</ul>
+{% if s.more %}<small class="bond-search-more">…and {{ s.more }} more — add a word to narrow it down.</small>{% endif %}
+{% endif %}

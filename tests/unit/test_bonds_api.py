@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+import json
 import tempfile
 from datetime import date, timedelta
 
@@ -15,7 +17,37 @@ from wheel_screener.api.app import app  # noqa: E402
 from wheel_screener.api.bond_watchlists import BondWatchlistStore  # noqa: E402
 from wheel_screener.api.users import UserStore  # noqa: E402
 from wheel_screener.bonds import bond_calendar as bc  # noqa: E402
+from wheel_screener.bonds.search import Bond, BondDirectory  # noqa: E402
 from wheel_screener.bonds.service import BondCalendarService  # noqa: E402
+
+SISTEMA_6 = Bond("RU000A0JXN21", "RU000A0JXN21", 'АФК "Система" ПАО БО-001P-06', "СистемБ1P6",
+                 matdate=date(2027, 3, 26), coupon=10.5, currency="RUB")
+SISTEMA_14 = Bond("RU000A10FA72", "RU000A10FA72", "АФК Система БО 002Р-14", "Систем2P14",
+                  matdate=date(2030, 2, 1), coupon=18.0, currency="RUB")
+OFZ = Bond("SU26238RMFS4", "RU000A1038V6", "ОФЗ-ПД 26238 15/05/2041", "ОФЗ 26238",
+           matdate=date(2041, 5, 15), coupon=7.1, currency="RUB")
+
+
+class _Moex:
+    """Stands in for MOEX behind the watchlist's search and Add."""
+
+    def __init__(self) -> None:
+        self.down = False
+
+    def load(self) -> list[Bond]:
+        if self.down:
+            raise OSError("timed out")
+        return [SISTEMA_6, SISTEMA_14, OFZ]
+
+    def search(self, q: str) -> list[Bond]:
+        if self.down:
+            raise OSError("timed out")
+        return []
+
+    def describe(self, code: str) -> Bond | None:
+        if self.down:
+            raise OSError("timed out")
+        return None
 
 
 def _event(day: date, kind: str = bc.COUPON, qty: float | None = None, **kw) -> dict:
@@ -52,6 +84,9 @@ def _client(builds: _Builds | None = None, resolve=None):
     app.state.bond_watchlists = BondWatchlistStore(tmp + "/jobs.sqlite")
     app.state.bonds = BondCalendarService(
         build=builds or _Builds(), resolve=resolve or (lambda items, log, pmap=map: []))
+    moex = c.moex = _Moex()
+    app.state.bond_directory = BondDirectory(load=moex.load, moex_search=moex.search,
+                                             describe=moex.describe)
     return c
 
 
@@ -79,10 +114,14 @@ def test_signed_out_visitors_are_sent_to_sign_in_and_back(client) -> None:
     assert r.status_code == 303 and r.headers["location"] == "/login?next=/bonds%3Fall%3D1"
     r = client.get("/bonds/events", headers={"HX-Request": "true"}, follow_redirects=False)
     assert r.status_code == 401 and r.headers["HX-Redirect"] == "/login?next=/bonds"
-    for path in ("/bonds/watchlist", "/bonds/export.csv", "/bonds/calendar.ics"):
+    for path in ("/bonds/watchlist", "/bonds/export.csv", "/bonds/calendar.ics",
+                 "/bonds/watchlist.csv", "/bonds/search?q=RU000A0JXN21"):
         assert client.get(path, follow_redirects=False).status_code == 303
-    r = client.post("/bonds/watchlist", data={"text": "X1"}, follow_redirects=False)
-    assert r.status_code == 303 and r.headers["location"] == "/login?next=/bonds"
+    for path in ("/bonds/watchlist", "/bonds/watchlist/add", "/bonds/watchlist/remove",
+                 "/bonds/watchlist/restore", "/bonds/watchlist/qty"):
+        r = client.post(path, data={"text": "X1", "code": "RU000A0JXN21", "key": "X1"},
+                        follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/login?next=/bonds"
     # the sign-in page it lands on lights up the Bond calendar tab, not Portfolio
     login = client.get("/login?next=/bonds")
     assert 'href="/bonds" class="nav-tab active"' in login.text
@@ -180,7 +219,7 @@ def test_saving_resolves_names_into_your_list_only() -> None:
         assert page.status_code == 200 and "ALEXBOND" not in page.text
         r = c.post("/bonds/watchlist",
                    data={"text": 'name,matdate\n"АФК Система, 001P-06",2027-03-26\n'})
-        assert r.status_code == 200 and "Saved 1 bond." in r.text
+        assert r.status_code == 200 and "Imported 1 bond." in r.text
         assert "АФК Система, 001P-06  →  RU000A0JXN21" in r.text  # to check the match
         assert app.state.bond_watchlists.text(sam.id).splitlines()[1].startswith("RU000A0JXN21,")
         assert app.state.bond_watchlists.text(alex.id) == "ALEXBOND\n"
@@ -194,7 +233,7 @@ def test_saving_refuses_empty_and_oversized_lists(client) -> None:
     sam = _as(client)
     app.state.bond_watchlists.save(sam.id, "RU000A0JXN21\n")
     r = client.post("/bonds/watchlist", data={"text": "# nothing\n"})
-    assert r.status_code == 422 and "nothing saved" in r.text
+    assert r.status_code == 422 and "nothing changed" in r.text
     many = "".join(f"B{i}\n" for i in range(MAX_BONDS + 1))
     r = client.post("/bonds/watchlist", data={"text": many})
     assert r.status_code == 422 and f"at most {MAX_BONDS}" in r.text
@@ -249,3 +288,129 @@ def test_removing_someone_removes_their_watchlist_and_feed() -> None:
         assert app.state.bond_watchlists.text_for_feed(link) is None
     finally:
         c.__exit__(None, None, None)
+
+
+SAVED = ('code,name,matdate,qty\r\n'
+         'RU000A0JXN21,"АФК Система, 001P-06",2027-03-26,10\r\n'
+         'SU26238RMFS4,,,\r\n')
+
+
+def test_the_watchlist_is_a_bond_a_row_not_text(client) -> None:
+    sam = _as(client)
+    app.state.bond_watchlists.save(sam.id, SAVED)
+    page = client.get("/bonds/watchlist").text
+    assert "<textarea" not in page and "2 bonds" in page
+    assert page.count('hx-post="/bonds/watchlist/remove"') == 2
+    assert 'aria-label="Remove АФК Система, 001P-06"' in page
+    assert 'name="qty" value="10"' in page  # how many you hold, editable in place
+    assert 'id="bond-q"' in page and 'hx-get="/bonds/search"' in page
+
+
+def test_search_offers_add_and_marks_what_you_already_have(client) -> None:
+    sam = _as(client)
+    app.state.bond_watchlists.save(sam.id, SAVED)
+    r = client.get("/bonds/search", params={"q": "Система"})
+    assert r.status_code == 200
+    assert "АФК Система БО 002Р-14" in r.text and "matures 2030-02-01" in r.text
+    assert "coupon 18%" in r.text
+    assert r.text.count('hx-post="/bonds/watchlist/add"') == 1  # 001P-06 is listed already
+    assert "in your watchlist" in r.text
+    # the OFZ is listed by its MOEX code; found by ISIN, it is still yours
+    assert "in your watchlist" in client.get("/bonds/search", params={"q": "RU000A1038V6"}).text
+    assert "No bond matches" in client.get("/bonds/search", params={"q": "нет такой"}).text
+    assert client.get("/bonds/search", params={"q": " "}).text.strip() == ""
+
+
+def test_search_says_when_moex_is_down(client) -> None:
+    _as(client)
+    client.moex.down = True
+    assert "MOEX did not answer" in client.get("/bonds/search", params={"q": "Система"}).text
+
+
+def test_add_names_and_dates_the_bond_as_moex_has_it(client) -> None:
+    sam = _as(client)
+    app.state.bond_watchlists.save(sam.id, SAVED)
+    r = client.post("/bonds/watchlist/add", data={"code": "RU000A10FA72", "q": "Система"})
+    assert r.status_code == 200 and "3 bonds" in r.text and 'class="bond-added"' in r.text
+    saved = bc.parse_watchlist(app.state.bond_watchlists.text(sam.id))
+    assert saved[-1] == {"code": "RU000A10FA72", "name": "АФК Система БО 002Р-14",
+                         "matdate": date(2030, 2, 1), "qty": None}
+    # the open search is re-rendered alongside, its Add now "in your watchlist"
+    assert 'id="bond-search-results" hx-swap-oob="innerHTML"' in r.text
+    assert 'hx-post="/bonds/watchlist/add"' not in r.text
+    # the same bond again — under its other code too — is refused, and nothing changes
+    before = app.state.bond_watchlists.text(sam.id)
+    assert "already in your watchlist" in client.post(
+        "/bonds/watchlist/add", data={"code": "RU000A1038V6"}).text
+    assert "does not know" in client.post("/bonds/watchlist/add", data={"code": "XX1"}).text
+    client.moex.down = True
+    app.state.bond_directory = BondDirectory(load=client.moex.load,
+                                             moex_search=client.moex.search,
+                                             describe=client.moex.describe)
+    assert "MOEX did not answer" in client.post(
+        "/bonds/watchlist/add", data={"code": "RU000A10FA72"}).text
+    assert app.state.bond_watchlists.text(sam.id) == before
+
+
+def test_add_stops_at_the_limit(client) -> None:
+    from wheel_screener.api.bond_watchlists import MAX_BONDS
+
+    sam = _as(client)
+    app.state.bond_watchlists.save(sam.id, "".join(f"B{i}\n" for i in range(MAX_BONDS)))
+    r = client.post("/bonds/watchlist/add", data={"code": "RU000A10FA72"})
+    assert f"at most {MAX_BONDS} bonds" in r.text
+
+
+def test_remove_then_undo_puts_the_bond_back_as_it_was(client) -> None:
+    sam = _as(client)
+    app.state.bond_watchlists.save(sam.id, SAVED)
+    r = client.post("/bonds/watchlist/remove", data={"key": "RU000A0JXN21"})
+    assert r.status_code == 200 and "1 bond<" in r.text
+    assert "Removed <b>АФК Система, 001P-06</b>" in r.text
+    assert [it["code"] for it in bc.parse_watchlist(
+        app.state.bond_watchlists.text(sam.id))] == ["SU26238RMFS4"]
+    undo = r.text.split('hx-post="/bonds/watchlist/restore"', 1)[1]
+    values = undo.split("hx-vals='", 1)[1].split("'", 1)[0]
+    restored = client.post("/bonds/watchlist/restore", data=json.loads(html.unescape(values)))
+    assert "2 bonds" in restored.text
+    assert bc.parse_watchlist(app.state.bond_watchlists.text(sam.id))[-1] == {
+        "code": "RU000A0JXN21", "name": "АФК Система, 001P-06", "matdate": date(2027, 3, 26),
+        "qty": 10.0}
+    # removing what is already gone (a second click) just shows the list
+    client.post("/bonds/watchlist/remove", data={"key": "RU000A0JXN21"})
+    r = client.post("/bonds/watchlist/remove", data={"key": "RU000A0JXN21"})
+    assert r.status_code == 200 and "Removed" not in r.text and 'role="alert"' not in r.text
+
+
+def test_qty_is_saved_from_the_row_and_answered_with_the_row(client) -> None:
+    sam = _as(client)
+    app.state.bond_watchlists.save(sam.id, SAVED)
+    r = client.post("/bonds/watchlist/qty", data={"key": "SU26238RMFS4", "qty": "2,5"})
+    assert r.status_code == 200 and r.text.strip().startswith("<tr")
+    assert 'value="2.5"' in r.text
+    assert "SU26238RMFS4,,,2.5\r\n" in app.state.bond_watchlists.text(sam.id)
+    for bad in ("lots", "-3"):
+        r = client.post("/bonds/watchlist/qty", data={"key": "SU26238RMFS4", "qty": bad})
+        assert 'aria-invalid="true"' in r.text and 'value="2.5"' in r.text  # unchanged
+    client.post("/bonds/watchlist/qty", data={"key": "SU26238RMFS4", "qty": ""})
+    assert "SU26238RMFS4,,,\r\n" in app.state.bond_watchlists.text(sam.id)
+    # a bond removed meanwhile (another tab): an empty answer, which drops the row
+    assert client.post("/bonds/watchlist/qty", data={"key": "GONE", "qty": "1"}).text == ""
+
+
+def test_edits_touch_only_your_own_list(client) -> None:
+    alex = _as(client, "Alex")
+    app.state.bond_watchlists.save(alex.id, SAVED)
+    _as(client, "Sam")
+    client.post("/bonds/watchlist/remove", data={"key": "RU000A0JXN21"})
+    client.post("/bonds/watchlist/qty", data={"key": "SU26238RMFS4", "qty": "7"})
+    client.post("/bonds/watchlist/add", data={"code": "RU000A10FA72"})
+    assert app.state.bond_watchlists.text(alex.id) == SAVED
+
+
+def test_the_watchlist_downloads_as_the_scripts_csv(client) -> None:
+    sam = _as(client)
+    app.state.bond_watchlists.save(sam.id, SAVED)
+    r = client.get("/bonds/watchlist.csv")
+    assert r.headers["content-type"].startswith("text/csv")
+    assert r.content.decode("utf-8-sig") == SAVED

@@ -1,0 +1,35 @@
+{# The watchlist, a bond a row — rendered inside #bond-list on the page and after every edit.
+   Every button here posts only its own values (plus the search box, so the search results' "in
+   your watchlist" marks follow the edit) and they queue on #bond-list, one edit at a time. #}
+{% import "_icons.html" as icon %}
+{% import "_bond_row.html" as br %}
+{% set n = rows|length %}
+<header class="results-head">
+  <strong>{{ n }} bond{{ '' if n == 1 else 's' }}</strong>
+  {% if n %}<small class="bond-hint">set how many you hold for the calendar's totals</small>
+  <a href="/bonds/watchlist.csv" role="button" class="secondary outline export-btn bond-list-csv"
+     download title="the list as CSV — edit it in a spreadsheet and import it back">{{ icon.download() }} watchlist.csv</a>{% endif %}
+</header>
+{% if error %}<p class="bond-flash bond-flash--error" role="alert">{{ icon.warning() }} {{ error }}</p>{% endif %}
+{% if removed %}
+<p class="bond-flash" role="status">Removed <b>{{ removed.name or removed.code }}</b>.
+  <button type="button" class="link-btn" hx-post="/bonds/watchlist/restore"
+          hx-vals='{{ {"code": removed.code, "name": removed.name, "matdate": (removed.matdate or "")|string, "qty": removed.qty|bond_qty}|tojson }}'
+          hx-include="#bond-q" hx-target="#bond-list" hx-swap="innerHTML"
+          hx-sync="#bond-list:queue all">Undo</button></p>
+{% endif %}
+{% if rows %}
+<figure>
+<table class="bond-table bond-watch cards">
+  <thead><tr><th>Bond</th><th>Matures</th><th class="num">Qty</th><th><span class="sr-only">Remove</span></th></tr></thead>
+  <tbody>
+    {% for it in rows %}{{ br.row(it, today, added=(added|default('') == it.key)) }}{% endfor %}
+  </tbody>
+</table>
+</figure>
+{% else %}
+<p class="empty-state">Your watchlist is empty — add a bond above, or import a file below.</p>
+{% endif %}
+{% if search is defined %}
+<div id="bond-search-results" hx-swap-oob="innerHTML">{% with s = search %}{% include "_bond_search.html" %}{% endwith %}</div>
+{% endif %}

@@ -13,6 +13,7 @@ import base64
 import csv
 import io
 import logging
+import math
 import re
 import secrets
 import time
@@ -34,7 +35,7 @@ from fastapi import (
     Response,
     UploadFile,
 )
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup
@@ -46,6 +47,7 @@ from wheel_screener.api.blocklist import BlocklistError, BlocklistStore
 from wheel_screener.api.bond_watchlists import MAX_BONDS, BondWatchlistStore
 from wheel_screener.api.deps import (
     current_session,
+    get_bond_directory,
     get_bonds,
     get_job_runner,
     get_portfolio,
@@ -62,6 +64,8 @@ from wheel_screener.api.secretbox import SecretBox
 from wheel_screener.api.usercache import PerUserCache
 from wheel_screener.api.users import UserStore
 from wheel_screener.bonds import bond_calendar as bc
+from wheel_screener.bonds import watchlist as bw
+from wheel_screener.bonds.search import BondDirectory, MoexUnavailable
 from wheel_screener.bonds.service import BondCalendarService
 from wheel_screener.composition import build_probes, build_service
 from wheel_screener.config import Settings
@@ -191,6 +195,7 @@ async def lifespan(app: FastAPI):
     app.state.bonds = BondCalendarService(
         cache_ttl_seconds=settings.bonds.cache_ttl_seconds, workers=settings.bonds.workers)
     app.state.bond_watchlists = BondWatchlistStore(settings.jobs_db_path)
+    app.state.bond_directory = BondDirectory()  # MOEX's bond list, for the watchlist's Add
     # credentialed connections, built once: a probe owns an HTTP client
     app.state.probes = build_probes(settings, service)
     app.state.probe_cache = {}
@@ -2096,12 +2101,155 @@ def bonds_feed(token: str, request: Request,
     return _bond_ics(request, bonds, text, _bond_period(False, "", ""))
 
 
+_SEARCH_SHOWN = 20  # results listed under the Add box; past that, a narrower query is asked for
+_SEARCH_MAX_CHARS = 100
+_MOEX_DOWN = "MOEX did not answer — try again in a moment."
+
+
+def _watchlist_context(text: str, **extra) -> dict:
+    return {"active_tab": "bonds", "rows": bw.rows(text), "today": date.today(), **extra}
+
+
+def _bond_search_context(directory: BondDirectory, q: str, text: str) -> dict:
+    q = q.strip()[:_SEARCH_MAX_CHARS]
+    context = {"q": q, "results": [], "more": 0, "error": None, "in_list": bw.codes(text)}
+    if q:
+        try:
+            found = directory.search(q)
+        except MoexUnavailable:
+            context["error"] = _MOEX_DOWN
+        else:
+            context["results"] = found[:_SEARCH_SHOWN]
+            context["more"] = max(0, len(found) - _SEARCH_SHOWN)
+    return context
+
+
+def _bond_list(request: Request, text: str, directory: BondDirectory, q: str, **extra):
+    """The list after an edit — and, while a search is open, its results again, so their
+    "in your watchlist" marks follow the edit."""
+    context = _watchlist_context(text, **extra)
+    if q.strip():
+        context["search"] = _bond_search_context(directory, q, text)
+    return templates.TemplateResponse(request, "_bond_watchlist.html", context)
+
+
 @app.get("/bonds/watchlist")
 def bonds_watchlist_page(request: Request):
-    """Edit your watchlist: paste or upload it in any format the script reads."""
+    """Your watchlist, a bond a line: add one by search, set how many you hold, remove one."""
+    _, text = _my_watchlist(request)
+    return templates.TemplateResponse(request, "bonds_edit.html", _watchlist_context(text))
+
+
+@app.get("/bonds/search")
+def bonds_search(request: Request, q: str = "",
+                 directory: BondDirectory = Depends(get_bond_directory)):
+    """Bonds to add, by ISIN, MOEX code or name — the results under the Add box."""
     _, text = _my_watchlist(request)
     return templates.TemplateResponse(
-        request, "bonds_edit.html", {"active_tab": "bonds", "text": text})
+        request, "_bond_search.html", {"s": _bond_search_context(directory, q, text)})
+
+
+@app.post("/bonds/watchlist/add")
+def bonds_watchlist_add(request: Request, code: str = Form(""), q: str = Form(""),
+                        directory: BondDirectory = Depends(get_bond_directory)):
+    """Add a bond by its code, named and dated as MOEX has it."""
+    user_id, text = _my_watchlist(request)
+    try:
+        bond = directory.lookup(code[:20])
+    except MoexUnavailable:
+        return _bond_list(request, text, directory, q, error=_MOEX_DOWN)
+    if bond is None:
+        return _bond_list(request, text, directory, q,
+                          error=f"MOEX does not know the code {code.strip().upper()[:20]}.")
+    item = {"code": bond.code, "name": bond.name, "matdate": bond.matdate, "qty": None}
+    store = request.app.state.bond_watchlists
+    try:
+        text = store.edit(user_id, lambda t: bw.add(t, item, aliases=(bond.secid, bond.isin),
+                                                    limit=MAX_BONDS))
+    except bw.WatchlistError as e:
+        return _bond_list(request, store.text(user_id), directory, q, error=str(e))
+    return _bond_list(request, text, directory, q, added=bc.item_key(bond.code, bond.name))
+
+
+@app.post("/bonds/watchlist/remove")
+def bonds_watchlist_remove(request: Request, key: str = Form(""), q: str = Form(""),
+                           directory: BondDirectory = Depends(get_bond_directory)):
+    """Remove a bond; the list then offers to undo it."""
+    user_id = current_session(request).user.id
+    store = request.app.state.bond_watchlists
+    removed: list[dict] = []
+
+    def change(text: str) -> str:
+        text, item = bw.remove(text, key)
+        removed.append(item)
+        return text
+
+    try:
+        text = store.edit(user_id, change)
+    except bw.WatchlistError:  # already gone — a second click, or another tab
+        text = store.text(user_id)
+    return _bond_list(request, text, directory, q, removed=removed[0] if removed else None)
+
+
+@app.post("/bonds/watchlist/restore")
+def bonds_watchlist_restore(
+    request: Request,
+    code: str = Form(""),
+    name: str = Form(""),
+    matdate: str = Form(""),
+    qty: str = Form(""),
+    q: str = Form(""),
+    directory: BondDirectory = Depends(get_bond_directory),
+):
+    """Undo a removal: the bond comes back as it was, quantity and all."""
+    user_id = current_session(request).user.id
+    store = request.app.state.bond_watchlists
+    amount = bc.to_number(qty)
+    item = bw.clean({
+        "code": code[:20], "name": name, "matdate": bc.parse_date(matdate),
+        "qty": amount if amount is not None and math.isfinite(amount) and amount >= 0 else None,
+    })
+    if not item["code"] and not item["name"]:
+        return _bond_list(request, store.text(user_id), directory, q)
+    try:
+        text = store.edit(user_id, lambda t: bw.add(t, item, limit=MAX_BONDS))
+    except bw.WatchlistError as e:
+        return _bond_list(request, store.text(user_id), directory, q, error=str(e))
+    return _bond_list(request, text, directory, q, added=bc.item_key(item["code"], item["name"]))
+
+
+@app.post("/bonds/watchlist/qty")
+def bonds_watchlist_qty(request: Request, key: str = Form(""), qty: str = Form("")):
+    """How many of a bond you hold — for the calendar's totals and payments by month. Answers with
+    the bond's row; an empty answer when the bond is gone, which removes the row."""
+    user_id = current_session(request).user.id
+    store = request.app.state.bond_watchlists
+    raw = qty.strip()
+    amount = bc.to_number(raw) if raw else None
+    error = None
+    if raw and amount is None:
+        error = "not a number"
+    else:
+        try:
+            store.edit(user_id, lambda t: bw.set_qty(t, key, amount)[0])
+        except bw.WatchlistError as e:
+            error = str(e)
+    row = next((it for it in bw.rows(store.text(user_id)) if it["key"] == key), None)
+    if row is None:
+        return HTMLResponse("")
+    return templates.TemplateResponse(
+        request, "_bond_row.html", {"it": row, "today": date.today(), "row_error": error})
+
+
+@app.get("/bonds/watchlist.csv")
+def bonds_watchlist_csv(request: Request) -> Response:
+    """Your watchlist as the script's CSV — to keep, or to edit and import back."""
+    _, text = _my_watchlist(request)
+    return Response(
+        content=bc.format_watchlist(bc.parse_watchlist(text)).encode("utf-8-sig"),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="watchlist.csv"'},
+    )
 
 
 @app.post("/bonds/watchlist")
@@ -2111,22 +2259,23 @@ def bonds_watchlist_save(
     file: UploadFile | None = File(None),
     bonds: BondCalendarService = Depends(get_bonds),
 ):
-    """Save your watchlist, looking ISINs up by name; the page then shows what matched."""
+    """Import a watchlist — a file (or pasted text) in any format the script reads — in place of
+    the one saved, looking ISINs up by name; the page then shows what matched."""
     user_id, previous = _my_watchlist(request)
     if file is not None and file.filename:
         text = _decode_upload(file.file.read())
     items = bc.parse_watchlist(text)
     error = None
     if not items:
-        error = "No bonds found in that watchlist — nothing saved."
+        error = "No bonds found in that file — nothing changed."
     elif len(items) > MAX_BONDS:
-        error = f"A watchlist holds at most {MAX_BONDS} bonds — nothing saved."
+        error = f"A watchlist holds at most {MAX_BONDS} bonds — nothing changed."
     if error is not None:
         return templates.TemplateResponse(
-            request, "bonds_edit.html", {"active_tab": "bonds", "text": text, "error": error},
+            request, "bonds_edit.html", _watchlist_context(previous, error=error),
             status_code=422,
         )
     resolved, report = bonds.resolve(text, previous)
     request.app.state.bond_watchlists.save(user_id, resolved)
     return templates.TemplateResponse(
-        request, "bonds_edit.html", {"active_tab": "bonds", "text": resolved, "report": report})
+        request, "bonds_edit.html", _watchlist_context(resolved, report=report))
