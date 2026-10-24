@@ -1,0 +1,127 @@
+{% extends "base.html" %}
+{% block content %}
+  {% import "_icons.html" as icon %}
+  {# Confirm prompts go through |tojson inside single-quoted handlers: a portfolio's name is the
+     person's own text, and this keeps any quote in it a character, not code. #}
+  <article>
+    <header class="results-head">
+      <h2>Portfolios</h2>
+      <a href="/bonds{{ '?portfolio=' ~ portfolio.id if portfolio and portfolios|length > 1 }}"
+         role="button" class="secondary outline export-btn">Back to the calendar</a>
+    </header>
+    <nav class="bond-portfolios" aria-label="Your portfolios">
+      {% for p in portfolios %}
+      <a href="/bonds/portfolios/{{ p.id }}" class="bond-pill{{ ' active' if portfolio and p.id == portfolio.id }}"
+         {% if portfolio and p.id == portfolio.id %}aria-current="page"{% endif %}>{{ p.name }}
+        <small{% if portfolio and p.id == portfolio.id %} id="bond-pill-count"{% endif %}>{{ p.count }}</small></a>
+      {% endfor %}
+      {% if portfolios|length < max_portfolios %}
+      <details class="bond-new"{% if create_error or not portfolios %} open{% endif %}>
+        <summary>{{ 'New portfolio' if portfolios else 'Name your first portfolio' }}</summary>
+        <form method="post" action="/bonds/portfolios" class="bond-inline-form">
+          <input type="text" name="name" required maxlength="60" autocomplete="off"
+                 placeholder="e.g. Broker, IIS" aria-label="Portfolio name"
+                 value="{{ typed_name|default('') if create_error }}"
+                 {% if create_error %}aria-invalid="true"{% endif %}>
+          <button type="submit" class="secondary">Create</button>
+        </form>
+        {% if create_error %}<small class="bond-flag" role="alert">{{ create_error }}</small>{% endif %}
+      </details>
+      {% endif %}
+    </nav>
+    {% if not portfolios %}
+    <p class="bond-intro">A portfolio is a set of bonds you hold and how many of each — one per
+      brokerage account, say. The calendar shows one portfolio or all of them together.</p>
+    {% endif %}
+  </article>
+
+  {% if portfolio %}
+  <article>
+    <header class="results-head bond-portfolio-head">
+      <h3>{{ portfolio.name }}</h3>
+      <details class="bond-rename"{% if rename_error %} open{% endif %}>
+        <summary>Rename</summary>
+        <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/rename" class="bond-inline-form">
+          <input type="text" name="name" required maxlength="60" autocomplete="off"
+                 value="{{ typed_name if rename_error else portfolio.name }}" aria-label="New name"
+                 {% if rename_error %}aria-invalid="true"{% endif %}>
+          <button type="submit" class="secondary">Save</button>
+        </form>
+        {% if rename_error %}<small class="bond-flag" role="alert">{{ rename_error }}</small>{% endif %}
+      </details>
+      <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/delete" class="bond-delete"
+            onsubmit='return confirm({{ ("Delete " ~ portfolio.name ~ (" and the " ~ portfolio.count ~ " bond" ~ ("" if portfolio.count == 1 else "s") ~ " in it" if portfolio.count else "") ~ "?")|tojson }})'>
+        <button type="submit" class="secondary outline">Delete portfolio</button>
+      </form>
+    </header>
+    {% if error %}<p role="alert">{{ icon.warning() }} {{ error }}</p>{% endif %}
+    {% if report %}
+    <div class="bond-report">
+      <p><strong>Imported {{ report.count }} bond{{ '' if report.count == 1 else 's' }}.</strong>
+        {% if report.reused %}{{ report.reused }} code{{ '' if report.reused == 1 else 's' }} kept
+        from what the portfolio held.{% endif %}</p>
+      {% if report.resolved %}
+      <p>Looked up by name — check that everything matched correctly:</p>
+      <pre>{{ report.resolved|join("\n") }}</pre>
+      {% endif %}
+      {% if report.problems %}
+      <p>{{ icon.warning() }} Not found:</p>
+      <ul>{% for p in report.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+      {% endif %}
+    </div>
+    {% endif %}
+    {# Typing searches (after a pause); results load under the box, each with its own Add, which
+       takes the quantity beside the box. Neither field is in a form, so Enter only searches. #}
+    <div class="bond-add">
+      <label for="bond-q">Add a bond</label>
+      <div class="bond-add-row">
+        <input type="search" id="bond-q" name="q" autocomplete="off" spellcheck="false"
+               placeholder="ISIN, MOEX code or name — e.g. RU000A0JXN21, ОФЗ 26238, Система 001P-06"
+               hx-get="/bonds/search?portfolio={{ portfolio.id }}"
+               hx-trigger="input changed delay:350ms, search"
+               hx-target="#bond-search-results" hx-swap="innerHTML" hx-sync="this:replace"
+               hx-indicator="#bond-search-busy">
+        <input type="text" id="bond-add-qty" name="qty" inputmode="decimal" autocomplete="off"
+               placeholder="Qty" aria-label="How many you hold" class="bond-qty">
+      </div>
+      <small id="bond-search-busy" class="htmx-indicator">searching MOEX…</small>
+      <div id="bond-search-results" aria-live="polite"></div>
+    </div>
+  </article>
+
+  <article>
+    {# a stable target: every edit re-renders inside it, one at a time (hx-sync), so a quick second
+       click lands on the list the first one left #}
+    <section id="bond-list">{% include "_bond_holdings.html" %}</section>
+  </article>
+
+  <article>
+    <details class="advanced"{% if error %} open{% endif %}>
+      <summary>Import a list from a file</summary>
+      <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/import"
+            enctype="multipart/form-data"
+            {% if rows %}onsubmit='return confirm({{ ("Replace the " ~ rows|length ~ " bond" ~ ("" if rows|length == 1 else "s") ~ " in " ~ portfolio.name ~ " with the bonds in this file?")|tojson }})'{% endif %}>
+        <input type="file" name="file" accept=".csv,.txt,text/csv,text/plain" required
+               aria-label="Portfolio file">
+        <small>Replaces what this portfolio holds with the file's bonds. UTF-8 or Windows-1251
+          (cbonds and Excel exports); bonds given only by name are looked up on MOEX.</small>
+        <button type="submit" class="secondary">Import and replace</button>
+      </form>
+      <ul class="bond-help">
+        <li><b>CSV with a header.</b> Columns: <code>code</code> (or isin / secid / ticker) —
+          ISIN or MOEX code; <code>name</code> — the bond name as MOEX and cbonds write it,
+          "issuer, series", e.g. <code>АФК Система, 001P-06</code> — if code is empty, the ISIN
+          is looked up by name (and maturity date, if given); <code>matdate</code> — maturity
+          date, helps find the right bond by name; <code>qty</code> — how many bonds you hold.
+          Only one of code or name is required; Russian column names (as in cbonds exports) work
+          too.</li>
+        <li><b>Plain text:</b> one bond per line, followed by the quantity. Anything after
+          <code>#</code> is a comment.</li>
+        <li>Both ISINs (<code>RU000A1038V6</code>) and MOEX codes (<code>SU26238RMFS4</code>)
+          work. The CSV download above is this format, so a portfolio can be edited in a
+          spreadsheet and imported back.</li>
+      </ul>
+    </details>
+  </article>
+  {% endif %}
+{% endblock %}

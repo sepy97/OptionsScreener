@@ -1,29 +1,30 @@
-{# One watchlist bond. Imported as a macro by the list; rendered alone (with `it`) after its
+{# One bond in a portfolio. Imported as a macro by the list; rendered alone (with `h`) after its
    quantity changes, which swaps just this row so the next field keeps the focus. #}
-{% macro row(it, today, added=false, error=none) %}
-{% set label = it.name or it.code %}
+{% macro row(h, portfolio, today, added=false, error=none) %}
+{% set label = h.name or h.code %}
 <tr{% if added %} class="bond-added"{% endif %}>
   <td class="card-head">{{ label }}
-    {% if it.name and it.code %}<small class="bond-isin">{{ it.code }}</small>{% endif %}
-    {% if not it.code %}<small class="bond-flag">no ISIN found by name — remove it and add it by search</small>
-    {% elif it.code == '-' %}<small class="bond-flag bond-flag--muted">matured; MOEX no longer lists it</small>{% endif %}
+    {% if h.name and h.code %}<small class="bond-isin">{{ h.code }}</small>{% endif %}
+    {% if not h.code %}<small class="bond-flag">no ISIN found by name — remove it and add it by search</small>
+    {% elif h.code == '-' %}<small class="bond-flag bond-flag--muted">matured; MOEX no longer lists it</small>{% endif %}
   </td>
-  <td data-label="Matures">{{ it.matdate or '—' }}{% if it.matdate and it.matdate < today %} <small>(matured)</small>{% endif %}</td>
+  <td data-label="Matures">{{ h.matdate or '—' }}{% if h.matdate and h.matdate < today %} <small>(matured)</small>{% endif %}</td>
   <td data-label="Qty" class="num">
-    <input type="text" inputmode="decimal" name="qty" value="{{ it.qty|bond_qty }}" placeholder="—"
+    <input type="text" inputmode="decimal" name="qty" value="{{ h.qty|bond_qty }}" placeholder="Qty"
            class="bond-qty" aria-label="How many {{ label }} you hold"
-           {% if error %}aria-invalid="true"{% endif %}
+           {% if error or h.qty is none %}aria-invalid="true"{% endif %}
            onkeydown="if (event.key === 'Enter') this.blur()"
-           hx-post="/bonds/watchlist/qty" hx-trigger="change" hx-vals='{{ {"key": it.key}|tojson }}'
+           hx-post="/bonds/portfolios/{{ portfolio.id }}/qty" hx-trigger="change"
+           hx-vals='{{ {"key": h.key}|tojson }}'
            hx-target="closest tr" hx-swap="outerHTML" hx-sync="#bond-list:queue all">
     {% if error %}<small class="bond-flag" role="alert">{{ error }}</small>{% endif %}
   </td>
   <td class="bond-remove">
     <button type="button" class="secondary outline" aria-label="Remove {{ label }}"
-            hx-post="/bonds/watchlist/remove" hx-vals='{{ {"key": it.key}|tojson }}'
+            hx-post="/bonds/portfolios/{{ portfolio.id }}/remove" hx-vals='{{ {"key": h.key}|tojson }}'
             hx-include="#bond-q" hx-target="#bond-list" hx-swap="innerHTML"
             hx-sync="#bond-list:queue all">Remove</button>
   </td>
 </tr>
 {% endmacro %}
-{% if it is defined %}{{ row(it, today, error=row_error) }}{% endif %}
+{% if h is defined %}{{ row(h, portfolio, today, error=row_error) }}{% endif %}

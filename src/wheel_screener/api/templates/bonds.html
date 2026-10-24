@@ -4,12 +4,25 @@
   <article>
     <header class="results-head">
       <h2>Bond calendar</h2>
-      <span class="fund-note">{{ count }} bond{{ '' if count == 1 else 's' }} in your watchlist</span>
-      <a href="/bonds/watchlist" role="button" class="secondary outline export-btn">Edit watchlist</a>
+      {% set shown = portfolios|selectattr('id', 'equalto', period.portfolio)|first if period.portfolio else none %}
+      <span class="fund-note">{{ count }} bond{{ '' if count == 1 else 's' }} in
+        {% if shown %}{{ shown.name }}{% else %}{{ portfolios|length }} portfolio{{ '' if portfolios|length == 1 else 's' }}{% endif %}</span>
+      <a href="/bonds/portfolios{{ '/' ~ shown.id if shown }}" role="button"
+         class="secondary outline export-btn">Portfolios</a>
     </header>
     <p class="bond-intro">Coupons, offers (the application window and the buyback), amortizations
-      and redemptions for the bonds in your watchlist — from the Moscow Exchange (MOEX ISS).</p>
+      and redemptions for the bonds in your portfolios — from the Moscow Exchange (MOEX ISS).</p>
     <form method="get" action="/bonds" class="bond-period">
+      {% if portfolios|length > 1 %}
+      <label>Portfolio
+        <select name="portfolio">
+          <option value="">All portfolios</option>
+          {% for p in portfolios %}
+          <option value="{{ p.id }}" {% if p.id == period.portfolio %}selected{% endif %}>{{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      {% endif %}
       <label>From
         <input type="date" name="from" value="{{ period.date_from or default_from }}">
       </label>

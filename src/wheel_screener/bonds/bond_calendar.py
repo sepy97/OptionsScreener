@@ -587,16 +587,11 @@ class CalendarRun:
     notes: list[str] = field(default_factory=list)  # skipped bonds and the like
 
 
-def build_calendar(items: list[dict], date_from: date | None, date_to: date | None, *,
-                   workers: int = 16, log: Callable[[str], None] = lambda msg: None) -> CalendarRun:
-    """The script's main(): events for the watchlist between date_from and date_to (None = no
-    limit on that side). Bonds without a code are looked up by name for this run only — saving
-    the found codes is the caller's business."""
-    problems: list[str] = []
-    notes: list[str] = []
-
-    # bonds that already matured (by the watchlist date) won't get into the period — don't spend
-    # requests on them
+def skipped(items: list[dict], date_from: date | None) -> tuple[list[dict], list[dict], list[str]]:
+    """The bonds a run leaves out, and the notes saying so: those that matured before the period
+    (by the watchlist date) won't get into it — don't spend requests on them — and matured ones
+    MOEX no longer lists."""
+    notes = []
     matured = [it for it in items if date_from and it["matdate"] and it["matdate"] < date_from]
     if matured:
         notes.append(f"Skipping {len(matured)} already matured bonds "
@@ -605,6 +600,16 @@ def build_calendar(items: list[dict], date_from: date | None, date_to: date | No
     if gone:
         notes.append(f"Skipping {len(gone)} matured bonds that MOEX no longer lists "
                      f'(code "{NOT_FOUND}" in the watchlist).')
+    return matured, gone, notes
+
+
+def build_calendar(items: list[dict], date_from: date | None, date_to: date | None, *,
+                   workers: int = 16, log: Callable[[str], None] = lambda msg: None) -> CalendarRun:
+    """The script's main(): events for the watchlist between date_from and date_to (None = no
+    limit on that side). Bonds without a code are looked up by name for this run only — saving
+    the found codes is the caller's business."""
+    problems: list[str] = []
+    matured, gone, notes = skipped(items, date_from)
 
     events = []
     # several bonds in parallel: one by one it takes minutes

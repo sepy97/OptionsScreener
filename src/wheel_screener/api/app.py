@@ -13,7 +13,6 @@ import base64
 import csv
 import io
 import logging
-import math
 import re
 import secrets
 import time
@@ -44,7 +43,14 @@ from pydantic import BaseModel, ValidationError
 from wheel_screener import __version__
 from wheel_screener.adapters.snaptrade.client import SnapTradeClient
 from wheel_screener.api.blocklist import BlocklistError, BlocklistStore
-from wheel_screener.api.bond_watchlists import MAX_BONDS, BondWatchlistStore
+from wheel_screener.api.bond_portfolios import (
+    MAX_BONDS,
+    MAX_PORTFOLIOS,
+    BondPortfolioStore,
+    Portfolio,
+    PortfolioError,
+    valid_qty,
+)
 from wheel_screener.api.deps import (
     current_session,
     get_bond_directory,
@@ -64,7 +70,8 @@ from wheel_screener.api.secretbox import SecretBox
 from wheel_screener.api.usercache import PerUserCache
 from wheel_screener.api.users import UserStore
 from wheel_screener.bonds import bond_calendar as bc
-from wheel_screener.bonds import watchlist as bw
+from wheel_screener.bonds import holdings as bh
+from wheel_screener.bonds.holdings import Holding
 from wheel_screener.bonds.search import BondDirectory, MoexUnavailable
 from wheel_screener.bonds.service import BondCalendarService
 from wheel_screener.composition import build_probes, build_service
@@ -191,11 +198,11 @@ async def lifespan(app: FastAPI):
     )
     app.state.job_runner = JobRunner(
         service, JobStore(settings.jobs_db_path), BlocklistStore(settings.jobs_db_path))
-    # the Bond calendar: builds cached across people; each person's watchlist in the jobs database
+    # the Bond calendar: builds cached across people; each person's portfolios in the jobs database
     app.state.bonds = BondCalendarService(
         cache_ttl_seconds=settings.bonds.cache_ttl_seconds, workers=settings.bonds.workers)
-    app.state.bond_watchlists = BondWatchlistStore(settings.jobs_db_path)
-    app.state.bond_directory = BondDirectory()  # MOEX's bond list, for the watchlist's Add
+    app.state.bond_portfolios = BondPortfolioStore(settings.jobs_db_path)
+    app.state.bond_directory = BondDirectory()  # MOEX's bond list, for a portfolio's Add
     # credentialed connections, built once: a probe owns an HTTP client
     app.state.probes = build_probes(settings, service)
     app.state.probe_cache = {}
@@ -238,7 +245,7 @@ app = FastAPI(title="Wheel Screener API", version=__version__, lifespan=lifespan
 # broker slot. Signing in is a passkey now, on routes outside this prefix, so linking a broker is
 # something only a signed-in person can start.
 #
-# The Bond calendar is per-person in the same way — each signed-in person has their own watchlist —
+# The Bond calendar is per-person in the same way — each signed-in person has their own portfolios —
 # so /bonds is gated by the same rule, also without exceptions. Its calendar feed (for calendar
 # apps, which cannot sign in) lives outside the prefix, at /feeds/bonds/<token>.
 _BONDS_PREFIX = "/bonds"
@@ -1531,7 +1538,7 @@ def admin_remove(request: Request, user_id: str = Form("")):
                     f"Could not remove {target.name}'s brokerage links at SnapTrade ({e}). "
                     "Nothing was changed — try again."))
     users.remove_user(target.id)
-    request.app.state.bond_watchlists.forget(target.id)
+    request.app.state.bond_portfolios.forget(target.id)
     _balances_cache(request).clear(target.id)
     _swap_cache(request).clear(target.id)
     return _people(request, notice=f"{target.name} no longer has access.{note}")
@@ -1896,10 +1903,11 @@ def cancel_run(request: Request, job_id: str, runner: JobRunner = Depends(get_jo
     )
 
 
-# --- The Bond calendar tab: each person's watchlist of Russian bonds, and its MOEX calendar -----
+# --- The Bond calendar tab: each person's portfolios of Russian bonds, and their MOEX calendar ---
 # Everything under /bonds is signed-in only (the session gate above) and acts on the signed-in
-# person's own watchlist — the user id comes from the session, never from the request. The one
-# way in without a session is the calendar feed, outside the prefix, which takes a token.
+# person's own portfolios — the user id comes from the session, never from the request, and a
+# portfolio id from the request reaches only a portfolio of theirs (else 404). The one way in
+# without a session is the calendar feed, outside the prefix, which takes a token.
 
 # the script's event types stay Russian (they are also the .ics IDs); each gets a style and an
 # English gloss for the tooltip. Offer dates are the ones that need action — the last day to
@@ -1916,16 +1924,19 @@ _BOND_EVENTS: dict[str, tuple[str, str]] = {
 templates.env.globals["bond_events"] = _BOND_EVENTS
 templates.env.filters["bond_fmt"] = bc.fmt
 templates.env.filters["bond_qty"] = bc.fmt_qty
+templates.env.filters["bond_holders"] = bh.holders_label
 
 _SOON_DAYS = 7  # events this close are highlighted
 
 
 @dataclass(frozen=True)
 class _BondPeriod:
-    """The script's period flags: a year ahead from today by default, --from/--to, or --all."""
+    """The script's period flags — a year ahead from today by default, --from/--to, or --all —
+    and which portfolio is shown ("" = all of them)."""
 
     date_from: date | None
     date_to: date | None
+    portfolio: str = ""
 
     @property
     def whole(self) -> bool:
@@ -1937,10 +1948,12 @@ class _BondPeriod:
 
     @property
     def query(self) -> str:
-        """The period as a query string, so downloads and refreshes match what's shown."""
-        if self.whole:
-            return "all=1"
-        return urlencode({"from": self.date_from.isoformat(), "to": self.date_to.isoformat()})
+        """The view as a query string, so downloads and refreshes match what's shown."""
+        params = ({"all": "1"} if self.whole else
+                  {"from": self.date_from.isoformat(), "to": self.date_to.isoformat()})
+        if self.portfolio:
+            params["portfolio"] = self.portfolio
+        return urlencode(params)
 
 
 def _iso_date(raw: str) -> date | None:
@@ -1950,12 +1963,12 @@ def _iso_date(raw: str) -> date | None:
         return None
 
 
-def _bond_period(whole: bool, raw_from: str, raw_to: str) -> _BondPeriod:
+def _bond_period(whole: bool, raw_from: str, raw_to: str, portfolio: str = "") -> _BondPeriod:
     if whole:
-        return _BondPeriod(None, None)
+        return _BondPeriod(None, None, portfolio)
     start = _iso_date(raw_from) or date.today()
     end = _iso_date(raw_to) or bc.one_year_after(start)
-    return _BondPeriod(min(start, end), max(start, end))
+    return _BondPeriod(min(start, end), max(start, end), portfolio)
 
 
 def _by_month(events: list[dict]) -> list[tuple[date, list[dict]]]:
@@ -1969,10 +1982,29 @@ def _by_month(events: list[dict]) -> list[tuple[date, list[dict]]]:
     return groups
 
 
-def _my_watchlist(request: Request) -> tuple[str, str]:
-    """(user id, watchlist text) of the signed-in person — the gate guarantees there is one."""
-    user_id = current_session(request).user.id
-    return user_id, request.app.state.bond_watchlists.text(user_id)
+def _bond_store(request: Request) -> BondPortfolioStore:
+    return request.app.state.bond_portfolios
+
+
+def _me(request: Request) -> str:
+    """The signed-in person's user id — the gate guarantees there is one."""
+    return current_session(request).user.id
+
+
+def _shown(holdings: list[Holding], portfolio: str) -> list[Holding]:
+    return [h for h in holdings if not portfolio or h.portfolio_id == portfolio]
+
+
+def _bond_calendar(bonds: BondCalendarService, holdings: list[Holding], shown: list[Holding],
+                   period: _BondPeriod, refresh: bool = False) -> tuple[bc.CalendarRun, float]:
+    """The calendar of the portfolios shown, with their quantities. The build is of all the
+    person's bonds (see ``bonds.holdings``), so switching portfolios reuses it."""
+    run, age = bonds.calendar(bh.bonds_text(holdings), period.date_from, period.date_to,
+                              refresh=refresh)
+    labels = {f"{h.name or h.code}:" for h in shown}
+    problems = [p for p in run.problems if any(p.startswith(lb) for lb in labels)]
+    return bc.CalendarRun(bh.shape(run.events, shown), problems,
+                          bh.skip_notes(shown, period.date_from)), age
 
 
 def _decode_upload(raw: bytes) -> str:
@@ -1983,15 +2015,8 @@ def _decode_upload(raw: bytes) -> str:
         return raw.decode("cp1251", errors="replace")
 
 
-def _bond_events_context(bonds: BondCalendarService, text: str, period: _BondPeriod,
-                         refresh: bool = False) -> dict:
-    run, age = bonds.calendar(text, period.date_from, period.date_to, refresh=refresh)
-    return {
-        "period": period, "events": run.events, "months": _by_month(run.events),
-        "problems": run.problems, "notes": run.notes, "cash": bc.monthly_cash(run.events),
-        "has_qty": any(e["qty"] for e in run.events), "age": _age_label(age),
-        "today": date.today(), "soon_days": _SOON_DAYS,
-    }
+def _known_portfolio(raw: str, portfolios: list[Portfolio]) -> str:
+    return raw if any(p.id == raw for p in portfolios) else ""
 
 
 @app.get("/bonds")
@@ -2000,15 +2025,20 @@ def bonds_page(
     whole: bool = Query(False, alias="all"),
     raw_from: str = Query("", alias="from"),
     raw_to: str = Query("", alias="to"),
+    portfolio: str = "",
 ):
-    """The Bond calendar tab: period controls; the calendar itself loads via GET /bonds/events."""
-    _, text = _my_watchlist(request)
+    """The Bond calendar tab: which portfolio and period; the calendar loads via /bonds/events."""
+    user_id = _me(request)
+    store = _bond_store(request)
+    portfolios = store.portfolios(user_id)
+    period = _bond_period(whole, raw_from, raw_to, _known_portfolio(portfolio, portfolios))
+    shown = _shown(store.holdings(user_id), period.portfolio)
     today = date.today()
     return templates.TemplateResponse(
         request, "bonds.html",
         {
-            "active_tab": "bonds", "period": _bond_period(whole, raw_from, raw_to),
-            "count": len(bc.parse_watchlist(text)), "default_from": today,
+            "active_tab": "bonds", "period": period, "portfolios": portfolios,
+            "count": len({h.key for h in shown}), "default_from": today,
             "default_to": bc.one_year_after(today),
         },
     )
@@ -2020,18 +2050,40 @@ def bonds_events(
     whole: bool = Query(False, alias="all"),
     raw_from: str = Query("", alias="from"),
     raw_to: str = Query("", alias="to"),
+    portfolio: str = "",
     refresh: bool = False,
     bonds: BondCalendarService = Depends(get_bonds),
 ):
     """The calendar fragment: events grouped by month + expected payments (cached builds)."""
-    period = _bond_period(whole, raw_from, raw_to)
-    user_id, text = _my_watchlist(request)
-    if not bc.parse_watchlist(text):
+    user_id = _me(request)
+    store = _bond_store(request)
+    period = _bond_period(whole, raw_from, raw_to, portfolio)
+    holdings = store.holdings(user_id)
+    shown = _shown(holdings, period.portfolio)
+    if not shown:
         return templates.TemplateResponse(
-            request, "_bond_events.html", {"empty_watchlist": True, "period": period})
-    context = _bond_events_context(bonds, text, period, refresh)
-    context["has_feed"] = request.app.state.bond_watchlists.has_feed(user_id)
-    return templates.TemplateResponse(request, "_bond_events.html", context)
+            request, "_bond_events.html", {"empty": True, "period": period})
+    run, age = _bond_calendar(bonds, holdings, shown, period, refresh)
+    return templates.TemplateResponse(request, "_bond_events.html", {
+        "period": period, "events": run.events, "months": _by_month(run.events),
+        "problems": run.problems, "notes": run.notes, "cash": bc.monthly_cash(run.events),
+        "has_qty": any(e["qty"] for e in run.events), "age": _age_label(age),
+        "today": date.today(), "soon_days": _SOON_DAYS,
+        "show_holders": len({h.portfolio_id for h in shown}) > 1,
+        "has_feed": store.has_feed(user_id),
+    })
+
+
+def _bond_events_for(request: Request, bonds: BondCalendarService, user_id: str,
+                     period: _BondPeriod) -> list[dict]:
+    """The events behind a download: with the portfolios in the note when there are several,
+    since the script's CSV and .ics have no column for them."""
+    holdings = _bond_store(request).holdings(user_id)
+    shown = _shown(holdings, period.portfolio)
+    if not shown:
+        return []
+    events = _bond_calendar(bonds, holdings, shown, period)[0].events
+    return bh.with_holders_note(events) if len({h.portfolio_id for h in shown}) > 1 else events
 
 
 @app.get("/bonds/export.csv")
@@ -2040,25 +2092,23 @@ def bonds_export(
     whole: bool = Query(False, alias="all"),
     raw_from: str = Query("", alias="from"),
     raw_to: str = Query("", alias="to"),
+    portfolio: str = "",
     sep: str = ",",
     bonds: BondCalendarService = Depends(get_bonds),
 ) -> Response:
     """The script's CSV table; ``sep=;`` gives decimal commas for Excel in a Russian locale."""
-    period = _bond_period(whole, raw_from, raw_to)
-    _, text = _my_watchlist(request)
-    run, _ = bonds.calendar(text, period.date_from, period.date_to)
+    period = _bond_period(whole, raw_from, raw_to, portfolio)
+    events = _bond_events_for(request, bonds, _me(request), period)
     return Response(
-        content=bc.csv_text(run.events, ";" if sep == ";" else ",").encode("utf-8-sig"),
+        content=bc.csv_text(events, ";" if sep == ";" else ",").encode("utf-8-sig"),
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="bond_calendar.csv"'},
     )
 
 
-def _bond_ics(request: Request, bonds: BondCalendarService, text: str,
-              period: _BondPeriod) -> Response:
-    run, _ = bonds.calendar(text, period.date_from, period.date_to)
+def _bond_ics(request: Request, events: list[dict]) -> Response:
     return Response(
-        content=bc.ics_calendar(run.events, request.app.state.settings.bonds.remind_days),
+        content=bc.ics_calendar(events, request.app.state.settings.bonds.remind_days),
         media_type="text/calendar; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="bonds.ics"'},
     )
@@ -2070,18 +2120,18 @@ def bonds_ics(
     whole: bool = Query(False, alias="all"),
     raw_from: str = Query("", alias="from"),
     raw_to: str = Query("", alias="to"),
+    portfolio: str = "",
     bonds: BondCalendarService = Depends(get_bonds),
 ) -> Response:
-    """The script's .ics, for the period shown — to import once."""
-    _, text = _my_watchlist(request)
-    return _bond_ics(request, bonds, text, _bond_period(whole, raw_from, raw_to))
+    """The script's .ics, for the period and portfolio shown — to import once."""
+    period = _bond_period(whole, raw_from, raw_to, portfolio)
+    return _bond_ics(request, _bond_events_for(request, bonds, _me(request), period))
 
 
 @app.post("/bonds/feed")
 def bonds_feed_new(request: Request):
     """Make this person's calendar-feed link — shown once, here; the previous one stops working."""
-    user_id = current_session(request).user.id
-    token = request.app.state.bond_watchlists.new_feed(user_id)
+    token = _bond_store(request).new_feed(_me(request))
     origin = request.app.state.settings.passkeys.origin.rstrip("/")
     link = f"{origin}/feeds/bonds/{token}.ics"
     return templates.TemplateResponse(
@@ -2094,25 +2144,54 @@ def bonds_feed_new(request: Request):
 def bonds_feed(token: str, request: Request,
                bonds: BondCalendarService = Depends(get_bonds)) -> Response:
     """A person's calendar for calendar apps, which cannot sign in: the token stands in for the
-    session. A rolling year from today, so a subscribed calendar keeps itself current."""
-    text = request.app.state.bond_watchlists.text_for_feed(token)
-    if text is None:
+    session. Every portfolio, a rolling year from today, so a subscribed calendar keeps itself
+    current."""
+    user_id = _bond_store(request).user_for_feed(token)
+    if user_id is None:
         raise HTTPException(status_code=404, detail="Not Found")
-    return _bond_ics(request, bonds, text, _bond_period(False, "", ""))
+    events = _bond_events_for(request, bonds, user_id, _bond_period(False, "", ""))
+    return _bond_ics(request, events)
 
+
+# Portfolios: each a page of its bonds — Add by search (with how many), quantities, Remove/Undo,
+# and Import from a file. Edits answer with the list (inside the page's stable #bond-list).
 
 _SEARCH_SHOWN = 20  # results listed under the Add box; past that, a narrower query is asked for
 _SEARCH_MAX_CHARS = 100
 _MOEX_DOWN = "MOEX did not answer — try again in a moment."
+_NEED_QTY = "Enter how many you hold (a number above 0), then Add."
 
 
-def _watchlist_context(text: str, **extra) -> dict:
-    return {"active_tab": "bonds", "rows": bw.rows(text), "today": date.today(), **extra}
+def _my_portfolio(request: Request, portfolio_id: str) -> Portfolio:
+    found = _bond_store(request).portfolio(_me(request), portfolio_id)
+    if found is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return found
 
 
-def _bond_search_context(directory: BondDirectory, q: str, text: str) -> dict:
+def _rows(holdings: list[Holding]) -> list[Holding]:
+    return sorted(holdings, key=lambda h: ((h.name or h.code).lower(), h.code))
+
+
+def _portfolio_page(request: Request, portfolio: Portfolio | None, status_code: int = 200,
+                    **extra):
+    user_id = _me(request)
+    store = _bond_store(request)
+    portfolios = store.portfolios(user_id)
+    if portfolio is not None:  # counted afresh: an import just changed it
+        portfolio = next((p for p in portfolios if p.id == portfolio.id), portfolio)
+    rows = _rows(store.holdings(user_id, portfolio.id)) if portfolio else []
+    return templates.TemplateResponse(request, "bonds_portfolio.html", {
+        "active_tab": "bonds", "portfolio": portfolio, "portfolios": portfolios, "rows": rows,
+        "today": date.today(), "max_portfolios": MAX_PORTFOLIOS, **extra,
+    }, status_code=status_code)
+
+
+def _bond_search_context(directory: BondDirectory, q: str, held: list[Holding],
+                         portfolio_id: str) -> dict:
     q = q.strip()[:_SEARCH_MAX_CHARS]
-    context = {"q": q, "results": [], "more": 0, "error": None, "in_list": bw.codes(text)}
+    context = {"q": q, "results": [], "more": 0, "error": None, "portfolio_id": portfolio_id,
+               "in_list": {h.code for h in held if h.code}}
     if q:
         try:
             found = directory.search(q)
@@ -2124,75 +2203,125 @@ def _bond_search_context(directory: BondDirectory, q: str, text: str) -> dict:
     return context
 
 
-def _bond_list(request: Request, text: str, directory: BondDirectory, q: str, **extra):
-    """The list after an edit — and, while a search is open, its results again, so their
-    "in your watchlist" marks follow the edit."""
-    context = _watchlist_context(text, **extra)
+def _holdings_list(request: Request, portfolio: Portfolio, directory: BondDirectory, q: str,
+                   **extra):
+    """The portfolio's list after an edit — and, while a search is open, its results again, so
+    their "in this portfolio" marks follow the edit."""
+    held = _bond_store(request).holdings(_me(request), portfolio.id)
+    context = {"portfolio": portfolio, "rows": _rows(held), "today": date.today(),
+               "fragment": True, **extra}
     if q.strip():
-        context["search"] = _bond_search_context(directory, q, text)
-    return templates.TemplateResponse(request, "_bond_watchlist.html", context)
+        context["search"] = _bond_search_context(directory, q, held, portfolio.id)
+    return templates.TemplateResponse(request, "_bond_holdings.html", context)
+
+
+def _quantity(raw: str) -> float | None:
+    """A quantity as typed ("2,5" too), or None if it isn't one."""
+    amount = bc.to_number(raw.strip()) if raw.strip() else None
+    return amount if valid_qty(amount) else None
 
 
 @app.get("/bonds/watchlist")
-def bonds_watchlist_page(request: Request):
-    """Your watchlist, a bond a line: add one by search, set how many you hold, remove one."""
-    _, text = _my_watchlist(request)
-    return templates.TemplateResponse(request, "bonds_edit.html", _watchlist_context(text))
+def bonds_watchlist_moved():
+    """Where the single watchlist was, before portfolios."""
+    return RedirectResponse("/bonds/portfolios", status_code=303)
+
+
+@app.get("/bonds/portfolios")
+def bonds_portfolios(request: Request):
+    """Your first portfolio — or, with none yet, a page to name one."""
+    portfolios = _bond_store(request).portfolios(_me(request))
+    if portfolios:
+        return RedirectResponse(f"/bonds/portfolios/{portfolios[0].id}", status_code=303)
+    return _portfolio_page(request, None)
+
+
+@app.post("/bonds/portfolios")
+def bonds_portfolio_create(request: Request, name: str = Form("")):
+    """A new, empty portfolio."""
+    store = _bond_store(request)
+    try:
+        created = store.create(_me(request), name)
+    except PortfolioError as e:
+        portfolios = store.portfolios(_me(request))
+        return _portfolio_page(request, portfolios[0] if portfolios else None, 422,
+                               create_error=str(e), typed_name=name)
+    return RedirectResponse(f"/bonds/portfolios/{created.id}", status_code=303)
+
+
+@app.get("/bonds/portfolios/{portfolio_id}")
+def bonds_portfolio_page(portfolio_id: str, request: Request):
+    """A portfolio's bonds, a bond a row: add one by search, set how many, remove one."""
+    return _portfolio_page(request, _my_portfolio(request, portfolio_id))
+
+
+@app.post("/bonds/portfolios/{portfolio_id}/rename")
+def bonds_portfolio_rename(portfolio_id: str, request: Request, name: str = Form("")):
+    portfolio = _my_portfolio(request, portfolio_id)
+    try:
+        _bond_store(request).rename(_me(request), portfolio.id, name)
+    except PortfolioError as e:
+        return _portfolio_page(request, portfolio, 422, rename_error=str(e), typed_name=name)
+    return RedirectResponse(f"/bonds/portfolios/{portfolio.id}", status_code=303)
+
+
+@app.post("/bonds/portfolios/{portfolio_id}/delete")
+def bonds_portfolio_delete(portfolio_id: str, request: Request):
+    """The portfolio and every bond in it (the page asks first)."""
+    portfolio = _my_portfolio(request, portfolio_id)
+    _bond_store(request).delete(_me(request), portfolio.id)
+    return RedirectResponse("/bonds/portfolios", status_code=303)
 
 
 @app.get("/bonds/search")
-def bonds_search(request: Request, q: str = "",
+def bonds_search(request: Request, q: str = "", portfolio: str = "",
                  directory: BondDirectory = Depends(get_bond_directory)):
     """Bonds to add, by ISIN, MOEX code or name — the results under the Add box."""
-    _, text = _my_watchlist(request)
+    found = _my_portfolio(request, portfolio)
+    held = _bond_store(request).holdings(_me(request), found.id)
     return templates.TemplateResponse(
-        request, "_bond_search.html", {"s": _bond_search_context(directory, q, text)})
+        request, "_bond_search.html", {"s": _bond_search_context(directory, q, held, found.id)})
 
 
-@app.post("/bonds/watchlist/add")
-def bonds_watchlist_add(request: Request, code: str = Form(""), q: str = Form(""),
-                        directory: BondDirectory = Depends(get_bond_directory)):
-    """Add a bond by its code, named and dated as MOEX has it."""
-    user_id, text = _my_watchlist(request)
+@app.post("/bonds/portfolios/{portfolio_id}/add")
+def bonds_holding_add(portfolio_id: str, request: Request, code: str = Form(""),
+                      qty: str = Form(""), q: str = Form(""),
+                      directory: BondDirectory = Depends(get_bond_directory)):
+    """Hold a bond, by its code, named and dated as MOEX has it."""
+    portfolio = _my_portfolio(request, portfolio_id)
+    amount = _quantity(qty)
+    if amount is None:
+        return _holdings_list(request, portfolio, directory, q, error=_NEED_QTY)
     try:
         bond = directory.lookup(code[:20])
     except MoexUnavailable:
-        return _bond_list(request, text, directory, q, error=_MOEX_DOWN)
+        return _holdings_list(request, portfolio, directory, q, error=_MOEX_DOWN)
     if bond is None:
-        return _bond_list(request, text, directory, q,
-                          error=f"MOEX does not know the code {code.strip().upper()[:20]}.")
-    item = {"code": bond.code, "name": bond.name, "matdate": bond.matdate, "qty": None}
-    store = request.app.state.bond_watchlists
+        return _holdings_list(request, portfolio, directory, q,
+                              error=f"MOEX does not know the code {code.strip().upper()[:20]}.")
+    item = {"code": bond.code, "name": bond.name, "matdate": bond.matdate, "qty": amount}
     try:
-        text = store.edit(user_id, lambda t: bw.add(t, item, aliases=(bond.secid, bond.isin),
-                                                    limit=MAX_BONDS))
-    except bw.WatchlistError as e:
-        return _bond_list(request, store.text(user_id), directory, q, error=str(e))
-    return _bond_list(request, text, directory, q, added=bc.item_key(bond.code, bond.name))
+        added = _bond_store(request).add(_me(request), portfolio.id, item,
+                                         aliases=(bond.secid, bond.isin))
+    except PortfolioError as e:
+        return _holdings_list(request, portfolio, directory, q, error=str(e))
+    return _holdings_list(request, portfolio, directory, q, added=added.key)
 
 
-@app.post("/bonds/watchlist/remove")
-def bonds_watchlist_remove(request: Request, key: str = Form(""), q: str = Form(""),
-                           directory: BondDirectory = Depends(get_bond_directory)):
-    """Remove a bond; the list then offers to undo it."""
-    user_id = current_session(request).user.id
-    store = request.app.state.bond_watchlists
-    removed: list[dict] = []
-
-    def change(text: str) -> str:
-        text, item = bw.remove(text, key)
-        removed.append(item)
-        return text
-
-    try:
-        text = store.edit(user_id, change)
-    except bw.WatchlistError:  # already gone — a second click, or another tab
-        text = store.text(user_id)
-    return _bond_list(request, text, directory, q, removed=removed[0] if removed else None)
+@app.post("/bonds/portfolios/{portfolio_id}/remove")
+def bonds_holding_remove(portfolio_id: str, request: Request, key: str = Form(""),
+                         q: str = Form(""),
+                         directory: BondDirectory = Depends(get_bond_directory)):
+    """Stop holding a bond; the list then offers to undo it. Already gone (a second click,
+    another tab) just shows the list."""
+    portfolio = _my_portfolio(request, portfolio_id)
+    removed = _bond_store(request).remove(_me(request), portfolio.id, key)
+    return _holdings_list(request, portfolio, directory, q, removed=removed)
 
 
-@app.post("/bonds/watchlist/restore")
-def bonds_watchlist_restore(
+@app.post("/bonds/portfolios/{portfolio_id}/restore")
+def bonds_holding_restore(
+    portfolio_id: str,
     request: Request,
     code: str = Form(""),
     name: str = Form(""),
@@ -2202,66 +2331,64 @@ def bonds_watchlist_restore(
     directory: BondDirectory = Depends(get_bond_directory),
 ):
     """Undo a removal: the bond comes back as it was, quantity and all."""
-    user_id = current_session(request).user.id
-    store = request.app.state.bond_watchlists
-    amount = bc.to_number(qty)
-    item = bw.clean({
-        "code": code[:20], "name": name, "matdate": bc.parse_date(matdate),
-        "qty": amount if amount is not None and math.isfinite(amount) and amount >= 0 else None,
-    })
-    if not item["code"] and not item["name"]:
-        return _bond_list(request, store.text(user_id), directory, q)
+    portfolio = _my_portfolio(request, portfolio_id)
+    item = {"code": code[:20], "name": name, "matdate": bc.parse_date(matdate),
+            "qty": _quantity(qty)}
+    if not item["code"].strip() and not bh.clean_name(name):
+        return _holdings_list(request, portfolio, directory, q)
     try:
-        text = store.edit(user_id, lambda t: bw.add(t, item, limit=MAX_BONDS))
-    except bw.WatchlistError as e:
-        return _bond_list(request, store.text(user_id), directory, q, error=str(e))
-    return _bond_list(request, text, directory, q, added=bc.item_key(item["code"], item["name"]))
+        restored = _bond_store(request).add(_me(request), portfolio.id, item)
+    except PortfolioError as e:
+        return _holdings_list(request, portfolio, directory, q, error=str(e))
+    return _holdings_list(request, portfolio, directory, q, added=restored.key)
 
 
-@app.post("/bonds/watchlist/qty")
-def bonds_watchlist_qty(request: Request, key: str = Form(""), qty: str = Form("")):
-    """How many of a bond you hold — for the calendar's totals and payments by month. Answers with
-    the bond's row; an empty answer when the bond is gone, which removes the row."""
-    user_id = current_session(request).user.id
-    store = request.app.state.bond_watchlists
-    raw = qty.strip()
-    amount = bc.to_number(raw) if raw else None
+@app.post("/bonds/portfolios/{portfolio_id}/qty")
+def bonds_holding_qty(portfolio_id: str, request: Request, key: str = Form(""),
+                      qty: str = Form("")):
+    """How many of a bond this portfolio holds. Answers with the bond's row — or nothing when
+    the bond is gone, which removes the row."""
+    portfolio = _my_portfolio(request, portfolio_id)
+    store = _bond_store(request)
+    amount = _quantity(qty)
     error = None
-    if raw and amount is None:
-        error = "not a number"
+    if amount is None:
+        error = "a quantity is a number above 0"
     else:
-        try:
-            store.edit(user_id, lambda t: bw.set_qty(t, key, amount)[0])
-        except bw.WatchlistError as e:
-            error = str(e)
-    row = next((it for it in bw.rows(store.text(user_id)) if it["key"] == key), None)
+        store.set_qty(_me(request), portfolio.id, key, amount)
+    row = next((h for h in store.holdings(_me(request), portfolio.id) if h.key == key), None)
     if row is None:
         return HTMLResponse("")
-    return templates.TemplateResponse(
-        request, "_bond_row.html", {"it": row, "today": date.today(), "row_error": error})
+    return templates.TemplateResponse(request, "_bond_row.html", {
+        "h": row, "portfolio": portfolio, "today": date.today(), "row_error": error})
 
 
-@app.get("/bonds/watchlist.csv")
-def bonds_watchlist_csv(request: Request) -> Response:
-    """Your watchlist as the script's CSV — to keep, or to edit and import back."""
-    _, text = _my_watchlist(request)
+@app.get("/bonds/portfolios/{portfolio_id}/holdings.csv")
+def bonds_holdings_csv(portfolio_id: str, request: Request) -> Response:
+    """A portfolio as the script's watchlist CSV — to keep, or to edit and import back."""
+    portfolio = _my_portfolio(request, portfolio_id)
+    text = bh.as_text(_bond_store(request).holdings(_me(request), portfolio.id))
+    filename = quote(f"{portfolio.name}.csv")
     return Response(
-        content=bc.format_watchlist(bc.parse_watchlist(text)).encode("utf-8-sig"),
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": 'attachment; filename="watchlist.csv"'},
+        content=text.encode("utf-8-sig"), media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition":
+                 f"attachment; filename=\"portfolio.csv\"; filename*=UTF-8''{filename}"},
     )
 
 
-@app.post("/bonds/watchlist")
-def bonds_watchlist_save(
+@app.post("/bonds/portfolios/{portfolio_id}/import")
+def bonds_portfolio_import(
+    portfolio_id: str,
     request: Request,
     text: str = Form(""),
     file: UploadFile | None = File(None),
     bonds: BondCalendarService = Depends(get_bonds),
 ):
-    """Import a watchlist — a file (or pasted text) in any format the script reads — in place of
-    the one saved, looking ISINs up by name; the page then shows what matched."""
-    user_id, previous = _my_watchlist(request)
+    """A list — a file (or pasted text) in any format the script reads — in place of the bonds
+    this portfolio holds, looking ISINs up by name; the page then shows what matched."""
+    portfolio = _my_portfolio(request, portfolio_id)
+    store = _bond_store(request)
+    previous = bh.as_text(store.holdings(_me(request), portfolio.id))
     if file is not None and file.filename:
         text = _decode_upload(file.file.read())
     items = bc.parse_watchlist(text)
@@ -2269,13 +2396,12 @@ def bonds_watchlist_save(
     if not items:
         error = "No bonds found in that file — nothing changed."
     elif len(items) > MAX_BONDS:
-        error = f"A watchlist holds at most {MAX_BONDS} bonds — nothing changed."
+        error = f"A portfolio holds at most {MAX_BONDS} bonds — nothing changed."
     if error is not None:
-        return templates.TemplateResponse(
-            request, "bonds_edit.html", _watchlist_context(previous, error=error),
-            status_code=422,
-        )
+        return _portfolio_page(request, portfolio, 422, error=error)
     resolved, report = bonds.resolve(text, previous)
-    request.app.state.bond_watchlists.save(user_id, resolved)
-    return templates.TemplateResponse(
-        request, "bonds_edit.html", _watchlist_context(resolved, report=report))
+    try:
+        store.replace(_me(request), portfolio.id, bc.parse_watchlist(resolved))
+    except PortfolioError as e:
+        return _portfolio_page(request, portfolio, 422, error=str(e))
+    return _portfolio_page(request, portfolio, report=report)

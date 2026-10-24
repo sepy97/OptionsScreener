@@ -68,8 +68,11 @@ def is_expensive(method: str, path: str) -> bool:
         return True  # an invite token is a bearer credential — don't let anyone guess at them fast
     if path.startswith("/feeds/bonds/"):
         return True  # a bearer link too — and behind it, a MOEX build when the cache is cold
-    if method == "POST" and path in ("/bonds/watchlist", "/bonds/watchlist/add", "/bonds/feed"):
-        return True  # importing and adding look bonds up on MOEX; a feed link is a new credential
+    if method == "POST" and path == "/bonds/feed":
+        return True  # a feed link is a new credential
+    if method == "POST" and path.startswith("/bonds/portfolios/") and path.endswith(
+            ("/add", "/import")):
+        return True  # adding and importing look bonds up on MOEX
     # a fresh search behind a download; the bond calendar (a MOEX build when the cache is cold)
     return method == "GET" and path in (
         "/search/export.csv", "/bonds/events", "/bonds/export.csv", "/bonds/calendar.ics"

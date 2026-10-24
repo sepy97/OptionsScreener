@@ -1,8 +1,9 @@
 {% import "_icons.html" as icon %}
-{% if empty_watchlist %}
+{% if empty %}
 <article>
-  <p class="empty-state">Your watchlist is empty — <a href="/bonds/watchlist">add bonds</a> by
-     ISIN, MOEX code or name.</p>
+  <p class="empty-state">{% if period.portfolio %}This portfolio holds no bonds yet{% else %}No
+     bonds in your portfolios yet{% endif %} — <a href="/bonds/portfolios{{ '/' ~ period.portfolio if period.portfolio }}">add
+     bonds</a> by ISIN, MOEX code or name.</p>
 </article>
 {% else %}
 {% set n = events|length %}
@@ -59,7 +60,8 @@
         <tr{% if 0 <= days <= soon_days %} class="soon"{% endif %}>
           <td>{{ e.date.isoformat() }} <small>{{ e.date.strftime("%a") }}</small></td>
           <td><span class="ev {{ style }}" title="{{ gloss }}">{{ e.kind }}</span></td>
-          <td>{{ e.name }}<br><small class="bond-isin" title="MOEX code {{ e.secid }}">{{ e.isin }}</small></td>
+          <td>{{ e.name }}<br><small class="bond-isin" title="MOEX code {{ e.secid }}">{{ e.isin }}</small>
+            {% if show_holders %}<small class="bond-holders" title="the portfolios holding it, and how many each">{{ e|bond_holders }}</small>{% endif %}</td>
           <td class="num">{% if e.amount is not none %}{{ e.amount|bond_fmt }} {{ e.cur }}{% endif %}</td>
           <td class="num">{% if e.rate is not none %}{{ e.rate|bond_fmt }}%{% endif %}</td>
           {% if has_qty %}

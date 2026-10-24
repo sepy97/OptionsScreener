@@ -16,11 +16,11 @@
         {%- if not b.traded %} · not traded{% endif %}</small>
     </span>
     {% if b.known_as(s.in_list) %}
-    <span class="bond-in-list">{{ icon.check() }} in your watchlist</span>
+    <span class="bond-in-list">{{ icon.check() }} in this portfolio</span>
     {% else %}
     <button type="button" class="secondary" aria-label="Add {{ b.name }}"
-            hx-post="/bonds/watchlist/add" hx-vals='{{ {"code": b.code}|tojson }}'
-            hx-include="#bond-q" hx-target="#bond-list" hx-swap="innerHTML"
+            hx-post="/bonds/portfolios/{{ s.portfolio_id }}/add" hx-vals='{{ {"code": b.code}|tojson }}'
+            hx-include="#bond-q, #bond-add-qty" hx-target="#bond-list" hx-swap="innerHTML"
             hx-sync="#bond-list:queue all">Add</button>
     {% endif %}
   </li>

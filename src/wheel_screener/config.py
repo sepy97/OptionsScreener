@@ -219,8 +219,8 @@ class SwapSettings(BaseModel):
 
 
 class BondSettings(BaseModel):
-    """The Bond calendar tab — an event calendar for a person's watchlist of Russian bonds
-    (MOEX ISS: open, no key). Each signed-in person has their own watchlist, kept in the jobs
+    """The Bond calendar tab — an event calendar for a person's portfolios of Russian bonds
+    (MOEX ISS: open, no key). Each signed-in person has their own portfolios, kept in the jobs
     database."""
 
     cache_ttl_seconds: int = 3 * 3600  # schedules change rarely; coupon amounts get announced

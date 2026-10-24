@@ -227,13 +227,18 @@ mapping fix in `adapters/snaptrade/account.py`, whose notes say what each field 
 
 ## Bond calendar tab
 
-Nothing to configure: it reads the open MOEX ISS API (no key), and each person's watchlist lives in
-the jobs database (`/data/jobs.sqlite`, so the nightly backup carries it). The droplet must reach
+Nothing to configure: it reads the open MOEX ISS API (no key), and each person's portfolios live
+in the jobs database (`/data/jobs.sqlite`, so the nightly backup carries them). The droplet must reach
 `iss.moex.com` — check once with
 `docker compose exec -T app python -c "import urllib.request; print(urllib.request.urlopen('https://iss.moex.com/iss/index.json').status)"`.
 Calendar-feed links are built from `PASSKEYS__ORIGIN`, like invite links. The watchlist's Add
 search loads MOEX's list of traded bonds on its first use after a restart (~2 s), then keeps it in
 memory for six hours.
+
+Before v3.12 each person had one watchlist (table `bond_watchlists`). The first start of v3.12
+moves each into a portfolio named "Main", and calendar-feed links keep working; the old rows are
+left in place, marked `moved_at`, so rolling back to v3.11 finds every watchlist as it was (edits
+made in v3.12 aren't carried back).
 
 ## Diagnosing a broken data connection
 
