@@ -15,6 +15,7 @@ from wheel_screener.adapters.snaptrade.client import SnapTradeUser
 from wheel_screener.api.jobs import JobRunner
 from wheel_screener.api.secretbox import SecretBoxError
 from wheel_screener.api.users import Session
+from wheel_screener.bonds.search import BondDirectory
 from wheel_screener.bonds.service import BondCalendarService
 from wheel_screener.config import Settings
 from wheel_screener.core.portfolio import PortfolioService
@@ -35,6 +36,10 @@ def get_job_runner(request: Request) -> JobRunner:
 
 def get_bonds(request: Request) -> BondCalendarService:
     return request.app.state.bonds
+
+
+def get_bond_directory(request: Request) -> BondDirectory:
+    return request.app.state.bond_directory
 
 
 def current_session(request: Request) -> Session | None:

@@ -14,6 +14,7 @@ import hashlib
 import os
 import secrets
 import sqlite3
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -69,6 +70,35 @@ class BondWatchlistStore:
                 )
         finally:
             conn.close()
+
+    def edit(self, user_id: str, change: Callable[[str], str]) -> str:
+        """Change this person's watchlist in one transaction: ``change`` gets the saved text and
+        returns the new one, which is saved and returned. Two edits at once (a quick second click)
+        each see the other's result instead of overwriting it. If ``change`` raises, nothing is
+        saved. It runs while the database is held, so it must not wait on MOEX."""
+        now = datetime.now(tz=UTC).isoformat()
+        conn = self._connect()
+        conn.isolation_level = None  # the transaction below is ours to open and close
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                row = conn.execute(
+                    "SELECT text FROM bond_watchlists WHERE user_id = ?", (user_id,)
+                ).fetchone()
+                text = change(row[0] if row else "")
+                conn.execute(
+                    "INSERT INTO bond_watchlists (user_id, text, updated_at) VALUES (?, ?, ?)"
+                    " ON CONFLICT(user_id) DO UPDATE SET text = excluded.text,"
+                    " updated_at = excluded.updated_at",
+                    (user_id, text, now),
+                )
+            except BaseException:
+                conn.execute("ROLLBACK")
+                raise
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
+        return text
 
     def new_feed(self, user_id: str) -> str:
         """A fresh calendar-feed token for this person; the previous one stops working."""

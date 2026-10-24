@@ -123,6 +123,11 @@ def currency_of(row: dict) -> str:
 
 # ───────────────────────── watchlist ─────────────────────────
 
+def item_key(code: str, name: str) -> str:
+    """What tells one watchlist bond from another: its code, or its name while it has none."""
+    return code if code and code != NOT_FOUND else name.lower()
+
+
 def parse_watchlist(text: str) -> list[dict]:
     """Returns a list of {code, name, matdate, qty}. code may be empty if only
     a name is given — then the ISIN is looked up by name."""
@@ -161,7 +166,7 @@ def parse_watchlist(text: str) -> list[dict]:
         if not code and not name:
             continue
         qty = to_number(cell(row, qty_col))
-        key = code if code and code != NOT_FOUND else name.lower()
+        key = item_key(code, name)
         if key in items:                 # the same bond on several lines — add up
             old = items[key]
             if qty is not None:

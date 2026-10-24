@@ -231,7 +231,9 @@ Nothing to configure: it reads the open MOEX ISS API (no key), and each person's
 the jobs database (`/data/jobs.sqlite`, so the nightly backup carries it). The droplet must reach
 `iss.moex.com` — check once with
 `docker compose exec -T app python -c "import urllib.request; print(urllib.request.urlopen('https://iss.moex.com/iss/index.json').status)"`.
-Calendar-feed links are built from `PASSKEYS__ORIGIN`, like invite links.
+Calendar-feed links are built from `PASSKEYS__ORIGIN`, like invite links. The watchlist's Add
+search loads MOEX's list of traded bonds on its first use after a restart (~2 s), then keeps it in
+memory for six hours.
 
 ## Diagnosing a broken data connection
 
