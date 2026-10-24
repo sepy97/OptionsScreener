@@ -1,9 +1,10 @@
 """The Bond calendar tab's engine: resolve a watchlist once, build its MOEX calendar, cache it.
 
-It knows nothing about who a watchlist belongs to — a watchlist is its text (see
-``api.bond_watchlists`` for whose is whose). A saved watchlist is kept in the resolved form the
-script writes (``code,name,matdate,qty``): saving looks ISINs up by name once, so a build never
-repeats the lookup, and a wrong match is fixed by editing its code.
+It knows nothing about whose bonds these are — a watchlist is its text, in the script's format
+(see ``api.bond_portfolios`` for whose is whose, and ``bonds.holdings`` for how a person's
+portfolios become the text built here). An imported list is resolved once into the form the
+script writes (``code,name,matdate,qty``): importing looks ISINs up by name, so a build never
+repeats the lookup.
 
 A build is ~one MOEX request per bond, so builds are cached by the watchlist's content and start
 date for ``cache_ttl_seconds``. Keyed by content, two people with the same list share a build —

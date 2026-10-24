@@ -33,12 +33,13 @@ def test_is_expensive_only_matches_start_endpoints() -> None:
     for path in ("/bonds/events", "/bonds/export.csv", "/bonds/calendar.ics",
                  "/feeds/bonds/TOKEN.ics"):
         assert is_expensive("GET", path)
-    for path in ("/bonds/watchlist", "/bonds/watchlist/add", "/bonds/feed"):
+    for path in ("/bonds/portfolios/p1/add", "/bonds/portfolios/p1/import", "/bonds/feed"):
         assert is_expensive("POST", path)
-    assert not is_expensive("GET", "/bonds") and not is_expensive("GET", "/bonds/watchlist")
-    # the search runs over a cached list as you type; removing and quantities are your own rows
+    assert not is_expensive("GET", "/bonds") and not is_expensive("GET", "/bonds/portfolios/p1")
+    # the search runs over a cached list as you type; the rest are your own rows
     assert not is_expensive("GET", "/bonds/search")
-    for path in ("/bonds/watchlist/remove", "/bonds/watchlist/restore", "/bonds/watchlist/qty"):
+    for path in ("/bonds/portfolios", "/bonds/portfolios/p1/remove", "/bonds/portfolios/p1/qty",
+                 "/bonds/portfolios/p1/restore", "/bonds/portfolios/p1/rename"):
         assert not is_expensive("POST", path)
 
 
