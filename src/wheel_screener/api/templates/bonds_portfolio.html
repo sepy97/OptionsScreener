@@ -57,7 +57,8 @@
     {% if error %}<p role="alert">{{ icon.warning() }} {{ error }}</p>{% endif %}
     {% if report %}
     <div class="bond-report">
-      <p><strong>Imported {{ report.count }} bond{{ '' if report.count == 1 else 's' }}.</strong>
+      <p><strong>Imported {{ report.count }} bond{{ '' if report.count == 1 else 's' }}{{ ' from ' ~ report.source if report.source }}.</strong>
+        {% if report.sold_out %}{{ report.sold_out }} sold out (a quantity of 0) left out.{% endif %}
         {% if report.reused %}{{ report.reused }} code{{ '' if report.reused == 1 else 's' }} kept
         from what the portfolio held.{% endif %}</p>
       {% if report.resolved %}
@@ -96,30 +97,31 @@
   </article>
 
   <article>
-    <details class="advanced"{% if error %} open{% endif %}>
-      <summary>Import a list from a file</summary>
+    <details class="advanced"{% if error or not rows %} open{% endif %}>
+      <summary>Import a portfolio report</summary>
       <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/import"
             enctype="multipart/form-data"
             {% if rows %}onsubmit='return confirm({{ ("Replace the " ~ rows|length ~ " bond" ~ ("" if rows|length == 1 else "s") ~ " in " ~ portfolio.name ~ " with the bonds in this file?")|tojson }})'{% endif %}>
-        <input type="file" name="file" accept=".csv,.txt,text/csv,text/plain" required
-               aria-label="Portfolio file">
-        <small>Replaces what this portfolio holds with the file's bonds. UTF-8 or Windows-1251
-          (cbonds and Excel exports); bonds given only by name are looked up on MOEX.</small>
+        <input type="file" name="file" required aria-label="Portfolio report"
+               accept=".xlsx,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain">
+        <small>Replaces what this portfolio holds with the bonds in the file — import a newer
+          report to bring the portfolio up to date.</small>
         <button type="submit" class="secondary">Import and replace</button>
       </form>
       <ul class="bond-help">
-        <li><b>CSV with a header.</b> Columns: <code>code</code> (or isin / secid / ticker) —
-          ISIN or MOEX code; <code>name</code> — the bond name as MOEX and cbonds write it,
-          "issuer, series", e.g. <code>АФК Система, 001P-06</code> — if code is empty, the ISIN
-          is looked up by name (and maturity date, if given); <code>matdate</code> — maturity
-          date, helps find the right bond by name; <code>qty</code> — how many bonds you hold.
-          Only one of code or name is required; Russian column names (as in cbonds exports) work
-          too.</li>
-        <li><b>Plain text:</b> one bond per line, followed by the quantity. Anything after
-          <code>#</code> is a comment.</li>
-        <li>Both ISINs (<code>RU000A1038V6</code>) and MOEX codes (<code>SU26238RMFS4</code>)
-          work. The CSV download above is this format, so a portfolio can be edited in a
-          spreadsheet and imported back.</li>
+        <li><b>Intelinvest portfolio report</b> (<code>complex_portfolio_report_….xlsx</code>):
+          the bonds on its «Портфель облигаций» sheet — «Тикер» (ISIN), «Название» and
+          «Количество, шт.». Bonds sold out (a quantity of 0) are left out. Maturity dates are
+          taken from MOEX.</li>
+        <li><b>Another spreadsheet (.xlsx) or a CSV</b> with a header row: <code>code</code> (or
+          isin / secid / ticker / тикер) — ISIN or MOEX code; <code>name</code> (or название) —
+          the bond name as MOEX and cbonds write it, e.g. <code>АФК Система, 001P-06</code>, looked
+          up when there is no code; <code>matdate</code> — the maturity date, which helps find a
+          bond by name; <code>qty</code> (or количество) — how many you hold. The CSV download
+          above is this format, so a portfolio can be edited in a spreadsheet and imported
+          back. CSV may be UTF-8 or Windows-1251.</li>
+        <li><b>Plain text:</b> one bond per line, its ISIN or MOEX code and then the quantity.
+          Anything after <code>#</code> is a comment.</li>
       </ul>
     </details>
   </article>

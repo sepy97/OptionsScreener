@@ -385,8 +385,12 @@ is the same passkey as the Portfolio tab) — one per brokerage account, say —
 with how many of it they hold. A bond is added by searching for its ISIN, MOEX code or name (over
 MOEX's list of traded bonds, cached for six hours, and MOEX's own search for matured ones) with
 its quantity; quantities are edited in place, and a removal can be undone. A portfolio can also be
-imported from a file in any format the script reads — bonds given only by name get their ISINs
-looked up once, on import — and downloaded back as CSV.
+imported, in place of what it holds, from an **Intelinvest portfolio report**
+(`complex_portfolio_report_<id>.xlsx`: the bonds on its «Портфель облигаций» sheet with their
+quantities, sold-out positions left out, maturity dates filled in from MOEX), from another
+spreadsheet or a CSV / text list in any format the script reads (bonds given only by name get
+their ISINs looked up once, on import), and downloaded back as CSV. Importing a newer report
+brings a portfolio up to date.
 
 The calendar shows one portfolio or all of them: with all, each bond's quantity is the sum over
 the portfolios holding it, and each event says which those are. It covers a year ahead by default
@@ -409,7 +413,7 @@ src/wheel_screener/
   core/      models · ports · fundamentals · ranking · errors · service
              pipeline/ (universe · rate_fundamentals · pull_chains · select_strike · rank)
   adapters/  fmp/ · schwab/ · alpaca/ · local/ · fundcore/ · http.py · cache.py · errors.py
-  bonds/     bond_calendar (MOEX ISS — the ported script) · service · search · holdings
+  bonds/     bond_calendar (MOEX ISS — the ported script) · service · search · holdings · reports
   cli/  api/   config.py   composition.py   logging_config.py
 tools/   fmp_bulk_import.py     # one-time whole-market bulk loader
 docs/    PLAN.md · TODO.md

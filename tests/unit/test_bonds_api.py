@@ -377,6 +377,52 @@ def test_an_upload_wins_over_the_text_and_reads_windows_1251(client) -> None:
         ("RU000A0ZYQY7", "АФК Система, 001P-07", 3.0)]
 
 
+def test_an_intelinvest_report_imports_the_bonds_held_with_moex_dates(client) -> None:
+    from _workbooks import intelinvest_report
+
+    sam = _as(client)
+    pid = _portfolio(sam, "Broker", SYS6)
+    raw = intelinvest_report()
+    r = client.post(f"/bonds/portfolios/{pid}/import",
+                    files={"file": ("complex_portfolio_report_11111.xlsx", raw,
+                                    "application/vnd.openxmlformats-officedocument"
+                                    ".spreadsheetml.sheet")})
+    assert r.status_code == 200
+    assert "Imported 2 bonds from sheet «Портфель облигаций»." in r.text
+    assert "1 sold out (a quantity of 0) left out." in r.text
+    assert [(h.code, h.name, h.qty) for h in _store().holdings(sam.id, pid)] == [
+        ("RU000A10EMG2", "НоваБев3Р3", 120.0), ("RU000A0JS3W6", "ОФЗ 26207", 45.0)]
+
+
+def test_imported_bonds_get_their_maturity_from_moexs_list(client) -> None:
+    sam = _as(client)
+    pid = _portfolio(sam)
+    # the report has no dates; MOEX's list does (SISTEMA_14 matures 2030-02-01)
+    client.post(f"/bonds/portfolios/{pid}/import",
+                data={"text": "RU000A10FA72 4\nXX0000000001 1\n"})
+    held = {h.code: h for h in _store().holdings(sam.id, pid)}
+    assert held["RU000A10FA72"].matdate == date(2030, 2, 1)
+    assert held["RU000A10FA72"].qty == 4.0
+    assert held["XX0000000001"].matdate is None  # not traded: no date, and no request for one
+
+
+def test_a_file_that_is_not_a_portfolio_changes_nothing(client) -> None:
+    from wheel_screener.api import app as app_module
+
+    sam = _as(client)
+    pid = _portfolio(sam, "Broker", SYS6)
+    r = client.post(f"/bonds/portfolios/{pid}/import",
+                    files={"file": ("x.xlsx", b"PK\x03\x04 broken", "application/octet-stream")})
+    assert r.status_code == 422 and "not a spreadsheet" in r.text and "Nothing changed" in r.text
+    big = b"x" * (app_module._MAX_UPLOAD_BYTES + 1)
+    r = client.post(f"/bonds/portfolios/{pid}/import", files={"file": ("big.csv", big, "text/csv")})
+    assert r.status_code == 413 and "too large" in r.text
+    sold = "code,qty\nRU000A0JXN21,0\n"
+    r = client.post(f"/bonds/portfolios/{pid}/import", data={"text": sold})
+    assert r.status_code == 422 and "No bonds held in that file" in r.text
+    assert [h.code for h in _store().holdings(sam.id, pid)] == ["RU000A0JXN21"]
+
+
 # --- the calendar --------------------------------------------------------------------------------
 
 def test_the_tab_shows_your_portfolios_and_lazy_loads_the_default_year(client) -> None:

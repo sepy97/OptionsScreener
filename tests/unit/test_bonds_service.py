@@ -42,7 +42,7 @@ def _service(builds=None, resolve=None, clock=None, ttl=3600) -> BondCalendarSer
     )
 
 
-def test_resolve_looks_up_names_and_returns_the_canonical_csv() -> None:
+def test_resolve_looks_up_names_in_place() -> None:
     def resolve(items, log, pmap=map):
         for it in items:
             if not it["code"]:
@@ -50,29 +50,29 @@ def test_resolve_looks_up_names_and_returns_the_canonical_csv() -> None:
                 log(f"  {it['name']}  →  {it['code']}")
         return []
 
-    text, report = _service(resolve=resolve).resolve(
-        'name,matdate,qty\n"АФК Система, 001P-06",2027-03-26,10\n')
+    items = bc.parse_watchlist('name,matdate,qty\n"АФК Система, 001P-06",2027-03-26,10\n')
+    report = _service(resolve=resolve).resolve(items)
     assert (report.count, report.reused, report.problems) == (1, 0, [])
     assert report.resolved == ["  АФК Система, 001P-06  →  RU000A0JXN21"]
-    assert text == ('code,name,matdate,qty\r\n'
-                    'RU000A0JXN21,"АФК Система, 001P-06",2027-03-26,10\r\n')
+    assert items == [{"code": "RU000A0JXN21", "name": "АФК Система, 001P-06",
+                      "matdate": date(2027, 3, 26), "qty": 10.0}]
 
 
-def test_resolve_reuses_codes_the_saved_watchlist_already_has() -> None:
+def test_resolve_reuses_codes_the_bonds_held_before_have() -> None:
     looked_up: list[str] = []
 
     def resolve(items, log, pmap=map):
         looked_up.extend(it["name"] for it in items if not it["code"])
         return []
 
-    previous = 'code,name,matdate,qty\nRU000A0JXN21,"АФК Система, 001P-06",2027-03-26,\n'
-    # the next paste carries names only: the known bond keeps its code, the new one is looked up
-    text, report = _service(resolve=resolve).resolve(
-        'name,matdate\n"АФК Система, 001P-06",2027-03-26\n"ГТЛК, 001P-04",2032-04-06\n',
-        previous,
-    )
+    previous = bc.parse_watchlist(
+        'code,name,matdate,qty\nRU000A0JXN21,"АФК Система, 001P-06",2027-03-26,\n')
+    # the next import carries names only: the known bond keeps its code, the new one is looked up
+    items = bc.parse_watchlist(
+        'name,matdate\n"АФК Система, 001P-06",2027-03-26\n"ГТЛК, 001P-04",2032-04-06\n')
+    report = _service(resolve=resolve).resolve(items, previous)
     assert report.reused == 1 and looked_up == ["ГТЛК, 001P-04"]
-    assert text.splitlines()[1].startswith("RU000A0JXN21,")
+    assert items[0]["code"] == "RU000A0JXN21"
 
 
 def test_calendar_is_cached_windowed_and_refreshable() -> None:
