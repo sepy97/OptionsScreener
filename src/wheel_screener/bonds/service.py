@@ -40,9 +40,11 @@ class SaveReport:
     asks ("check that everything matched correctly")."""
 
     count: int
-    reused: int = 0  # codes taken from the previously saved watchlist (same name + maturity)
+    reused: int = 0  # codes taken from the bonds held before (same name + maturity)
     resolved: list[str] = field(default_factory=list)  # "name → ISIN (MOEX name)" lines
     problems: list[str] = field(default_factory=list)
+    sold_out: int = 0  # a report's bonds with a quantity of 0, left out
+    source: str = ""  # where in the file the bonds came from (a spreadsheet's sheet)
 
 
 class BondCalendarService:
@@ -63,21 +65,19 @@ class BondCalendarService:
         self._cache: OrderedDict[tuple, tuple[float, bc.CalendarRun]] = OrderedDict()
         self._lock = threading.Lock()  # one build at a time
 
-    def resolve(self, text: str, previous: str = "") -> tuple[str, SaveReport]:
-        """``text`` (any format the script reads) in the resolved form to store, looking up the
-        ISINs of bonds given only by name — except those ``previous`` (the watchlist as saved
-        before) already has a code for."""
-        items = bc.parse_watchlist(text)
-        reused = bc.reuse_resolved(items, bc.parse_watchlist(previous))
+    def resolve(self, items: list[dict], previous: list[dict] = ()) -> SaveReport:
+        """Fill in the ISINs of ``items`` given only by name (in place) — except those
+        ``previous`` (the bonds as held before) already has a code for."""
+        reused = bc.reuse_resolved(items, list(previous))
         resolved: list[str] = []
         problems: list[str] = []
         if any(not it["code"] for it in items):
             # the search among matured bonds is one request per bond — run it in parallel
             with ThreadPoolExecutor(max_workers=self._workers) as pool:
                 problems = self._resolve(items, resolved.append, pmap=pool.map)
-        logger.info("bond watchlist resolved: %d bonds, %d looked up by name, %d problems",
+        logger.info("bond list resolved: %d bonds, %d looked up by name, %d problems",
                     len(items), len(resolved), len(problems))
-        return bc.format_watchlist(items), SaveReport(len(items), reused, resolved, problems)
+        return SaveReport(len(items), reused, resolved, problems)
 
     def _ttl_of(self, run: bc.CalendarRun) -> float:
         return min(self._ttl, _PROBLEM_TTL_SECONDS) if run.problems else self._ttl

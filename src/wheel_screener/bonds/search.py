@@ -196,6 +196,16 @@ class BondDirectory:
         return sorted(found, key=lambda b: (exact not in (b.secid, b.isin),
                                             b.matdate or date.max, b.name))
 
+    def listed(self, code: str) -> Bond | None:
+        """The traded bond with this ISIN or MOEX code, from the cached list alone — never a
+        request per bond; None if it isn't traded, or MOEX did not send the list."""
+        code = code.strip().upper()
+        try:
+            listed = self._traded()
+        except MoexUnavailable:
+            return None
+        return next((b for _, b in listed if code and code in (b.secid, b.isin)), None)
+
     def lookup(self, code: str) -> Bond | None:
         """The bond with this ISIN or MOEX code, traded or not; None if MOEX doesn't know it.
 
@@ -203,13 +213,9 @@ class BondDirectory:
         code = code.strip().upper()
         if not code:
             return None
-        try:
-            listed = self._traded()
-        except MoexUnavailable:
-            listed = []
-        for _, b in listed:
-            if code in (b.secid, b.isin):
-                return b
+        found = self.listed(code)
+        if found is not None:
+            return found
         try:
             return self._describe(code)
         except Exception as exc:

@@ -72,6 +72,7 @@ from wheel_screener.api.users import UserStore
 from wheel_screener.bonds import bond_calendar as bc
 from wheel_screener.bonds import holdings as bh
 from wheel_screener.bonds.holdings import Holding
+from wheel_screener.bonds.reports import ReportError, read_portfolio
 from wheel_screener.bonds.search import BondDirectory, MoexUnavailable
 from wheel_screener.bonds.service import BondCalendarService
 from wheel_screener.composition import build_probes, build_service
@@ -2007,14 +2008,6 @@ def _bond_calendar(bonds: BondCalendarService, holdings: list[Holding], shown: l
                           bh.skip_notes(shown, period.date_from)), age
 
 
-def _decode_upload(raw: bytes) -> str:
-    """cbonds and Excel exports are UTF-8 or, in Russian Windows locales, cp1251."""
-    try:
-        return raw.decode("utf-8-sig")
-    except UnicodeDecodeError:
-        return raw.decode("cp1251", errors="replace")
-
-
 def _known_portfolio(raw: str, portfolios: list[Portfolio]) -> str:
     return raw if any(p.id == raw for p in portfolios) else ""
 
@@ -2376,6 +2369,9 @@ def bonds_holdings_csv(portfolio_id: str, request: Request) -> Response:
     )
 
 
+_MAX_UPLOAD_BYTES = 16 * 1024 * 1024  # an Intelinvest report of years of trades is ~1 MB
+
+
 @app.post("/bonds/portfolios/{portfolio_id}/import")
 def bonds_portfolio_import(
     portfolio_id: str,
@@ -2383,25 +2379,40 @@ def bonds_portfolio_import(
     text: str = Form(""),
     file: UploadFile | None = File(None),
     bonds: BondCalendarService = Depends(get_bonds),
+    directory: BondDirectory = Depends(get_bond_directory),
 ):
-    """A list — a file (or pasted text) in any format the script reads — in place of the bonds
-    this portfolio holds, looking ISINs up by name; the page then shows what matched."""
+    """The bonds a file says are held — an Intelinvest portfolio report (.xlsx), or a list in any
+    format the script reads — in place of what this portfolio holds. Bonds given only by name are
+    looked up; maturity dates come from MOEX's list, as a report has none. The page then shows
+    what was read and what matched."""
     portfolio = _my_portfolio(request, portfolio_id)
     store = _bond_store(request)
-    previous = bh.as_text(store.holdings(_me(request), portfolio.id))
+    previous = [h.item() for h in store.holdings(_me(request), portfolio.id)]
+    raw = text.encode("utf-8")
     if file is not None and file.filename:
-        text = _decode_upload(file.file.read())
-    items = bc.parse_watchlist(text)
-    error = None
+        raw = file.file.read(_MAX_UPLOAD_BYTES + 1)
+        if len(raw) > _MAX_UPLOAD_BYTES:
+            return _portfolio_page(request, portfolio, 413, error="That file is too large.")
+    try:
+        found = read_portfolio(raw)
+    except ReportError as e:
+        return _portfolio_page(request, portfolio, 422, error=f"{e} Nothing changed.")
+    items, error = found.items, None
     if not items:
-        error = "No bonds found in that file — nothing changed."
+        error = "No bonds held in that file — nothing changed."
     elif len(items) > MAX_BONDS:
         error = f"A portfolio holds at most {MAX_BONDS} bonds — nothing changed."
     if error is not None:
         return _portfolio_page(request, portfolio, 422, error=error)
-    resolved, report = bonds.resolve(text, previous)
+    for it in items:
+        listed = directory.listed(it["code"]) if it["code"] else None
+        if listed is not None:
+            it["matdate"] = it["matdate"] or listed.matdate
+            it["name"] = it["name"] or listed.name
+    report = bonds.resolve(items, previous)
+    report.sold_out, report.source = found.sold_out, found.source
     try:
-        store.replace(_me(request), portfolio.id, bc.parse_watchlist(resolved))
+        store.replace(_me(request), portfolio.id, items)
     except PortfolioError as e:
         return _portfolio_page(request, portfolio, 422, error=str(e))
     return _portfolio_page(request, portfolio, report=report)

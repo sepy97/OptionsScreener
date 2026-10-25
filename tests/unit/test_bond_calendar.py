@@ -234,3 +234,12 @@ def test_monthly_cash_sums_payments_per_month_and_currency() -> None:
         _event(date=date(2027, 2, 1), total=5.0, cur="USD"),
     ])
     assert cash == [("2027-01", "RUB", pytest.approx(81.56)), ("2027-02", "USD", 5.0)]
+
+
+def test_rows_from_a_spreadsheet_read_like_a_csv() -> None:
+    rows = [["Тикер", "Название", "Количество, шт.", "Средняя цена"],
+            ["RU000A10EMG2", "НоваБев3Р3", "120.0", "100.25"]]
+    assert bc.is_header(rows[0]) and not bc.is_header(rows[1])
+    assert bc.parse_rows(rows) == [
+        {"code": "RU000A10EMG2", "name": "НоваБев3Р3", "matdate": None, "qty": 120.0}]
+    assert bc.parse_rows([]) == []

@@ -67,7 +67,7 @@ CARDS_CHUNK = 50
 ID_COLUMNS = {"isin", "secid", "тикер", "код", "ticker", "code"}
 NAME_COLUMNS = {"name", "название", "эмиссия", "бумага"}
 MAT_COLUMNS = {"matdate", "дата погашения", "погашение"}
-QTY_COLUMNS = {"qty", "quantity", "количество", "кол-во", "шт", "штук"}
+QTY_COLUMNS = {"qty", "quantity", "количество", "количество, шт.", "кол-во", "шт", "штук"}
 # code in the saved watchlist: the bond has matured and MOEX doesn't list it — don't look it up
 NOT_FOUND = "-"
 CURRENCY = {"SUR": "RUB", "RUR": "RUB"}
@@ -145,8 +145,21 @@ def parse_watchlist(text: str) -> list[dict]:
         rows = list(csv.reader(lines, delimiter=delim))
     else:
         rows = [line.split() for line in lines]
+    return parse_rows(rows)
 
-    header = [c.strip().lower() for c in rows[0]]
+
+def is_header(row: list[str]) -> bool:
+    """Whether a row names the code or name column — where a table's bonds start below."""
+    cells = {str(c).strip().lower() for c in row}
+    return bool(cells & ID_COLUMNS or cells & NAME_COLUMNS)
+
+
+def parse_rows(rows: list[list[str]]) -> list[dict]:
+    """``parse_watchlist`` for rows already split into cells (a CSV's, or a spreadsheet's): the
+    first row is the header, or — if it names no code or name column — the first bond."""
+    if not rows:
+        return []
+    header = [str(c).strip().lower() for c in rows[0]]
     def col(names):
         return next((i for i, c in enumerate(header) if c in names), None)
     id_col, name_col = col(ID_COLUMNS), col(NAME_COLUMNS)
@@ -157,7 +170,7 @@ def parse_watchlist(text: str) -> list[dict]:
         rows = rows[1:]
 
     def cell(row, i):
-        return row[i].strip() if i is not None and i < len(row) else ""
+        return str(row[i]).strip() if i is not None and i < len(row) else ""
 
     items: dict[str, dict] = {}
     for row in rows:
