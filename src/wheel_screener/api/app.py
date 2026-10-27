@@ -10,6 +10,7 @@ One service + one job runner are built at startup (lifespan) and shared across r
 from __future__ import annotations
 
 import base64
+import calendar
 import csv
 import io
 import logging
@@ -1928,6 +1929,11 @@ templates.env.filters["bond_qty"] = bc.fmt_qty
 templates.env.filters["bond_holders"] = bh.holders_label
 
 _SOON_DAYS = 7  # events this close are highlighted
+# the calendar shows as a list (by month) or as a month's grid; the last one chosen is kept in a
+# cookie, so the tab opens in it
+_BOND_VIEWS = ("list", "calendar")
+_BOND_VIEW_COOKIE = "bond_view"
+_BOND_VIEW_SECONDS = 365 * 24 * 3600
 
 
 @dataclass(frozen=True)
@@ -1983,6 +1989,55 @@ def _by_month(events: list[dict]) -> list[tuple[date, list[dict]]]:
     return groups
 
 
+def _bond_view(request: Request, raw: str) -> str:
+    """The view asked for, else the one chosen last time, else the list."""
+    for view in (raw, request.cookies.get(_BOND_VIEW_COOKIE)):
+        if view in _BOND_VIEWS:
+            return view
+    return "list"
+
+
+def _month_param(raw: str) -> date | None:
+    """A ``month=YYYY-MM`` as the first of that month."""
+    return _iso_date(f"{raw}-01") if raw else None
+
+
+def _add_months(month: date, n: int) -> date:
+    i = month.year * 12 + month.month - 1 + n
+    return date(i // 12, i % 12 + 1, 1)
+
+
+def _month_view(events: list[dict], period: _BondPeriod, raw_month: str, today: date) -> dict:
+    """One month of the calendar view: its weeks, Monday first, each day with its events, and
+    the months either side to step to. The months to step through are the period's — for the
+    whole calendar, from the first event to the last (and this month). The month shown is the
+    one asked for, else this month, else the period's first."""
+    this_month = today.replace(day=1)
+    if period.whole:
+        days = [e["date"] for e in events] + [today]
+        first, last = min(days).replace(day=1), max(days).replace(day=1)
+    else:
+        first, last = period.date_from.replace(day=1), period.date_to.replace(day=1)
+    shown = _month_param(raw_month) or (this_month if first <= this_month <= last else first)
+    shown = min(max(shown, first), last)
+    month_events = [e for e in events if e["date"].replace(day=1) == shown]
+    by_day: dict[date, list[dict]] = {}
+    for e in month_events:
+        by_day.setdefault(e["date"], []).append(e)
+    weeks = [[{"date": d, "in_month": d.month == shown.month,
+               "in_period": period.whole or period.date_from <= d <= period.date_to,
+               "events": by_day.get(d, [])}
+              for d in week]
+             for week in calendar.Calendar().monthdatescalendar(shown.year, shown.month)]
+    return {
+        "month": shown, "weeks": weeks, "events": month_events,
+        "cash": bc.monthly_cash(month_events),
+        "prev": _add_months(shown, -1) if shown > first else None,
+        "next": _add_months(shown, 1) if shown < last else None,
+        "this_month": this_month if shown != this_month and first <= this_month <= last else None,
+    }
+
+
 def _bond_store(request: Request) -> BondPortfolioStore:
     return request.app.state.bond_portfolios
 
@@ -2019,20 +2074,26 @@ def bonds_page(
     raw_from: str = Query("", alias="from"),
     raw_to: str = Query("", alias="to"),
     portfolio: str = "",
+    view: str = "",
+    month: str = "",
 ):
-    """The Bond calendar tab: which portfolio and period; the calendar loads via /bonds/events."""
+    """The Bond calendar tab: which portfolio and period; the calendar loads via /bonds/events,
+    in the view and month of the link (else the view chosen last)."""
     user_id = _me(request)
     store = _bond_store(request)
     portfolios = store.portfolios(user_id)
     period = _bond_period(whole, raw_from, raw_to, _known_portfolio(portfolio, portfolios))
     shown = _shown(store.holdings(user_id), period.portfolio)
     today = date.today()
+    asked = {k: v for k, v in (("view", view if view in _BOND_VIEWS else ""),
+                               ("month", month if _month_param(month) else "")) if v}
     return templates.TemplateResponse(
         request, "bonds.html",
         {
             "active_tab": "bonds", "period": period, "portfolios": portfolios,
             "count": len({h.key for h in shown}), "default_from": today,
             "default_to": bc.one_year_after(today),
+            "view_query": f"&{urlencode(asked)}" if asked else "",
         },
     )
 
@@ -2044,10 +2105,13 @@ def bonds_events(
     raw_from: str = Query("", alias="from"),
     raw_to: str = Query("", alias="to"),
     portfolio: str = "",
+    view: str = "",
+    month: str = "",
     refresh: bool = False,
     bonds: BondCalendarService = Depends(get_bonds),
 ):
-    """The calendar fragment: events grouped by month + expected payments (cached builds)."""
+    """The calendar fragment (cached builds), as a list — events grouped by month + expected
+    payments — or as one month's grid over that month's events."""
     user_id = _me(request)
     store = _bond_store(request)
     period = _bond_period(whole, raw_from, raw_to, portfolio)
@@ -2057,14 +2121,26 @@ def bonds_events(
         return templates.TemplateResponse(
             request, "_bond_events.html", {"empty": True, "period": period})
     run, age = _bond_calendar(bonds, holdings, shown, period, refresh)
-    return templates.TemplateResponse(request, "_bond_events.html", {
-        "period": period, "events": run.events, "months": _by_month(run.events),
-        "problems": run.problems, "notes": run.notes, "cash": bc.monthly_cash(run.events),
+    today = date.today()
+    chosen = _bond_view(request, view)
+    context = {
+        "period": period, "view": chosen, "events": run.events,
+        "problems": run.problems, "notes": run.notes,
         "has_qty": any(e["qty"] for e in run.events), "age": _age_label(age),
-        "today": date.today(), "soon_days": _SOON_DAYS,
+        "today": today, "soon_days": _SOON_DAYS,
         "show_holders": len({h.portfolio_id for h in shown}) > 1,
         "has_feed": store.has_feed(user_id),
-    })
+    }
+    if chosen == "calendar":
+        context["cal"] = _month_view(run.events, period, month, today)
+    else:
+        context.update(months=_by_month(run.events), cash=bc.monthly_cash(run.events))
+    response = templates.TemplateResponse(request, "_bond_events.html", context)
+    if view in _BOND_VIEWS:
+        response.set_cookie(_BOND_VIEW_COOKIE, view, max_age=_BOND_VIEW_SECONDS,
+                            path=_BONDS_PREFIX, httponly=True, samesite="lax",
+                            secure=_cookie_secure(request))
+    return response
 
 
 def _bond_events_for(request: Request, bonds: BondCalendarService, user_id: str,

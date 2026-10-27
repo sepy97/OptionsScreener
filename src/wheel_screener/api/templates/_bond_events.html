@@ -1,4 +1,55 @@
 {% import "_icons.html" as icon %}
+{# Another view or month of this calendar: swaps the fragment and puts it in the address bar, so a
+   reload or a shared link opens the same. #}
+{% macro view_link(v, label, month=none, current=false, cls="", title="") -%}
+{%- set qs %}{{ period.query }}&view={{ v }}{% if month %}&month={{ month.strftime("%Y-%m") }}{% endif %}{% endset -%}
+<a href="/bonds?{{ qs }}" hx-get="/bonds/events?{{ qs }}" hx-target="#bond-calendar"
+   hx-swap="innerHTML" hx-push-url="/bonds?{{ qs }}"{% if cls %} class="{{ cls }}"{% endif %}
+   {%- if title %} title="{{ title }}"{% endif %}{% if current %} aria-current="true"{% endif %}>{{ label }}</a>
+{%- endmacro %}
+{# The events as table rows. A phone lays each row out in two lines (see custom.css): the bond and
+   its amount, then the event, ISIN and portfolios — so the event appears twice, its own column on
+   a wide screen and a tag beside the ISIN on a narrow one. `anchors`: the first row of each day is
+   where that day in the month grid links to. #}
+{% macro event_rows(items, anchors=false) %}
+{% for e in items %}
+{% set style, gloss = bond_events.get(e.kind, ("", "")) %}
+{% set days = (e.date - today).days %}
+<tr{% if 0 <= days <= soon_days %} class="soon"{% endif %}
+  {%- if anchors and (loop.first or loop.previtem.date != e.date) %} id="bond-day-{{ e.date.isoformat() }}"{% endif %}>
+  <td class="ev-day"><time datetime="{{ e.date.isoformat() }}"><b>{{ e.date.day }}</b>
+    <small>{{ e.date.strftime("%a") }}</small></time></td>
+  <td class="ev-kind"><span class="ev {{ style }}" title="{{ gloss }}">{{ e.kind }}</span></td>
+  <td class="ev-bond"><span class="ev-name">{{ e.name }}</span>
+    <span class="ev-meta"><span class="ev ev-tag {{ style }}" title="{{ gloss }}">{{ e.kind }}</span>
+      <small class="bond-isin" title="MOEX code {{ e.secid }}">{{ e.isin }}</small>
+      {%- if show_holders %} <small class="bond-holders" title="the portfolios holding it, and how many each">{{ e|bond_holders }}</small>{% endif %}</span></td>
+  <td class="num ev-per">{% if e.amount is not none %}{{ e.amount|bond_fmt }} {{ e.cur }}{% endif %}</td>
+  <td class="num ev-rate">{% if e.rate is not none %}{{ e.rate|bond_fmt }}%{% endif %}</td>
+  {% if has_qty %}
+  <td class="num ev-qty">{{ e.qty|bond_qty }}</td>
+  <td class="num ev-total">{% if e.total is not none %}<b>{{ e.total|bond_fmt }} {{ e.cur }}</b>{% endif %}</td>
+  {% endif %}
+  {# a known coupon's note is only its record date — a phone leaves it out #}
+  <td class="bond-note-cell{{ ' minor' if style == 'ev-coupon' and e.amount is not none }}">{{ e.note }}</td>
+</tr>
+{% endfor %}
+{% endmacro %}
+{% macro event_table() %}
+<figure>
+  <table class="bond-table{{ ' has-qty' if has_qty }}">
+    <thead>
+      <tr>
+        <th>Date</th><th class="ev-kind">Event</th><th>Bond</th>
+        <th class="num">Per bond</th><th class="num">Coupon</th>
+        {% if has_qty %}<th class="num">Qty</th><th class="num">Total</th>{% endif %}
+        <th class="bond-note-cell">Note</th>
+      </tr>
+    </thead>
+    <tbody>{{ caller() }}</tbody>
+  </table>
+</figure>
+{% endmacro %}
 {% if empty %}
 <article>
   <p class="empty-state">{% if period.portfolio %}This portfolio holds no bonds yet{% else %}No
@@ -11,11 +62,16 @@
 <article>
   <header class="results-head">
     <strong>{{ n }} event{{ '' if n == 1 else 's' }}</strong>
+    <span class="bond-views">
+      {{- view_link("list", "List", current=view == "list") -}}
+      {{- view_link("calendar", "Calendar", current=view == "calendar") -}}
+    </span>
     <span class="result-stats">
       <span>{{ period.label }}</span>
       <span>updated <b>{{ age }}</b></span>
     </span>
-    <a href="#" class="bond-refresh" hx-get="/bonds/events?{{ period.query }}&refresh=1"
+    <a href="#" class="bond-refresh"
+       hx-get="/bonds/events?{{ period.query }}&view={{ view }}{% if cal %}&month={{ cal.month.strftime('%Y-%m') }}{% endif %}&refresh=1"
        hx-target="#bond-calendar" hx-swap="innerHTML" title="rebuild from MOEX now">refresh</a>
     <span class="bond-downloads">
       <a href="/bonds/export.csv?{{ period.query }}" role="button" class="secondary outline export-btn"
@@ -40,41 +96,63 @@
     <ul>{% for p in problems %}<li>{{ p }}</li>{% endfor %}</ul>
   </details>
   {% endif %}
-  {% if events %}
-  <figure>
-    <table class="bond-table">
-      <thead>
-        <tr>
-          <th>Date</th><th>Event</th><th>Bond</th>
-          <th class="num">Per bond</th><th class="num">Coupon</th>
-          {% if has_qty %}<th class="num">Qty</th><th class="num">Total</th>{% endif %}
-          <th class="bond-note-cell">Note</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for month, items in months %}
-        <tr class="bond-month"><th colspan="{{ cols }}">{{ month.strftime("%B %Y") }}</th></tr>
-        {% for e in items %}
-        {% set style, gloss = bond_events.get(e.kind, ("", "")) %}
-        {% set days = (e.date - today).days %}
-        <tr{% if 0 <= days <= soon_days %} class="soon"{% endif %}>
-          <td>{{ e.date.isoformat() }} <small>{{ e.date.strftime("%a") }}</small></td>
-          <td><span class="ev {{ style }}" title="{{ gloss }}">{{ e.kind }}</span></td>
-          <td>{{ e.name }}<br><small class="bond-isin" title="MOEX code {{ e.secid }}">{{ e.isin }}</small>
-            {% if show_holders %}<small class="bond-holders" title="the portfolios holding it, and how many each">{{ e|bond_holders }}</small>{% endif %}</td>
-          <td class="num">{% if e.amount is not none %}{{ e.amount|bond_fmt }} {{ e.cur }}{% endif %}</td>
-          <td class="num">{% if e.rate is not none %}{{ e.rate|bond_fmt }}%{% endif %}</td>
-          {% if has_qty %}
-          <td class="num">{{ e.qty|bond_qty }}</td>
-          <td class="num">{% if e.total is not none %}<b>{{ e.total|bond_fmt }} {{ e.cur }}</b>{% endif %}</td>
-          {% endif %}
-          <td class="bond-note-cell">{{ e.note }}</td>
-        </tr>
-        {% endfor %}
-        {% endfor %}
-      </tbody>
-    </table>
-  </figure>
+  {% if view == "calendar" %}
+  {% set m = cal.month %}
+  {% set k = cal.events|length %}
+  {% set kinds = cal.events|map(attribute="kind")|unique|list %}
+  <section class="bond-cal">
+    <div class="bond-cal-nav">
+      {% if cal.prev %}{{ view_link("calendar", "‹", cal.prev, cls="bond-step", title=cal.prev.strftime("%B %Y")) }}
+      {%- else %}<span class="bond-step" aria-hidden="true">‹</span>{% endif %}
+      <h3>{{ m.strftime("%B %Y") }}</h3>
+      {% if cal.next %}{{ view_link("calendar", "›", cal.next, cls="bond-step", title=cal.next.strftime("%B %Y")) }}
+      {%- else %}<span class="bond-step" aria-hidden="true">›</span>{% endif %}
+      {% if cal.this_month %}{{ view_link("calendar", "Today", cal.this_month, cls="bond-today") }}{% endif %}
+      <span class="bond-cal-sum">{{ k }} event{{ '' if k == 1 else 's' }}
+        {%- for _, cur, total in cal.cash %} · <b>{{ total|bond_fmt }} {{ cur }}</b>{% endfor %}
+        {%- if cal.cash %} <small>expected</small>{% endif %}</span>
+    </div>
+    {% if kinds %}
+    <p class="bond-legend">
+      {%- for kind, ev in bond_events.items() if kind in kinds %}
+      <span title="{{ ev[1] }}"><i class="bond-dot {{ ev[0] }}"></i>{{ kind }}</span>
+      {%- endfor %}
+    </p>
+    {% endif %}
+    <div class="bond-grid">
+      {% for name in ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun") %}<div class="bond-dow">{{ name }}</div>{% endfor %}
+      {% for week in cal.weeks %}{% for d in week %}
+      {% set cls = "bond-day" ~ (" out" if not d.in_month else "") ~ (" off" if d.in_month and not d.in_period else "")
+                   ~ (" wkd" if d.date.weekday() >= 5 else "") ~ (" today" if d.date == today else "") %}
+      {% if d.events %}
+      <a href="#bond-day-{{ d.date.isoformat() }}" class="{{ cls }}">
+        <span class="bond-day-num">{{ d.date.day }}</span>
+        <span class="bond-chips{{ ' capped' if d.events|length > 4 }}">
+          {%- for e in d.events %}{% set style = bond_events.get(e.kind, ("", ""))[0] %}
+          <span class="bond-chip {{ style }}" title="{{ e.kind }} · {{ e.name }}
+            {%- if e.total is not none %} · {{ e.total|bond_fmt }} {{ e.cur }}{% elif e.amount is not none %} · {{ e.amount|bond_fmt }} {{ e.cur }}{% endif %}">{{ e.name }}</span>
+          {%- endfor %}
+        </span>
+        {% if d.events|length > 4 %}<span class="bond-more">+{{ d.events|length - 3 }} more</span>{% endif %}
+      </a>
+      {% else %}
+      <div class="{{ cls }}"{% if d.in_month and not d.in_period %} title="outside the period shown"{% endif %}><span class="bond-day-num">{{ d.date.day }}</span></div>
+      {% endif %}
+      {% endfor %}{% endfor %}
+    </div>
+  </section>
+  {% if cal.events %}
+  {% call event_table() %}{{ event_rows(cal.events, anchors=true) }}{% endcall %}
+  {% else %}
+  <p class="empty-state">No events in {{ m.strftime("%B %Y") }}.</p>
+  {% endif %}
+  {% elif events %}
+  {% call event_table() %}
+    {% for month, items in months %}
+    <tr class="bond-month"><th colspan="{{ cols }}">{{ month.strftime("%B %Y") }}</th></tr>
+    {{ event_rows(items) }}
+    {% endfor %}
+  {% endcall %}
   {% else %}
   <p class="empty-state">No events for {{ period.label }}.</p>
   {% endif %}
