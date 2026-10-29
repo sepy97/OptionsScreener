@@ -17,6 +17,8 @@ from wheel_screener.api.app import app  # noqa: E402
 from wheel_screener.api.bond_portfolios import MAX_BONDS, BondPortfolioStore  # noqa: E402
 from wheel_screener.api.users import UserStore  # noqa: E402
 from wheel_screener.bonds import bond_calendar as bc  # noqa: E402
+from wheel_screener.bonds import spreadsheet as sheet  # noqa: E402
+from wheel_screener.bonds.reports import Workbook  # noqa: E402
 from wheel_screener.bonds.search import Bond, BondDirectory  # noqa: E402
 from wheel_screener.bonds.service import BondCalendarService  # noqa: E402
 
@@ -628,6 +630,12 @@ def test_csv_and_ics_downloads_are_the_scripts_formats(client) -> None:
     assert r.headers["content-type"].startswith("text/csv")
     assert r.content.startswith("\ufeffDate,Event,Bond".encode())  # utf-8-sig, as the script
     assert "35,78" in client.get("/bonds/export.csv?all=1&sep=%3B").content.decode("utf-8-sig")
+    r = client.get("/bonds/export.xlsx?all=1")
+    assert r.headers["content-type"] == sheet.MEDIA_TYPE
+    assert 'filename="bond_calendar.xlsx"' in r.headers["content-disposition"]
+    assert Workbook(r.content).rows(sheet.SHEET)[1][5] == "35.78"
+    page = client.get("/bonds/events?all=1").text
+    assert 'href="/bonds/export.xlsx?all=1"' in page and "CSV for Excel" not in page
     r = client.get("/bonds/calendar.ics?all=1")
     assert r.headers["content-type"].startswith("text/calendar")
     assert "BEGIN:VCALENDAR" in r.text and "X-WR-CALNAME:Bonds" in r.text

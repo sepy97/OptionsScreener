@@ -394,8 +394,10 @@ brings a portfolio up to date.
 
 The calendar shows one portfolio or all of them: with all, each bond's quantity is the sum over
 the portfolios holding it, and each event says which those are. It covers a year ahead by default
-(or chosen dates, or the whole calendar), with expected payments by month, and downloads the
-script's CSV and `.ics` (the portfolios go in the note). It shows as a **list** — an event a line,
+(or chosen dates, or the whole calendar), with expected payments by month, its amounts written the
+Russian way (120 000,00 ₽). It downloads as the script's CSV and `.ics`, or as an **Excel
+workbook** with real dates and amounts, which opens the same in any locale (the portfolios go in
+the note). It shows as a **list** — an event a line,
 two on a phone — or as a **calendar**: a month's grid (dots on a phone) stepping through the
 period, each day linking to its events below; the tab opens in the view chosen last. A private feed link lets a calendar app
 subscribe to all portfolios; it is shown once and stored only as a hash. The MOEX build is of the

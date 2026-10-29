@@ -76,9 +76,9 @@
     <span class="bond-downloads">
       <a href="/bonds/export.csv?{{ period.query }}" role="button" class="secondary outline export-btn"
          download>{{ icon.download() }} CSV</a>
-      <a href="/bonds/export.csv?{{ period.query }}&sep=%3B" role="button"
+      <a href="/bonds/export.xlsx?{{ period.query }}" role="button"
          class="secondary outline export-btn" download
-         title="semicolon-separated with decimal commas — for Excel in a Russian locale">{{ icon.download() }} CSV for Excel</a>
+         title="an Excel workbook: dates and amounts Excel reads as its own, in any locale">{{ icon.download() }} Excel</a>
       <a href="/bonds/calendar.ics?{{ period.query }}" role="button"
          class="secondary outline export-btn" download
          title="import into Apple / Google Calendar">{{ icon.download() }} .ics</a>
