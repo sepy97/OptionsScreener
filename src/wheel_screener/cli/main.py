@@ -398,11 +398,11 @@ def _print_search(r: object) -> None:
         if nd else ("" if r.dividends_known else " · dividend dates unavailable")
     )
     typer.echo(
-        f"{r.symbol}: {len(r.contracts)} sellable {noun}(s) · gate {fund}"
+        f"{r.symbol}: {len(r.contracts)} {noun}(s) · gate {fund}"
         f"{strength}{peers}{spot}{earn}{div}"
     )
     if not r.contracts:
-        typer.echo("  nothing in the DTE / delta / liquidity window.")
+        typer.echo("  nothing with a bid near the target delta in the DTE window.")
         return
     # puts break even at strike-premium (what you'd pay); calls net strike+premium (what you'd get)
     last_col = "if called" if is_call else "b/e"
@@ -424,6 +424,8 @@ def _print_search(r: object) -> None:
                 f"${sum(d.amount for d in c.dividends):.2f}"
                 + (" (early assignment if ITM)" if is_call else " (cushion smaller)")
             )
+        if c.liquidity_issues:
+            flag += f" <- thin: {', '.join(c.liquidity_issues)}"
         yld = f"{c.annualized_yield * 100:>5.1f}%" if c.annualized_yield is not None else "    -"
         typer.echo(
             f"  {k.strike:>7.2f} {k.expiration!s:>10} {k.dte:>4} {k.delta:>6.2f} {iv:>5} "

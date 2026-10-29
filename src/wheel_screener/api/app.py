@@ -381,6 +381,8 @@ _EXPORT_COLUMNS: list[tuple[str, object]] = [
     ("next_earnings", lambda c: c.get("next_earnings")),
     # clean / spans / unknown for THIS expiry — so an export can be audited at a glance
     ("earnings_status", lambda c: c.get("earnings_status")),
+    # what makes the contract hard to sell at its bid; only a single-ticker search shows such rows
+    ("liquidity", lambda c: "; ".join(c.get("liquidity_issues") or [])),
     # the first ex-dividend inside this contract's life, the per-share total of all of them,
     # and whether any was estimated from the schedule rather than announced
     ("ex_dividend", lambda c: ((c.get("dividends") or [{}])[0]).get("ex_date")),

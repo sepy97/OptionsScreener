@@ -10,6 +10,7 @@
 {% set div_rows = rows|selectattr('dividends')|list %}
 {% set div_last = (div_rows|sort(attribute='contract.dte')|last)|dividend_view if div_rows else none %}
 {% set noun = 'call' if is_call else 'put' %}
+{% set thin = rows|selectattr('liquidity_issues')|list %}
 {% set sk = sort_key|default('') %}
 {% set so = sort_order|default('desc') %}
 {% set tn = top_n|default(n) %}
@@ -65,6 +66,12 @@
     {{ divm.explain(div_last, is_call) }}
   </div>
   {% endif %}
+  {% if thin %}
+  <p class="fund-note thin-note">
+    {%- if thin|length == n %}{{ 'This one is' if n == 1 else 'All ' ~ n ~ ' are' }}
+    {%- else %}{{ thin|length }} of these {{ n }} {{ 'is' if thin|length == 1 else 'are' }}{% endif %} thin (marked):
+    sell {{ 'it' if thin|length == 1 else 'them' }} with a limit order near the mid, since a market order fills at whatever is bid.</p>
+  {% endif %}
   {% if rows %}
   <figure>
     <table>
@@ -87,8 +94,9 @@
       <tbody>
         {% for c in rows %}
         {% set k = c.contract %}
-        <tr>
-          <td>${{ k.strike|num2 }}</td>
+        <tr{% if c.liquidity_issues %} class="thin-row"{% endif %}>
+          <td>${{ k.strike|num2 }}{% if c.liquidity_issues %}
+            <span class="badge badge--thin" title="hard to sell at the bid">{{ c.liquidity_issues|join(' · ') }}</span>{% endif %}</td>
           {%- set dv = c|dividend_view %}
           <td>{% if dv %}{{ divm.pill(dv, is_call) }}{% endif %}{{ k.expiration }}{% if c.earnings_status == 'spans' or (r.next_earnings and r.next_earnings <= k.expiration) %}
             <span title="{% if is_call %}earnings {{ r.next_earnings }} lands before this expiry — you hold the shares through it either way, but a pop gets called away{% else %}earnings {{ r.next_earnings }} lands before this expiry — assignment would be event-driven{% endif %}">{{ icon.warning() }}</span>{% endif %}</td>
@@ -99,7 +107,7 @@
           <td>${{ k.mid|num2 }}</td>
           <td>{{ "%.1f%%"|format(k.spread_pct * 100) if k.spread_pct is not none else "—" }}</td>
           <td>{{ k.open_interest if k.open_interest is not none else "—" }}</td>
-          <td class="{% if c.annualized_yield is not none %}{{ 'y-hi' if c.annualized_yield >= 0.25 else ('y-mid' if c.annualized_yield >= 0.15 else 'y-lo') }}{% endif %}"{% if c.annualized_yield is none and is_call %} title="no share price available, so premium can't be expressed as a yield"{% endif %}>{{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</td>
+          <td class="{% if c.annualized_yield is not none and not c.liquidity_issues %}{{ 'y-hi' if c.annualized_yield >= 0.25 else ('y-mid' if c.annualized_yield >= 0.15 else 'y-lo') }}{% endif %}"{% if c.annualized_yield is none and is_call %} title="no share price available, so premium can't be expressed as a yield"{% endif %}>{{ "%.1f%%"|format(c.annualized_yield * 100) if c.annualized_yield is not none else "—" }}</td>
           <td>${{ (k.strike + (c.premium or 0.0))|num2 if is_call else (k.strike - (c.premium or 0.0))|num2 }}</td>
           <td>{% if c.collateral is not none %}${{ c.collateral|usd }}{% else %}—{% endif %}</td>
         </tr>
@@ -108,7 +116,7 @@
     </table>
   </figure>
   {% else %}
-  <p class="empty-state">No sellable {{ noun }}s for {{ r.symbol }} in the DTE / delta / liquidity
-     window — try a wider DTE range or a different ticker.</p>
+  <p class="empty-state">No {{ noun }}s for {{ r.symbol }} with a bid near {{ s_target_delta }} delta in
+     {{ s_min_dte }}–{{ s_max_dte }} days — try a wider DTE range or a different ticker.</p>
   {% endif %}
 </article>

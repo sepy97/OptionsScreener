@@ -185,6 +185,34 @@ def test_search_threads_dte_and_delta_into_sort_and_export() -> None:
         app.dependency_overrides.clear()
 
 
+def test_search_marks_a_thin_row_and_says_how_to_sell_it() -> None:
+    issues = ["9 open interest", "42% spread"]
+    thin = _candidate("AAA").model_copy(update={"liquidity_issues": issues})
+    app.dependency_overrides[get_service] = lambda: _FakeService(result=[thin, _candidate("AAA")])
+    try:
+        client = TestClient(app)
+        r = client.post("/search", data={"ticker": "aaa", "top_n": 5})
+        assert r.text.count('class="thin-row"') == 1
+        assert ('<span class="badge badge--thin" title="hard to sell at the bid">'
+                '9 open interest · 42% spread</span>') in r.text
+        assert "1 of these 2 is thin (marked)" in r.text and "sell it with a limit order" in r.text
+        assert r.text.count('class="y-') == 1  # a thin row's yield is not tinted
+        csv = client.get("/search/export.csv?ticker=aaa&top_n=5").text
+        assert "liquidity" in csv.splitlines()[0] and "9 open interest; 42% spread" in csv
+    finally:
+        app.dependency_overrides.clear()
+
+
+def test_an_empty_search_says_what_it_looked_for() -> None:
+    app.dependency_overrides[get_service] = lambda: _FakeService(result=[])
+    try:
+        r = TestClient(app).post("/search", data={
+            "ticker": "cenx", "min_dte": 5, "max_dte": 45, "target_delta": 0.2, "side": "call"})
+        assert "No calls for CENX with a bid near 0.2 delta in" in r.text and "5–45 days" in r.text
+    finally:
+        app.dependency_overrides.clear()
+
+
 def test_search_route_sort_and_export() -> None:
     svc = _FakeService(result=[_candidate("AAA", yld=0.10), _candidate("BBB", yld=0.90)])
     app.dependency_overrides[get_service] = lambda: svc
