@@ -640,15 +640,27 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 /* the table rules above right-align / mute / hide columns by position for the screener table;
    this table is laid out by class instead (same specificity, later in the file — so it wins) */
 .bond-table thead th, .bond-table tbody td { text-align: left; color: inherit; display: table-cell; }
+/* an event a line: the day (the month is the heading above), the event, then the bond with its
+   ISIN and portfolios beside it */
+.bond-table th, .bond-table td { padding: 0.3rem 0.5rem; }
 .bond-table .num { text-align: right; font-variant-numeric: tabular-nums; }
 .bond-table td small { color: var(--pico-muted-color); }
+.bond-table .ev-day { font-variant-numeric: tabular-nums; }
+.bond-table .ev-day b { display: inline-block; min-width: 1.2em; text-align: right; }
+.bond-table th.ev-kind { width: 10.5rem; }
+.bond-table .ev-kind .ev { white-space: normal; border-radius: 0.6rem; }  /* a long offer wraps, in two lines */
+.bond-table .ev-tag { display: none; }  /* the Event column says it — a phone shows it here */
+.bond-table .ev-meta small { margin-left: 0.4rem; }
 .bond-table .bond-isin { font-family: var(--pico-font-family-monospace); font-size: 0.72rem; }
-.bond-table .bond-note-cell { white-space: normal; min-width: 11rem; font-size: 0.8rem; color: var(--pico-muted-color); }
+.bond-table .bond-holders { display: inline; }
+.bond-table .bond-note-cell { white-space: normal; min-width: 13rem; font-size: 0.8rem; color: var(--pico-muted-color); }
 .bond-table tr.bond-month th {
   background: var(--sunken); text-align: left; font-weight: 700; font-size: 0.8rem;
-  text-transform: uppercase; letter-spacing: 0.03em; padding-top: 0.7rem;
+  text-transform: uppercase; letter-spacing: 0.03em; padding-top: 0.5rem;
 }
 .bond-table tr.soon td:first-child { box-shadow: inset 3px 0 0 var(--wheel-accent); font-weight: 600; }
+.bond-table tr:target > td { background: var(--wheel-accent-soft); }
+.bond-table tr[id] { scroll-margin-top: 1rem; }
 .ev {
   display: inline-block; padding: 0.05rem 0.5rem; border-radius: 999px;
   font-size: 0.75rem; font-weight: 600; line-height: 1.6;
@@ -658,6 +670,67 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
 .ev-principal { background: var(--wheel-accent); color: #fff; }
 .ev-offer { background: var(--warn-soft); color: var(--warn); }
 .ev-deadline { background: var(--neg-soft); color: var(--neg); }
+/* List | Calendar */
+.bond-views { display: inline-flex; }
+.bond-views a {
+  padding: 0.15rem 0.75rem; font-size: 0.8rem; font-weight: 600; text-decoration: none;
+  color: var(--pico-muted-color); border: 1px solid var(--pico-form-element-border-color);
+}
+.bond-views a + a { margin-left: -1px; }
+.bond-views a:first-child { border-radius: var(--radius-sm) 0 0 var(--radius-sm); }
+.bond-views a:last-child { border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.bond-views a[aria-current] {
+  position: relative; border-color: var(--wheel-accent);
+  background: var(--wheel-accent-soft); color: var(--wheel-accent-strong);
+}
+/* the calendar view: a month's grid, Monday first, each day's events as chips in the event's
+   colours (dots on a phone) linking to that day's rows in the month's list below */
+.bond-cal { margin-bottom: 1rem; }
+.bond-cal-nav { display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem 0.6rem; margin-bottom: 0.5rem; }
+.bond-cal-nav h3 { margin: 0; min-width: 9rem; font-size: 1rem; text-align: center; }
+.bond-step {
+  display: inline-flex; align-items: center; justify-content: center; width: 2rem; height: 2rem;
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-size: 1.1rem; color: inherit; text-decoration: none;
+}
+span.bond-step { opacity: 0.3; }
+.bond-today { font-size: 0.85rem; }
+.bond-cal-sum { margin-left: auto; font-size: 0.85rem; color: var(--pico-muted-color); }
+.bond-cal-sum b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.bond-legend { display: flex; flex-wrap: wrap; gap: 0.2rem 1rem; margin: 0 0 0.5rem; font-size: 0.75rem; color: var(--pico-muted-color); }
+.bond-legend span { display: inline-flex; align-items: center; gap: 0.35rem; }
+.bond-dot { display: inline-block; width: 0.55rem; height: 0.55rem; border-radius: 50%; background: var(--pico-muted-color); }
+.bond-grid {
+  display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 1px;
+  background: var(--border); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden;
+}
+.bond-dow {
+  padding: 0.3rem 0.45rem; background: var(--sunken); color: var(--pico-muted-color);
+  font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em;
+}
+.bond-day {
+  display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; min-height: 4.75rem; padding: 0.3rem;
+  background: #fff; color: inherit; text-decoration: none;
+}
+.bond-day.wkd { background: #fafbfc; }
+.bond-day.out { background: var(--sunken); }
+.bond-day.out .bond-day-num { opacity: 0.4; }
+.bond-day.off { background: repeating-linear-gradient(135deg, #fff 0 6px, var(--sunken) 6px 12px); }
+a.bond-day:hover { background: var(--wheel-accent-soft); }
+.bond-day-num { align-self: flex-start; font-size: 0.75rem; font-weight: 600; line-height: 1.5; color: var(--pico-muted-color); }
+.bond-day.today .bond-day-num { padding: 0 0.4rem; border-radius: 999px; background: var(--wheel-accent); color: #fff; }
+.bond-chips { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bond-chip {
+  display: block; padding: 0.05rem 0.35rem; border-radius: 4px;  /* coloured by its .ev-* */
+  font-size: 0.7rem; font-weight: 600; line-height: 1.45;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bond-chips.capped .bond-chip:nth-child(n+4) { display: none; }
+.bond-more { padding-left: 0.35rem; font-size: 0.7rem; color: var(--pico-muted-color); }
+.bond-dot.ev-coupon { background: var(--wheel-accent); }
+.bond-dot.ev-principal { background: var(--wheel-accent-strong); border-radius: 2px; }
+.bond-dot.ev-offer { background: var(--warn); }
+.bond-dot.ev-deadline { background: var(--neg); }
 .bond-cash { margin-top: 1.25rem; }
 .bond-cash h3 { font-size: 0.95rem; margin-bottom: 0.5rem; }
 .bond-cash h3 small { font-weight: 400; color: var(--pico-muted-color); }
@@ -741,4 +814,54 @@ tbody tr.row-open:has(+ tr.detail) td:first-child::before { transform: rotate(90
   .bond-watch .bond-remove { width: auto; align-self: end; }
   .bond-list-csv { margin-left: 0; }
   .bond-add-row .bond-qty { width: 5.5rem; }
+
+  /* The calendar's list fits the screen, an event in two lines: the day | the bond, then the
+     event, ISIN and portfolios | the amount — the total when there are quantities, with the
+     amount per bond under it; else the amount per bond, with the coupon rate under it. */
+  .bond-table, .bond-table tbody { display: block; }
+  .bond-table thead { display: none; }
+  .bond-table tbody tr {
+    display: grid; grid-template-columns: 2rem minmax(0, 1fr) auto;
+    grid-template-areas: "day bond amt" "day bond sub" "day note note";
+    column-gap: 0.6rem; padding: 0.4rem 0.4rem 0.4rem 0.3rem; border-bottom: 1px solid var(--border);
+  }
+  .bond-table tbody tr.bond-month { display: block; padding: 0; }
+  .bond-table tr.bond-month th { display: block; padding: 0.45rem 0.4rem 0.3rem; }
+  .bond-table tbody td { display: block; padding: 0; border: 0; background: transparent; }
+  .bond-table tr.soon td:first-child { box-shadow: none; }
+  .bond-table tr.soon { box-shadow: inset 3px 0 0 var(--wheel-accent); }
+  .bond-table tr:target > td { background: transparent; }
+  .bond-table tr:target { background: var(--wheel-accent-soft); }
+  .bond-table .ev-day { grid-area: day; text-align: center; line-height: 1.2; }
+  .bond-table .ev-day b { display: block; min-width: 0; text-align: center; font-size: 1rem; }
+  .bond-table .ev-day small { font-size: 0.68rem; }
+  .bond-table .ev-kind, .bond-table .ev-qty, .bond-table.has-qty .ev-rate { display: none; }
+  .bond-table .ev-bond { grid-area: bond; white-space: normal; }
+  .bond-table .ev-name { display: block; line-height: 1.35; }
+  .bond-table .ev-meta { display: block; margin-top: 0.15rem; line-height: 1.5; }
+  .bond-table .ev-tag { display: inline; padding: 0.05rem 0.4rem; font-size: 0.68rem; box-decoration-break: clone; -webkit-box-decoration-break: clone; }
+  .bond-table .ev-meta small { margin-left: 0.3rem; }
+  .bond-table .ev-meta .bond-isin { font-size: 0.68rem; }
+  .bond-table .bond-holders { font-size: 0.7rem; }
+  .bond-table.has-qty .ev-total, .bond-table:not(.has-qty) .ev-per { grid-area: amt; }
+  .bond-table.has-qty .ev-per, .bond-table:not(.has-qty) .ev-rate {
+    grid-area: sub; font-size: 0.72rem; color: var(--pico-muted-color);
+  }
+  .bond-table .bond-note-cell { grid-area: note; min-width: 0; margin-top: 0.1rem; font-size: 0.72rem; }
+  .bond-table .bond-note-cell.minor, .bond-table .bond-note-cell:empty { display: none; }
+
+  /* the month's grid: a dot per event, in its colour (a square for principal) */
+  .bond-cal-nav h3 { flex: 1; min-width: 0; }
+  .bond-cal-sum { flex-basis: 100%; margin-left: 0; }
+  .bond-dow { padding: 0.25rem 0; text-align: center; font-size: 0.62rem; letter-spacing: 0; }
+  .bond-day { align-items: center; min-height: 3.1rem; padding: 0.2rem 0.1rem; gap: 0.2rem; }
+  .bond-day-num { align-self: center; }
+  .bond-chips { flex-direction: row; flex-wrap: wrap; justify-content: center; gap: 3px; }
+  .bond-chips .bond-chip { width: 0.45rem; height: 0.45rem; padding: 0; border-radius: 50%; font-size: 0; }
+  .bond-chips.capped .bond-chip:nth-child(n+4) { display: block; }
+  .bond-chip.ev-coupon { background: var(--wheel-accent); }
+  .bond-chip.ev-principal { background: var(--wheel-accent-strong); border-radius: 1px; }
+  .bond-chip.ev-offer { background: var(--warn); }
+  .bond-chip.ev-deadline { background: var(--neg); }
+  .bond-more { display: none; }
 }

@@ -521,6 +521,92 @@ def test_period_flags_reach_the_build() -> None:
         c.__exit__(None, None, None)
 
 
+def test_the_calendar_view_is_a_month_grid_stepping_through_the_period() -> None:
+    jan15 = date(2027, 1, 15)
+    builds = _Builds([_event(jan15, qty=10.0), _event(jan15, bc.OFFER_LAST_DAY, amount=None),
+                      _event(date(2027, 2, 3)), _event(date(2027, 3, 31), bc.REDEMPTION)])
+    c = _client(builds)
+    try:
+        sam = _as(c)
+        _portfolio(sam, "Broker", SYS6)
+        period = "from=2027-01-10&to=2027-03-31"
+        # today is outside the period: its first month; the days before the period are marked
+        r = c.get(f"/bonds/events?{period}&view=calendar")
+        assert "<strong>4 events</strong>" in r.text  # the period's count, in either view
+        assert "<h3>January 2027</h3>" in r.text and 'class="bond-grid"' in r.text
+        assert 'href="#bond-day-2027-01-15"' in r.text
+        assert r.text.count('id="bond-day-2027-01-15"') == 1  # the day's first row only
+        assert 'class="bond-day off"' in r.text  # Jan 1–9: before the period
+        assert "bond-day-2027-02-03" not in r.text  # one month's events
+        assert 'aria-current="true">Calendar</a>' in r.text
+        assert 'class="bond-step" aria-hidden="true">‹' in r.text  # nothing before January
+        nxt = "from=2027-01-10&amp;to=2027-03-31&view=calendar&month=2027-02"
+        assert f'hx-get="/bonds/events?{nxt}"' in r.text and f'hx-push-url="/bonds?{nxt}"' in r.text
+        assert "Оферта: последний день заявок" in r.text.split('class="bond-legend"')[1]
+        assert "357.80 RUB" in r.text and "expected" in r.text  # the month's payments
+        r = c.get(f"/bonds/events?{period}&view=calendar&month=2027-03")
+        assert "<h3>March 2027</h3>" in r.text and 'id="bond-day-2027-03-31"' in r.text
+        assert 'class="bond-step" aria-hidden="true">›' in r.text  # nothing after March
+        # a month outside the period is the nearest one in it; nonsense is the default month
+        assert "<h3>March 2027</h3>" in c.get(
+            f"/bonds/events?{period}&view=calendar&month=2031-07").text
+        assert "<h3>January 2027</h3>" in c.get(
+            f"/bonds/events?{period}&view=calendar&month=soon").text
+        assert len(builds.calls) == 1  # every month is the same build
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_the_whole_calendar_steps_from_the_first_event_to_the_last() -> None:
+    today = date.today()
+    first, last = date(today.year - 3, 6, 1), date(today.year + 4, 2, 1)
+    c = _client(_Builds([_event(first), _event(last)]))
+    try:
+        sam = _as(c)
+        _portfolio(sam, "Broker", SYS6)
+        r = c.get("/bonds/events?all=1&view=calendar")
+        assert f"<h3>{today:%B %Y}</h3>" in r.text  # this month, between the two
+        assert "No events in" in r.text and "Today</a>" not in r.text
+        assert f"<h3>{first:%B %Y}</h3>" in c.get(
+            "/bonds/events?all=1&view=calendar&month=1990-01").text
+        r = c.get("/bonds/events?all=1&view=calendar&month=2999-01")
+        assert f"<h3>{last:%B %Y}</h3>" in r.text and "Today</a>" in r.text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_busy_day_shows_three_chips_and_how_many_more() -> None:
+    day = date(2027, 1, 15)
+    c = _client(_Builds([_event(day, name=f"Bond {i}", secid=f"B{i}") for i in range(5)]))
+    try:
+        sam = _as(c)
+        _portfolio(sam, "Broker", SYS6)
+        r = c.get("/bonds/events?from=2027-01-01&to=2027-01-31&view=calendar")
+        assert 'class="bond-chips capped"' in r.text and "+2 more" in r.text
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_the_view_chosen_last_is_the_one_the_tab_opens_in(client) -> None:
+    sam = _as(client)
+    _portfolio(sam, "Broker", SYS6)
+    r = client.get("/bonds/events")
+    assert 'class="bond-table' in r.text and "bond-grid" not in r.text  # the list by default
+    assert "bond_view" not in r.headers.get("set-cookie", "")  # nothing chosen yet
+    cookie = client.get("/bonds/events?view=calendar").headers["set-cookie"]
+    assert "bond_view=calendar" in cookie and "Path=/bonds" in cookie
+    assert "bond-grid" in client.get("/bonds/events").text  # no view asked: the last one
+    assert "bond-grid" in client.get("/bonds/events?view=table").text  # not a view: ignored
+    assert "bond-grid" not in client.get("/bonds/events?view=list").text
+    assert "bond-grid" not in client.get("/bonds/events").text
+    # the tab passes a link's view and month on to the calendar it loads
+    today = date.today()
+    q = f"from={today.isoformat()}&amp;to={bc.one_year_after(today).isoformat()}"
+    r = client.get("/bonds?view=calendar&month=2027-02")
+    assert f'hx-get="/bonds/events?{q}&amp;view=calendar&amp;month=2027-02"' in r.text
+    assert f'hx-get="/bonds/events?{q}"' in client.get("/bonds?view=grid&month=feb").text
+
+
 def test_csv_and_ics_downloads_are_the_scripts_formats(client) -> None:
     sam = _as(client)
     _portfolio(sam, "Broker", SYS6)

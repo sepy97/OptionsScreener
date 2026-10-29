@@ -39,7 +39,9 @@ def _live(tmp_path: Path):
     con.commit()
     con.close()
     jobs = JobStore(str(tmp_path / "live" / "jobs.sqlite"))
-    jobs.create("screen1", NOW.isoformat(), SOURCE_REFRESH)
+    # dated by the real clock, not NOW: the store prunes jobs older than 30 days as it adds one,
+    # so a fixed date makes this test fail a month after it
+    jobs.create("screen1", datetime.now(tz=UTC).isoformat(), SOURCE_REFRESH)
     jobs.finish("screen1", "done", result=[])
     overlay = tmp_path / "live" / "overlay_metrics.csv"
     overlay.write_text("symbol,pe\nAAPL,30\n")

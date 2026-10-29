@@ -39,8 +39,8 @@
 
   <div id="bond-feed"></div>
 
-  <section id="bond-calendar" hx-get="/bonds/events?{{ period.query }}" hx-trigger="load"
-           hx-swap="innerHTML">
+  <section id="bond-calendar" hx-get="/bonds/events?{{ period.query }}{{ view_query }}"
+           hx-trigger="load" hx-swap="innerHTML">
     <article aria-busy="true">Loading the calendar from MOEX…</article>
   </section>
 {% endblock %}
