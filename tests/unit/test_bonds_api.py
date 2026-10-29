@@ -17,6 +17,8 @@ from wheel_screener.api.app import app  # noqa: E402
 from wheel_screener.api.bond_portfolios import MAX_BONDS, BondPortfolioStore  # noqa: E402
 from wheel_screener.api.users import UserStore  # noqa: E402
 from wheel_screener.bonds import bond_calendar as bc  # noqa: E402
+from wheel_screener.bonds import spreadsheet as sheet  # noqa: E402
+from wheel_screener.bonds.reports import Workbook  # noqa: E402
 from wheel_screener.bonds.search import Bond, BondDirectory  # noqa: E402
 from wheel_screener.bonds.service import BondCalendarService  # noqa: E402
 
@@ -462,15 +464,15 @@ def test_all_portfolios_add_up_and_one_portfolio_shows_its_own() -> None:
         r = c.get("/bonds/events")
         assert "<strong>2 events</strong>" in r.text
         assert "Broker 10 · IIS 5" in r.text and "IIS 2" in r.text  # who holds each
-        assert "536.70 RUB" in r.text  # 15 × 35.78, both portfolios
+        assert "536,70\u00a0₽" in r.text  # 15 × 35.78, both portfolios
         r = c.get(f"/bonds/events?portfolio={broker}")
-        assert "<strong>1 event</strong>" in r.text and "357.80 RUB" in r.text
+        assert "<strong>1 event</strong>" in r.text and "357,80\u00a0₽" in r.text
         assert "bond-holders" not in r.text  # one portfolio: no need to say whose
         c.get(f"/bonds/events?portfolio={iis}")
         assert len(builds.calls) == 1  # every view is the same build
         # a changed quantity is the same build too
         _store().set_qty(sam.id, broker, "RU000A0JXN21", 20.0)
-        assert "894.50 RUB" in c.get("/bonds/events").text and len(builds.calls) == 1
+        assert "894,50\u00a0₽" in c.get("/bonds/events").text and len(builds.calls) == 1
         csv = c.get("/bonds/export.csv").content.decode("utf-8-sig")
         assert "Portfolios: Broker 20 · IIS 5" in csv
         assert "Portfolios:" not in c.get(
@@ -497,7 +499,7 @@ def test_events_group_by_month_with_problems_notes_and_totals() -> None:
         assert "Could not process 1" in r.text and "not found on MOEX" in r.text
         assert "not in this portfolio" not in r.text  # another portfolio's problem
         assert "Skipping 2 already matured bonds" in r.text  # over every portfolio shown
-        assert ">Total</th>" in r.text and "357.80 RUB" in r.text
+        assert ">Total</th>" in r.text and "357,80\u00a0₽" in r.text
         assert "Expected payments by month" in r.text
         broker = _store().portfolios(sam.id)[0].id
         assert "Skipping 1 already matured bonds" in c.get(
@@ -543,7 +545,7 @@ def test_the_calendar_view_is_a_month_grid_stepping_through_the_period() -> None
         nxt = "from=2027-01-10&amp;to=2027-03-31&view=calendar&month=2027-02"
         assert f'hx-get="/bonds/events?{nxt}"' in r.text and f'hx-push-url="/bonds?{nxt}"' in r.text
         assert "Оферта: последний день заявок" in r.text.split('class="bond-legend"')[1]
-        assert "357.80 RUB" in r.text and "expected" in r.text  # the month's payments
+        assert "357,80\u00a0₽" in r.text and "expected" in r.text  # the month's payments
         r = c.get(f"/bonds/events?{period}&view=calendar&month=2027-03")
         assert "<h3>March 2027</h3>" in r.text and 'id="bond-day-2027-03-31"' in r.text
         assert 'class="bond-step" aria-hidden="true">›' in r.text  # nothing after March
@@ -587,6 +589,20 @@ def test_a_busy_day_shows_three_chips_and_how_many_more() -> None:
         c.__exit__(None, None, None)
 
 
+def test_amounts_read_the_russian_way_and_never_wrap() -> None:
+    from wheel_screener.api.app import _bond_count, _bond_money, _bond_num
+
+    nbsp = "\u00a0"
+    assert _bond_money(120000.0, "RUB") == f"120{nbsp}000,00{nbsp}₽"
+    assert _bond_money(35.78, "SUR") == f"35,78{nbsp}₽"
+    assert _bond_money(1234567.8, "USD") == f"1{nbsp}234{nbsp}567,80{nbsp}$"
+    assert _bond_money(5.0, "CHF") == f"5,00{nbsp}CHF"  # no sign: its code
+    assert _bond_money(5.0, "") == "5,00" and _bond_money(None, "RUB") == ""
+    assert _bond_num(12.3456) == "12,3456" and _bond_num(14.35) == "14,35"  # a coupon's rate
+    assert _bond_count(1500.0) == f"1{nbsp}500" and _bond_count(0.5) == "0,5"
+    assert _bond_count(10.0) == "10" and _bond_count(None) == ""
+
+
 def test_the_view_chosen_last_is_the_one_the_tab_opens_in(client) -> None:
     sam = _as(client)
     _portfolio(sam, "Broker", SYS6)
@@ -614,6 +630,12 @@ def test_csv_and_ics_downloads_are_the_scripts_formats(client) -> None:
     assert r.headers["content-type"].startswith("text/csv")
     assert r.content.startswith("\ufeffDate,Event,Bond".encode())  # utf-8-sig, as the script
     assert "35,78" in client.get("/bonds/export.csv?all=1&sep=%3B").content.decode("utf-8-sig")
+    r = client.get("/bonds/export.xlsx?all=1")
+    assert r.headers["content-type"] == sheet.MEDIA_TYPE
+    assert 'filename="bond_calendar.xlsx"' in r.headers["content-disposition"]
+    assert Workbook(r.content).rows(sheet.SHEET)[1][5] == "35.78"
+    page = client.get("/bonds/events?all=1").text
+    assert 'href="/bonds/export.xlsx?all=1"' in page and "CSV for Excel" not in page
     r = client.get("/bonds/calendar.ics?all=1")
     assert r.headers["content-type"].startswith("text/calendar")
     assert "BEGIN:VCALENDAR" in r.text and "X-WR-CALNAME:Bonds" in r.text
