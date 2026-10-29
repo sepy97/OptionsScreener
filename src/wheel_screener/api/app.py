@@ -1924,8 +1924,40 @@ _BOND_EVENTS: dict[str, tuple[str, str]] = {
     bc.OFFER_BUYBACK: ("ev-offer", "Offer: the issuer buys back the bonds tendered"),
 }
 templates.env.globals["bond_events"] = _BOND_EVENTS
-templates.env.filters["bond_fmt"] = bc.fmt
-templates.env.filters["bond_qty"] = bc.fmt_qty
+
+# The page writes numbers the Russian way, as MOEX and the brokers do: 120 000,00 ₽. The spaces
+# are no-break ones, so an amount never wraps (a narrow one all but vanishes between tabular
+# digits). The CSV and .ics keep bc.fmt's plain numbers, which other programs read.
+_CURRENCY_SIGNS = {"RUB": "₽", "SUR": "₽", "USD": "$", "EUR": "€", "CNY": "¥"}
+
+
+def _ru(s: str) -> str:
+    return s.replace(",", " ").replace(".", ",")
+
+
+def _bond_num(x: float | None) -> str:
+    """1234.5 -> '1 234,50'; a third and fourth decimal only when the value has them."""
+    if x is None:
+        return ""
+    return _ru(f"{x:,.2f}" if abs(x - round(x, 2)) < 1e-9 else f"{x:,.4f}".rstrip("0"))
+
+
+def _bond_money(x: float | None, cur: str | None) -> str:
+    if x is None:
+        return ""
+    sign = _CURRENCY_SIGNS.get(cur or "", cur)
+    return f"{_bond_num(x)} {sign}" if sign else _bond_num(x)
+
+
+def _bond_count(q: float | None) -> str:
+    """1500 -> '1 500', 0.5 -> '0,5'."""
+    return "" if q is None else _ru(f"{q:,.4f}".rstrip("0").rstrip("."))
+
+
+templates.env.filters["bond_num"] = _bond_num
+templates.env.filters["bond_money"] = _bond_money
+templates.env.filters["bond_count"] = _bond_count
+templates.env.filters["bond_qty"] = bc.fmt_qty  # what a quantity field holds, to be edited
 templates.env.filters["bond_holders"] = bh.holders_label
 
 _SOON_DAYS = 7  # events this close are highlighted

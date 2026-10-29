@@ -24,11 +24,11 @@
     <span class="ev-meta"><span class="ev ev-tag {{ style }}" title="{{ gloss }}">{{ e.kind }}</span>
       <small class="bond-isin" title="MOEX code {{ e.secid }}">{{ e.isin }}</small>
       {%- if show_holders %} <small class="bond-holders" title="the portfolios holding it, and how many each">{{ e|bond_holders }}</small>{% endif %}</span></td>
-  <td class="num ev-per">{% if e.amount is not none %}{{ e.amount|bond_fmt }} {{ e.cur }}{% endif %}</td>
-  <td class="num ev-rate">{% if e.rate is not none %}{{ e.rate|bond_fmt }}%{% endif %}</td>
+  <td class="num ev-per">{% if e.amount is not none %}{{ e.amount|bond_money(e.cur) }}{% endif %}</td>
+  <td class="num ev-rate">{% if e.rate is not none %}{{ e.rate|bond_num }}%{% endif %}</td>
   {% if has_qty %}
-  <td class="num ev-qty">{{ e.qty|bond_qty }}</td>
-  <td class="num ev-total">{% if e.total is not none %}<b>{{ e.total|bond_fmt }} {{ e.cur }}</b>{% endif %}</td>
+  <td class="num ev-qty">{{ e.qty|bond_count }}</td>
+  <td class="num ev-total">{% if e.total is not none %}<b>{{ e.total|bond_money(e.cur) }}</b>{% endif %}</td>
   {% endif %}
   {# a known coupon's note is only its record date — a phone leaves it out #}
   <td class="bond-note-cell{{ ' minor' if style == 'ev-coupon' and e.amount is not none }}">{{ e.note }}</td>
@@ -109,7 +109,7 @@
       {%- else %}<span class="bond-step" aria-hidden="true">›</span>{% endif %}
       {% if cal.this_month %}{{ view_link("calendar", "Today", cal.this_month, cls="bond-today") }}{% endif %}
       <span class="bond-cal-sum">{{ k }} event{{ '' if k == 1 else 's' }}
-        {%- for _, cur, total in cal.cash %} · <b>{{ total|bond_fmt }} {{ cur }}</b>{% endfor %}
+        {%- for _, cur, total in cal.cash %} · <b>{{ total|bond_money(cur) }}</b>{% endfor %}
         {%- if cal.cash %} <small>expected</small>{% endif %}</span>
     </div>
     {% if kinds %}
@@ -130,7 +130,7 @@
         <span class="bond-chips{{ ' capped' if d.events|length > 4 }}">
           {%- for e in d.events %}{% set style = bond_events.get(e.kind, ("", ""))[0] %}
           <span class="bond-chip {{ style }}" title="{{ e.kind }} · {{ e.name }}
-            {%- if e.total is not none %} · {{ e.total|bond_fmt }} {{ e.cur }}{% elif e.amount is not none %} · {{ e.amount|bond_fmt }} {{ e.cur }}{% endif %}">{{ e.name }}</span>
+            {%- if e.total is not none %} · {{ e.total|bond_money(e.cur) }}{% elif e.amount is not none %} · {{ e.amount|bond_money(e.cur) }}{% endif %}">{{ e.name }}</span>
           {%- endfor %}
         </span>
         {% if d.events|length > 4 %}<span class="bond-more">+{{ d.events|length - 3 }} more</span>{% endif %}
@@ -162,7 +162,7 @@
     <table class="bond-cash-table">
       <tbody>
         {% for month, cur, total in cash %}
-        <tr><td>{{ month }}</td><td class="num">{{ total|bond_fmt }} {{ cur }}</td></tr>
+        <tr><td>{{ month }}</td><td class="num">{{ total|bond_money(cur) }}</td></tr>
         {% endfor %}
       </tbody>
     </table>
