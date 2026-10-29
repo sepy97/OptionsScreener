@@ -63,6 +63,14 @@ footer { margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--border
 }
 .badge--neg { background: var(--neg-soft); color: var(--neg); }
 .badge--ok { background: var(--wheel-accent-soft); color: var(--wheel-accent-strong); }
+/* a search row that fails a liquidity measure: shown, since hiding it reads as "no options",
+   but muted and hatched like the roll grid's thin cells so it reads as one to be careful with */
+.badge--thin {
+  display: flex; width: max-content; max-width: 12rem; margin-top: 0.15rem; border-radius: 0.6rem;
+  white-space: normal; background: var(--sunken); color: var(--pico-muted-color); cursor: help;
+}
+tr.thin-row > td { color: var(--pico-muted-color); }
+.thin-note { margin: 0 0 0.5rem; }
 
 /* --- form --- */
 form { margin-bottom: 0; }

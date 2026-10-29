@@ -44,6 +44,7 @@ from wheel_screener.core.pipeline.rate_fundamentals import rate_and_rank
 from wheel_screener.core.pipeline.select_strike import (
     contract_yield,
     credited_premium,
+    liquidity_issues,
     select_put,
     select_top_contracts,
     signed_target_delta,
@@ -71,6 +72,10 @@ logger = logging.getLogger(__name__)
 # Concurrent chain pulls for the swap review. A wheel account holds a handful of puts, so this
 # is about not waiting on them one at a time rather than about throughput.
 _SWAP_WORKERS = 4
+
+# How far above its target a single-ticker search reaches for a contract, when that is past the
+# screen's own delta cap (ScreenCriteria.max_abs_delta).
+SEARCH_DELTA_REACH = 0.10
 
 
 def _suggestion(c: CandidateResult) -> SwapSuggestion:
@@ -531,6 +536,14 @@ class ScreenerService:
         a covered call presupposes a specific holding, so the underlying is given, not screened.
         """
         symbol = symbol.strip().upper()
+        # One ticker is described, as the roll grid describes one board, so its open interest is
+        # judged by the grid's floor rather than the screen's; and the delta cap follows the
+        # target asked for — a fixed 0.30 cut a 0.30 target's whole upper half away.
+        criteria = criteria.model_copy(update={
+            "min_open_interest": rollgrid.BOARD_MIN_OPEN_INTEREST,
+            "max_abs_delta": max(criteria.max_abs_delta,
+                                 abs(criteria.target_delta) + SEARCH_DELTA_REACH),
+        })
         # One authoritative per-symbol call, refreshed on every search — far cheaper and more
         # accurate than sweeping the whole market's calendar to look up a single ticker (which is
         # also what exposed this path to the calendar's near-term clipping). No coverage range is
@@ -572,7 +585,8 @@ class ScreenerService:
             if k.underlying_price is None:
                 k.underlying_price = spot
         contracts = [
-            self._candidate(symbol, k, earnings_status=guard.status(symbol, k.expiration))
+            self._candidate(symbol, k, earnings_status=guard.status(symbol, k.expiration),
+                            liquidity_issues=liquidity_issues(k, criteria))
             for k in selected
         ]
         # absolute strength from the ticker's own metrics (works even for out-of-universe names);
@@ -591,7 +605,7 @@ class ScreenerService:
         ahead = upcoming(history or [], today, today + timedelta(days=366))
         logger.info(
             "search %s: %d %ss near Δ=%.2f (DTE %d-%d) · spot=%s · strength=%s · pct=%s · "
-            "earnings=%s (%d of %d expiries span it)",
+            "earnings=%s (%d of %d expiries span it) · %d thin",
             symbol, len(contracts), side.value,
             signed_target_delta(criteria.target_delta, side),
             criteria.min_dte, criteria.max_dte,
@@ -600,6 +614,7 @@ class ScreenerService:
             "n/a" if percentile is None else f"{percentile:.2f}",
             earnings or "unknown",
             sum(1 for c in contracts if c.earnings_status is EarningsStatus.SPANS), len(contracts),
+            sum(1 for c in contracts if c.liquidity_issues),
         )
         return TickerSearch(
             symbol=symbol, contracts=contracts, side=side, underlying_price=spot,

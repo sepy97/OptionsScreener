@@ -774,6 +774,10 @@ class CandidateResult(BaseModel):
     # call gets assigned early. ``dividends_checked`` separates "none" from "never looked".
     dividends: list[Dividend] = Field(default_factory=list)
     dividends_checked: bool = False
+    # What makes THIS contract hard to sell at its bid ("42% spread", "3 open interest"), from
+    # ``liquidity_issues``. Only a single-ticker search carries any: the screen drops such a
+    # contract instead.
+    liquidity_issues: list[str] = Field(default_factory=list)
     has_weeklys: bool | None = None
     score: float | None = None
     notes: list[str] = Field(default_factory=list)

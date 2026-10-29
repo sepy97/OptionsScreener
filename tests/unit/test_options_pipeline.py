@@ -441,6 +441,54 @@ def test_search_calls_targets_positive_delta_and_pulls_the_call_chain():
     assert [c.contract.strike for c in r.contracts] == [110]  # 0.20Δ, nearest the target
 
 
+def _search_calls(contracts, n=5, target=0.30):
+    chains = _FakeChains(_chain(contracts))
+    service = ScreenerService(fundamentals=_FakeFundamentals(), chains=chains)
+    crit = ScreenCriteria(min_dte=7, max_dte=45, target_delta=target)
+    return service.search_ticker("AAA", crit, _BASE, n=n, side=OptionType.CALL).contracts
+
+
+def test_search_shows_thin_contracts_marked_rather_than_saying_there_are_none():
+    """TER, 2026-10-29: the weeklies had under 100 open at every strike near the money and the
+    monthlies' liquid strikes sat past the delta cap, so the search said there were no calls."""
+    rows = _search_calls([_call(105, 0.30, 14, 2.0, oi=5),
+                          _call(110, 0.28, 21, 1.5, spread=0.6, vol=0, bid_size=3)])
+    assert [r.contract.strike for r in rows] == [105, 110]
+    assert [r.liquidity_issues for r in rows] == [
+        ["5 open interest"], ["46.2% spread", "no trades today", "3 bid"]]
+
+
+def test_the_screen_still_drops_what_the_search_marks():
+    thin = _chain([_put(90, -0.20, 30, 1.0, oi=5)])
+    assert select_put(thin, ScreenCriteria(min_dte=14, max_dte=45)) is None
+
+
+def test_open_interest_is_judged_by_the_boards_floor_not_the_screens():
+    rows = _search_calls([_call(105, 0.30, 14, 2.0, oi=50), _call(105, 0.30, 21, 2.0, oi=9)])
+    assert [r.liquidity_issues for r in rows] == [[], ["9 open interest"]]
+
+
+def test_a_liquid_strike_beside_the_target_is_shown_in_place_of_a_thin_one_on_it():
+    rows = _search_calls([
+        _call(100, 0.30, 14, 2.0, oi=5), _call(105, 0.25, 14, 1.6),  # 0.05 away: the liquid one
+        _call(100, 0.30, 21, 2.5, oi=5), _call(110, 0.20, 21, 1.2),  # 0.10 away: the thin one
+    ])
+    assert [(r.contract.strike, bool(r.liquidity_issues)) for r in rows] == [
+        (105, False), (100, True)]
+
+
+def test_expiries_with_a_liquid_contract_come_before_thin_ones():
+    rows = _search_calls([_call(100, 0.30, 14, 2.0, oi=5), _call(110, 0.24, 28, 1.2)], n=1)
+    assert [r.contract.dte for r in rows] == [28]  # further from the target, but tradeable
+
+
+def test_the_search_delta_cap_follows_the_target():
+    """The screen's fixed 0.30 cap cut everything above a 0.30 target away."""
+    rows = _search_calls([_call(100, 0.36, 14, 2.0), _call(95, 0.45, 21, 3.0)])
+    assert [r.contract.delta for r in rows] == [0.36]  # within 0.10 of 0.30; 0.45 is not
+    assert _search_calls([_call(100, 0.36, 14, 2.0)], target=0.20) == []  # cap stays 0.30
+
+
 def test_call_yield_is_premium_over_share_price_not_strike():
     """The whole point of the side split: a covered call posts no cash, so the base is what the
     100 pledged shares are worth — using the strike would silently misprice every call."""

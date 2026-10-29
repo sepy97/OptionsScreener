@@ -130,6 +130,10 @@ class RollGrid:
         return (self.collected - self.close_cost) * CONTRACT_MULTIPLIER * self.contracts
 
 
+# The open-interest floor for describing ONE board rather than choosing among ~800 names
+# (see _liquidity_problem). The single-ticker search uses it too.
+BOARD_MIN_OPEN_INTEREST = 10
+
 # Enough rows to reach the money from a deep out-of-the-money strike without the panel growing
 # without bound. Past this the range is trimmed from the far end, never from the money.
 MAX_STRIKE_ROWS = 19
@@ -215,7 +219,7 @@ def build(
     collected: float | None = None, opened_on: date | None = None,
     strike_span: int = 4, expiry_count: int = 8,
     max_spread: float = 0.30, spread_exempt: float = 0.05,
-    min_oi: int = 10, min_volume: int = 1, min_bid_size: int = 10,
+    min_oi: int = BOARD_MIN_OPEN_INTEREST, min_volume: int = 1, min_bid_size: int = 10,
 ) -> RollGrid | None:
     """Price every listed strike against every listed expiry, from the current leg outward."""
     own = [c for c in chain if c.option_type is option_type]

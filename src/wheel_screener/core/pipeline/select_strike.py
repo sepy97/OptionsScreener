@@ -3,13 +3,16 @@
 For the market screen we take ONE put per name (nearest the target delta, best yield); the screen
 is cash-secured-puts only. For a single-ticker search we return the top-N contracts nearest the
 target delta (one per expiry) on the requested side — puts to *enter* a position, calls to sell
-against shares already held — so you can compare expiries at a consistent moneyness.
+against shares already held — so you can compare expiries at a consistent moneyness. The screen
+drops a contract that fails a liquidity measure; the search shows it, marked.
 
 Both sides share every sellability gate; they differ in exactly two places, and only these two:
 the sign of the target delta, and the base the yield is measured against (see ``contract_yield``).
 """
 
 from __future__ import annotations
+
+from collections import defaultdict
 
 from wheel_screener.core.earnings import EarningsGuard
 from wheel_screener.core.models import ChainSnapshot, OptionContract, OptionType, ScreenCriteria
@@ -85,18 +88,40 @@ def is_priceable(c: OptionContract) -> bool:
     return prem is not None and prem > 0 and c.strike > 0 and c.dte > 0
 
 
+def liquidity_issues(c: OptionContract, criteria: ScreenCriteria) -> list[str]:
+    """What stands between this contract and a fill at its bid, a few words each — empty when it
+    passes all four of the liquidity measures (spread, open interest, volume, bid size; see
+    ``ScreenCriteria``). The screen drops a contract with any; a single-ticker search shows it
+    with them marked."""
+    if c.bid is None or c.bid <= 0:
+        return ["no bid"]
+    issues = []
+    if not _tradeable_spread(c, criteria):
+        mid = (c.ask + c.bid) / 2 if c.ask else 0
+        issues.append(f"{(c.ask - c.bid) / mid:.1%} spread" if mid > 0 else "no ask")
+    if (c.open_interest or 0) < criteria.min_open_interest:
+        issues.append(f"{c.open_interest or 0} open interest")
+    if (c.volume or 0) < criteria.min_volume:
+        issues.append("no trades today")
+    if (c.bid_size or 0) < criteria.min_bid_size:
+        issues.append(f"{c.bid_size or 0} bid")
+    return issues
+
+
 def _eligible_contracts(
     snapshot: ChainSnapshot,
     criteria: ScreenCriteria,
     option_type: OptionType = OptionType.PUT,
     guard: EarningsGuard | None = None,
+    *,
+    liquid_only: bool = True,
 ) -> list[OptionContract]:
     """Contracts of ``option_type`` that pass the sellability gates: has a delta, DTE within
-    [min,max] (±tolerance), |delta| <= max_abs_delta, open interest >= min, a real sellable bid
-    (>0 — the yield floor, not a dollar threshold, is what rejects a token credit), a market
-    liquid enough to trade (see ``_tradeable_spread``, plus volume and bid-size floors), (when a
-    min_iv floor is set) a known IV >= it, and — when a ``guard`` is supplied — no earnings
-    report inside the contract's life.
+    [min,max] (±tolerance), |delta| <= max_abs_delta, a real sellable bid (>0 — the yield floor,
+    not a dollar threshold, is what rejects a token credit), a market liquid enough to trade (see
+    ``liquidity_issues``; not checked with ``liquid_only=False``), (when a min_iv floor is set) a
+    known IV >= it, and — when a ``guard`` is supplied — no earnings report inside the contract's
+    life.
 
     The earnings check belongs HERE, not at the name level: it is the only stage that knows the
     expiration. Filtering by name against the DTE window instead both over-filters (a name
@@ -110,12 +135,9 @@ def _eligible_contracts(
         and c.delta is not None
         and (lo - tol) <= c.dte <= (hi + tol)
         and abs(c.delta) <= criteria.max_abs_delta
-        and (c.open_interest or 0) >= criteria.min_open_interest
-        and (c.volume or 0) >= criteria.min_volume
-        and (c.bid_size or 0) >= criteria.min_bid_size
         and c.bid is not None
         and c.bid > 0
-        and _tradeable_spread(c, criteria)
+        and not (liquid_only and liquidity_issues(c, criteria))
         and (
             criteria.min_iv is None
             or (c.implied_volatility is not None and c.implied_volatility >= criteria.min_iv)
@@ -178,6 +200,11 @@ def select_put(
     return max(pool, key=lambda c: contract_yield(c) or 0.0)
 
 
+# In an expiry, a liquid contract within this much delta of the nearest one is shown in its place:
+# about a strike apart, and a tradeable quote beside the target beats a thin one on it.
+LIQUID_REACH = 0.05
+
+
 def select_top_contracts(
     snapshot: ChainSnapshot,
     criteria: ScreenCriteria,
@@ -186,9 +213,14 @@ def select_top_contracts(
     guard: EarningsGuard | None = None,
 ) -> list[OptionContract]:
     """The N contracts nearest ``target_delta`` (one per expiry) on the requested side — for a
-    single-ticker search. Same sellability gates as ``select_put``; selects the N expiries whose
-    nearest-to-target contract is closest to the target delta, returned earliest-expiry-first
-    (term structure).
+    single-ticker search, returned earliest-expiry-first (term structure).
+
+    Thin contracts are kept, for the caller to mark with ``liquidity_issues``: someone who typed a
+    ticker is asking what its options look like, and hiding every thin one reads as "none exist".
+    On TER (2026-10-29) the weeklies held under 100 open at every strike near the money, and the
+    search said there were no calls at all. In each expiry the contract nearest the target is
+    shown, or a liquid one within ``LIQUID_REACH`` of it; expiries whose pick is liquid come
+    before thin ones, then the nearest the target.
 
     Ordering is by delta-proximity, NOT by yield — which is why search can safely FLAG rather than
     exclude earnings-spanning expiries: there is no yield ranker here for inflated pre-earnings
@@ -196,10 +228,22 @@ def select_top_contracts(
     expiries marked, not silently shortened.
     """
     target = signed_target_delta(criteria.target_delta, option_type)
-    priced = _best_per_expiry(
-        _eligible_contracts(snapshot, criteria, option_type, guard), target
-    )
-    priced.sort(key=lambda c: abs(c.delta - target))  # pick the N nearest target
-    top = priced[: max(n, 0)]
+
+    def off(c: OptionContract) -> float:
+        return abs(c.delta - target)
+
+    by_expiry: dict[object, list[OptionContract]] = defaultdict(list)
+    for c in _eligible_contracts(snapshot, criteria, option_type, guard, liquid_only=False):
+        if is_priceable(c):
+            by_expiry[c.expiration].append(c)
+    picks = []
+    for contracts in by_expiry.values():
+        nearest = min(contracts, key=off)
+        liquid = [c for c in contracts if not liquidity_issues(c, criteria)]
+        best = min(liquid, key=off) if liquid else None
+        reach = off(nearest) + LIQUID_REACH + 1e-9  # a strike exactly 0.05 away is within it
+        picks.append(best if best is not None and off(best) <= reach else nearest)
+    picks.sort(key=lambda c: (bool(liquidity_issues(c, criteria)), off(c)))
+    top = picks[: max(n, 0)]
     top.sort(key=lambda c: c.dte)  # display order: earliest expiry first
     return top
