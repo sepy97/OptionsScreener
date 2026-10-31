@@ -805,9 +805,16 @@ a.bond-day:hover { background: var(--wheel-accent-soft); }
 }
 .bond-pill small { color: var(--pico-muted-color); font-size: 0.75rem; }
 .bond-pill.active { border-color: var(--wheel-accent); background: var(--wheel-accent-soft); color: var(--wheel-accent-strong); font-weight: 600; }
-.bond-new, .bond-rename { margin: 0; }
-.bond-new > summary, .bond-rename > summary { font-size: 0.85rem; color: var(--pico-primary); cursor: pointer; padding: 0.25rem 0.5rem; }
-.bond-new[open], .bond-rename[open] { flex-basis: 100%; }
+.bond-new, .bond-rename, .bond-update { margin: 0; }
+.bond-new > summary, .bond-rename > summary, .bond-update > summary { font-size: 0.85rem; color: var(--pico-primary); cursor: pointer; padding: 0.25rem 0.5rem; }
+.bond-new[open], .bond-rename[open], .bond-update[open] { flex-basis: 100%; }
+.bond-update small { display: block; color: var(--pico-muted-color); font-size: 0.8rem; }
+.bond-source { margin: 0 0 0.75rem; font-size: 0.85rem; color: var(--pico-muted-color); }
+.bond-changes { list-style: none; padding: 0; margin: 0.25rem 0 0; font-size: 0.9rem; }
+.bond-changes li { list-style: none; margin: 0 0 0.15rem; }
+.bond-change { display: inline-block; min-width: 2.6rem; padding: 0 0.3rem; margin-right: 0.35rem; border-radius: var(--radius-sm); font-size: 0.75rem; text-align: center; background: var(--sunken); border: 1px solid var(--border); }
+.bond-change--add { background: var(--wheel-accent-soft); border-color: transparent; color: var(--wheel-accent-strong); }
+.bond-change--gone { background: var(--neg-soft); border-color: transparent; color: var(--neg); }
 .bond-inline-form { display: flex; gap: 0.5rem; margin: 0.4rem 0 0.25rem; max-width: 28rem; }
 .bond-inline-form input { margin: 0; }
 .bond-inline-form button { width: auto; margin: 0; flex-shrink: 0; }

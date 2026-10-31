@@ -117,6 +117,33 @@ def test_replace_puts_an_imported_list_in_place(tmp_path) -> None:
         ("RU000A10FA72", None), ("гтлк, 001p-04", 3.0)]
 
 
+def test_a_portfolio_remembers_the_file_it_was_last_imported_from(tmp_path) -> None:
+    store = _store(tmp_path)
+    pid = store.create("sam", "Broker").id
+    assert (store.portfolio("sam", pid).source, store.portfolio("sam", pid).imported_at) == ("", "")
+    store.replace("sam", pid, [_item()], source="complex_portfolio_report_11111.xlsx")
+    broker = store.portfolio("sam", pid)
+    assert broker.source == "complex_portfolio_report_11111.xlsx" and broker.imported_at
+    store.add("sam", pid, _item(code="RU000A10FA72", name="Система 2P14"))  # an edit keeps it
+    assert store.portfolio("sam", pid).source == "complex_portfolio_report_11111.xlsx"
+    store.replace("sam", pid, [_item()])  # a pasted list: from no file
+    assert store.portfolio("sam", pid).source == ""
+
+
+def test_a_database_from_before_sources_gets_the_columns(tmp_path) -> None:
+    path = str(tmp_path / "jobs.sqlite")
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE bond_portfolios (id TEXT PRIMARY KEY, user_id TEXT NOT NULL,"
+                     " name TEXT NOT NULL, created_at TEXT NOT NULL)")
+        conn.execute("INSERT INTO bond_portfolios VALUES ('p1', 'sam', 'Broker', '2026-10-01')")
+    store = BondPortfolioStore(path)
+    [broker] = store.portfolios("sam")
+    assert (broker.name, broker.source, broker.imported_at) == ("Broker", "", "")
+    store.replace("sam", "p1", [_item()], source="complex_portfolio_report_11111.xlsx")
+    assert store.portfolios("sam")[0].source == "complex_portfolio_report_11111.xlsx"
+    BondPortfolioStore(path)  # the next start: the columns are there already
+
+
 def test_edits_at_once_each_land(tmp_path) -> None:
     store = _store(tmp_path)
     pid = store.create("sam", "Broker").id
