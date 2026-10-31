@@ -189,6 +189,13 @@ def test_rename_and_delete(client) -> None:
     assert r.status_code == 303 and [p.name for p in _store().portfolios(sam.id)] == ["IIS"]
 
 
+def test_rename_and_update_open_as_popups_a_press_elsewhere_closes(client) -> None:
+    pid = _portfolio(_as(client), "Broker", SYS6)
+    page = client.get(f"/bonds/portfolios/{pid}").text
+    assert page.count(" data-popup") == 2 and '<script src="/static/popup.js?v=' in page
+    assert "details[data-popup][open]" in client.get("/static/popup.js").text
+
+
 def test_nobody_reaches_anyone_elses_portfolio(client) -> None:
     alex = _as(client, "Alex")
     pid = _portfolio(alex, "Alex's", SYS6)
@@ -446,6 +453,7 @@ def test_update_brings_a_portfolio_up_to_date_from_a_newer_report(client) -> Non
     r = client.post(f"/bonds/portfolios/{pid}/update",
                     files={"file": ("complex_portfolio_report_11111.xlsx", newer, XLSX)})
     assert "Nothing changed: the same 2 bonds in the same quantities." in r.text
+    assert "this.closest('.bond-report').remove()" in html.unescape(r.text)  # it can be dismissed
 
 
 def test_update_refuses_another_intelinvest_portfolios_report(client) -> None:

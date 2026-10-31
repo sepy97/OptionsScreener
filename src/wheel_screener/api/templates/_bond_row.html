@@ -20,7 +20,7 @@
     {% if error %}<small class="bond-flag" role="alert">{{ error }}</small>{% endif %}
   </td>
   <td class="bond-remove">
-    <button type="button" class="secondary outline" aria-label="Remove {{ label }}"
+    <button type="button" class="secondary outline danger" aria-label="Remove {{ label }}"
             hx-post="/bonds/portfolios/{{ portfolio.id }}/remove" hx-vals='{{ {"key": h.key}|tojson }}'
             hx-include="#bond-q" hx-target="#bond-list" hx-swap="innerHTML"
             hx-sync="#bond-list:queue all">Remove</button>
