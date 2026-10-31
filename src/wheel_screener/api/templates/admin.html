@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 {% import "_icons.html" as icon %}
-{% block scripts %}<script src="/static/copy.js" defer></script>{% endblock %}
+{% block scripts %}<script src="/static/copy.js?v={{ asset_v }}" defer></script>{% endblock %}
 {% block content %}
   <article>
     <h2>Admin</h2>

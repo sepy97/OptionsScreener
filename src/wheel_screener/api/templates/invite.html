@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block scripts %}{% if invite %}<script src="/static/passkey.js" defer></script>{% endif %}{% endblock %}
+{% block scripts %}{% if invite %}<script src="/static/passkey.js?v={{ asset_v }}" defer></script>{% endif %}{% endblock %}
 {% block content %}
   <article>
     {% if invite %}

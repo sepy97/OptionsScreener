@@ -805,10 +805,25 @@ a.bond-day:hover { background: var(--wheel-accent-soft); }
 }
 .bond-pill small { color: var(--pico-muted-color); font-size: 0.75rem; }
 .bond-pill.active { border-color: var(--wheel-accent); background: var(--wheel-accent-soft); color: var(--wheel-accent-strong); font-weight: 600; }
-.bond-new, .bond-rename, .bond-update { margin: 0; }
-.bond-new > summary, .bond-rename > summary, .bond-update > summary { font-size: 0.85rem; color: var(--pico-primary); cursor: pointer; padding: 0.25rem 0.5rem; }
-.bond-new[open], .bond-rename[open], .bond-update[open] { flex-basis: 100%; }
-.bond-update small { display: block; color: var(--pico-muted-color); font-size: 0.8rem; }
+.bond-new { margin: 0; }
+.bond-new > summary { font-size: 0.85rem; color: var(--pico-primary); cursor: pointer; padding: 0.25rem 0.5rem; }
+.bond-new[open] { flex-basis: 100%; }
+/* a portfolio's Rename, Update and Delete: like buttons in a row at the right; Rename's and
+   Update's forms open in a panel under the header, over the page, so no button moves */
+.bond-portfolio-head { position: relative; }
+.bond-head-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-left: auto; }
+.bond-head-menu { margin: 0; }
+.bond-head-actions .bond-head-btn { display: inline-block; width: auto; margin: 0; padding: 0.25rem 0.8rem; font-size: 0.8rem; line-height: 1.5; text-align: center; }
+.bond-head-menu > summary.bond-head-btn::after { display: none; }
+.bond-head-menu[open] > summary.bond-head-btn { margin: 0; background: var(--sunken); }
+.bond-pop {
+  position: absolute; z-index: 5; top: calc(100% + 0.35rem); right: var(--pico-block-spacing-horizontal, 1rem);
+  width: min(30rem, calc(100% - 2rem)); padding: 0.75rem 1rem;
+  background: var(--pico-card-background-color); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  box-shadow: 0 6px 20px rgba(16, 24, 40, 0.12);
+}
+.bond-pop .bond-inline-form { margin: 0 0 0.35rem; max-width: none; }
+.bond-pop small { display: block; color: var(--pico-muted-color); font-size: 0.8rem; }
 .bond-source { margin: 0 0 0.75rem; font-size: 0.85rem; color: var(--pico-muted-color); }
 .bond-changes { list-style: none; padding: 0; margin: 0.25rem 0 0; font-size: 0.9rem; }
 .bond-changes li { list-style: none; margin: 0 0 0.15rem; }
@@ -819,8 +834,7 @@ a.bond-day:hover { background: var(--wheel-accent-soft); }
 .bond-inline-form input { margin: 0; }
 .bond-inline-form button { width: auto; margin: 0; flex-shrink: 0; }
 .bond-portfolio-head h3 { margin: 0; font-size: 1rem; }
-.bond-delete { margin: 0 0 0 auto; }
-.bond-delete button { width: auto; margin: 0; padding: 0.25rem 0.8rem; font-size: 0.8rem; }
+.bond-delete { margin: 0; }
 .bond-period select { display: block; width: auto; min-width: 10rem; margin: 0.25rem 0 0; }
 @media (max-width: 820px) {
   .bond-downloads { margin-left: 0; }
