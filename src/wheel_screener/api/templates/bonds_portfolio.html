@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% block scripts %}<script src="/static/popup.js?v={{ asset_v }}" defer></script>{% endblock %}
 {% block content %}
   {% import "_icons.html" as icon %}
   {# Confirm prompts go through |tojson inside single-quoted handlers: a portfolio's name is the
@@ -40,9 +41,10 @@
     <header class="results-head bond-portfolio-head">
       <h3>{{ portfolio.name }}</h3>
       {# Rename, Update and Delete: a row of like buttons. A form opens in a panel under the row,
-         one at a time (the menus share a name), so no button moves. #}
+         one at a time (the menus share a name), so no button moves; a press anywhere else
+         closes it (popup.js). #}
       <div class="bond-head-actions">
-        <details class="bond-head-menu bond-rename" name="bond-head"{% if rename_error %} open{% endif %}>
+        <details class="bond-head-menu bond-rename" name="bond-head" data-popup{% if rename_error %} open{% endif %}>
           <summary role="button" class="secondary outline bond-head-btn">Rename</summary>
           <div class="bond-pop">
             <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/rename" class="bond-inline-form">
@@ -57,7 +59,7 @@
         {% if rows %}
         {# a newer download of the same report: the import below, but it refuses another
            Intelinvest portfolio's report and says what changed #}
-        <details class="bond-head-menu bond-update" name="bond-head">
+        <details class="bond-head-menu bond-update" name="bond-head" data-popup>
           <summary role="button" class="secondary outline bond-head-btn">Update</summary>
           <div class="bond-pop">
             <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/update"
@@ -73,7 +75,7 @@
         {% endif %}
         <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/delete" class="bond-delete"
               onsubmit='return confirm({{ ("Delete " ~ portfolio.name ~ (" and the " ~ portfolio.count ~ " bond" ~ ("" if portfolio.count == 1 else "s") ~ " in it" if portfolio.count else "") ~ "?")|tojson }})'>
-          <button type="submit" class="secondary outline bond-head-btn">Delete portfolio</button>
+          <button type="submit" class="secondary outline danger bond-head-btn">Delete portfolio</button>
         </form>
       </div>
     </header>
@@ -83,6 +85,8 @@
     {% if error %}<p role="alert">{{ icon.warning() }} {{ error }}</p>{% endif %}
     {% if report %}
     <div class="bond-report">
+      <a href="#" class="detail-close" onclick="this.closest('.bond-report').remove();return false;"
+         aria-label="Dismiss" title="Dismiss">{{ icon.close() }}</a>
       <p><strong>{% if updated %}Updated from {{ file }}: {{ report.count }} bond{{ '' if report.count == 1 else 's' }} held{{ ' (' ~ report.source ~ ')' if report.source }}.
         {%- else %}Imported {{ report.count }} bond{{ '' if report.count == 1 else 's' }}{{ ' from ' ~ report.source if report.source }}.{% endif %}</strong>
         {% if report.sold_out %}{{ report.sold_out }} sold out (a quantity of 0) left out.{% endif %}

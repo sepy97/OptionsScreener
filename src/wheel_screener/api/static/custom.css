@@ -14,6 +14,7 @@
   --ink: #1c2530;
   --border: rgba(16, 24, 40, 0.10);
   --sunken: #f6f8fa;
+  --slate-strong: #3b4558;  /* a filled grey (Pico secondary) button under the pointer */
   /* geometry */
   --radius: 10px;
   --radius-sm: 8px;
@@ -130,6 +131,25 @@ form label small { font-weight: 400; color: var(--pico-muted-color); }
 }
 .segmented input:checked + label small { color: var(--wheel-accent-strong); }
 .segmented input:focus-visible + label { outline: 2px solid var(--pico-primary-focus); outline-offset: -2px; }
+
+/* --- under the pointer, every button lights up (Pico's own hover on an outline button only darkens
+   its text a shade): outline buttons take the accent, ones that delete or remove (.danger) red,
+   filled grey ones go darker. A toggle not chosen gets the accent's outline — its fill means
+   chosen. Only where there's a pointer: on a phone a tapped button would stay lit. --- */
+@media (hover: hover) {
+  :is(button, [role="button"]).outline:hover, a.bond-step:hover {
+    background-color: var(--wheel-accent-soft); border-color: var(--wheel-accent); color: var(--wheel-accent-strong);
+  }
+  :is(button, [role="button"]).danger:hover { background-color: var(--neg-soft); border-color: var(--neg); color: var(--neg); }
+  :is(button, [role="button"]).secondary:not(.outline):hover,
+  [type="file"]::file-selector-button:hover { background-color: var(--slate-strong); border-color: var(--slate-strong); }
+  .segmented input:not(:checked) + label:hover, .bond-views a:not([aria-current]):hover,
+  .bond-pill:not(.active):hover {
+    position: relative; z-index: 2; border-color: var(--wheel-accent); color: var(--wheel-accent-strong);
+  }
+  details > summary:not([role="button"]):hover { text-decoration: underline; text-underline-offset: 0.2em; }
+  .link-btn:hover { color: var(--pico-primary-hover); text-decoration-thickness: 2px; }
+}
 
 /* --- results table --- */
 figure { margin: 0; overflow-x: auto; }
@@ -744,7 +764,7 @@ a.bond-day:hover { background: var(--wheel-accent-soft); }
 .bond-cash h3 small { font-weight: 400; color: var(--pico-muted-color); }
 .bond-cash-table { width: auto; min-width: 16rem; }
 .bond-textarea { font-family: var(--pico-font-family-monospace); font-size: 0.8rem; }
-.bond-report { margin-bottom: 1rem; padding: 0.75rem 1rem; background: var(--sunken); border-left: 3px solid var(--wheel-accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
+.bond-report { position: relative; margin-bottom: 1rem; padding: 0.75rem 2.25rem 0.75rem 1rem; background: var(--sunken); border-left: 3px solid var(--wheel-accent); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; }
 .bond-report pre { white-space: pre-wrap; font-size: 0.8rem; margin: 0.25rem 0 0.5rem; padding: 0.5rem; }
 .bond-report p { margin: 0 0 0.25rem; }
 .bond-help { font-size: 0.85rem; }
@@ -815,7 +835,9 @@ a.bond-day:hover { background: var(--wheel-accent-soft); }
 .bond-head-menu { margin: 0; }
 .bond-head-actions .bond-head-btn { display: inline-block; width: auto; margin: 0; padding: 0.25rem 0.8rem; font-size: 0.8rem; line-height: 1.5; text-align: center; }
 .bond-head-menu > summary.bond-head-btn::after { display: none; }
-.bond-head-menu[open] > summary.bond-head-btn { margin: 0; background: var(--sunken); }
+.bond-head-menu[open] > summary.bond-head-btn {
+  margin: 0; background-color: var(--wheel-accent-soft); border-color: var(--wheel-accent); color: var(--wheel-accent-strong);
+}
 .bond-pop {
   position: absolute; z-index: 5; top: calc(100% + 0.35rem); right: var(--pico-block-spacing-horizontal, 1rem);
   width: min(30rem, calc(100% - 2rem)); padding: 0.75rem 1rem;

@@ -52,7 +52,7 @@
                   title="Ends every session — for a lost or stolen device">
             Sign out everywhere</button>
           {% if person.id != me.id %}
-            <button type="button" class="secondary outline admin-danger"
+            <button type="button" class="secondary outline danger admin-danger"
                     hx-post="/admin/people/remove" hx-vals='{"user_id": "{{ person.id }}"}'
                     hx-target="#people" hx-swap="innerHTML"
                     hx-confirm="Remove {{ person.name }}'s access? Their passkeys stop working and their brokerage links are deleted."
@@ -79,7 +79,7 @@
               {% elif i.is_admin %}creates an admin{% else %}creates an account{% endif %}</td>
           <td data-label="Expires">{{ i.expires_at.strftime('%d %b %H:%M') }} UTC</td>
           <td class="card-wide">
-            <button type="button" class="secondary outline"
+            <button type="button" class="secondary outline danger"
                     hx-post="/admin/invites/cancel" hx-vals='{"ref": "{{ i.ref }}"}'
                     hx-target="#people" hx-swap="innerHTML"
                     hx-confirm="Cancel the invite for {{ i.name }}? The link will stop working.">
