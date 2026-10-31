@@ -33,6 +33,7 @@ Standard library only, like the script.
 
 from __future__ import annotations
 
+import calendar
 import csv
 import gzip
 import hashlib
@@ -72,8 +73,9 @@ QTY_COLUMNS = {"qty", "quantity", "количество", "количество,
 NOT_FOUND = "-"
 CURRENCY = {"SUR": "RUB", "RUR": "RUB"}
 
+# the script's columns, and the portfolio: an event of a bond in two portfolios is a row each
 COLUMNS = ["Date", "Event", "Bond", "ISIN", "Code", "Per bond",
-           "Currency", "Coupon, % p.a.", "Qty", "Total", "Note"]
+           "Currency", "Coupon, % p.a.", "Portfolio", "Qty", "Total", "Note"]
 
 # event types are in Russian, as MOEX and brokers call them; they are also part of
 # the .ics event IDs — renaming them makes calendar apps duplicate imported events
@@ -114,6 +116,13 @@ def one_year_after(d: date) -> date:
         return d.replace(year=d.year + 1)
     except ValueError:          # February 29
         return d.replace(year=d.year + 1, day=28)
+
+
+def one_month_after(d: date) -> date:
+    """The same day next month, or that month's last day (January 31 -> February 28)."""
+    year, month = divmod(d.year * 12 + d.month, 12)
+    nxt = date(year, month + 1, 1)
+    return nxt.replace(day=min(d.day, calendar.monthrange(nxt.year, nxt.month)[1]))
 
 
 def currency_of(row: dict) -> str:
@@ -689,7 +698,7 @@ def csv_text(events: list[dict], sep: str = ",") -> str:
     for e in events:
         w.writerow([
             e["date"].isoformat(), e["kind"], e["name"], e["isin"], e["secid"],
-            fmt(e["amount"], dc), e["cur"], fmt(e["rate"], dc),
+            fmt(e["amount"], dc), e["cur"], fmt(e["rate"], dc), e.get("portfolio", ""),
             fmt_qty(e["qty"], dc),
             fmt(e["total"], dc), e["note"],
         ])

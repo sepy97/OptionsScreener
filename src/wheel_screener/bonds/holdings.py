@@ -7,7 +7,9 @@ The calendar is built for the person's bonds — every portfolio's, each bond on
 quantities — so the MOEX build (``BondCalendarService``) is shared by every view of it: one
 portfolio or all of them, any quantities. ``shape`` then puts the quantities in for the
 portfolios shown: an event's quantity is the sum over the portfolios holding that bond, its total
-that quantity times the payment, and ``holders`` says which portfolios those are.
+that quantity times the payment, and ``holders`` says which portfolios those are. The downloads
+that are tables (the CSV and the workbooks) take ``by_portfolio``'s lines instead: an event once
+per portfolio holding the bond, with that portfolio's quantity.
 """
 
 from __future__ import annotations
@@ -109,9 +111,17 @@ def holders_label(e: dict) -> str:
                       for name, qty in e.get("holders", ()))
 
 
+def by_portfolio(events: list[dict]) -> list[dict]:
+    """A line per event and portfolio holding its bond (``shape``'s ``holders``), with that
+    portfolio's name, quantity and total — in the events' order, then the portfolios'."""
+    return [{**e, "portfolio": name, "qty": qty,
+             "total": e["amount"] * qty if e["amount"] is not None and qty else None}
+            for e in events for name, qty in e.get("holders") or [("", e["qty"])]]
+
+
 def with_holders_note(events: list[dict]) -> list[dict]:
-    """Events with the portfolios in their note — for the CSV and .ics, which keep the script's
-    columns and so have no portfolio column."""
+    """Events with the portfolios in their note — for the .ics, an event once whoever holds it,
+    which has no portfolio column."""
     return [{**e, "note": "; ".join(p for p in (e["note"], f"Portfolios: {holders_label(e)}")
                                     if p)}
             for e in events]
