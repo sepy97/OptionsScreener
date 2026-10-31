@@ -1,13 +1,16 @@
 """The calendar as Excel workbooks.
 
+Both take ``holdings.by_portfolio``'s lines: an event of a bond held in two portfolios is two
+lines, each with its portfolio's quantity and total.
+
 ``calendar_xlsx`` is the CSV's table, but with dates and numbers Excel reads as its own, so it
 opens the same in any locale — a CSV's columns and decimals depend on Excel's. One sheet,
-«Bonds»: a bold header that stays in view and filters, then a row per event. Dates use Excel's
+«Bonds»: a bold header that stays in view and filters, then a row per line. Dates use Excel's
 own short date, amounts a money format with their currency's sign, and Excel shows both the way
 the computer's locale does (120 000,00 ₽ in a Russian one).
 
 ``grouped_xlsx`` is the grouped export: coupons on «Купоны», every other event on «Другие
-события», a line per event and portfolio holding the bond, in the person's own format —
+события», in the person's own format —
 ``25.10.2026  Систем2P03  21,50  ГПБ  17670``: the date, MOEX's short name, the coupon's rate
 (on the second sheet, what the event is), the portfolio and what it receives. No header, so
 every line is in that format; the numbers are text, written the Russian way, so they read the
@@ -31,7 +34,7 @@ SHEET = "Bonds"
 GROUPED_SHEETS = ("Купоны", "Другие события")
 MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _EXCEL_EPOCH = date(1899, 12, 30)  # day 0 of Excel's date numbers
-_WIDTHS = [11, 30, 22, 15, 15, 13, 9, 14, 8, 15, 60]  # COLUMNS', in characters
+_WIDTHS = [11, 30, 22, 15, 15, 13, 9, 14, 16, 8, 15, 60]  # COLUMNS', in characters
 _GROUPED_WIDTHS = [11, 16, 30, 16, 14]
 # a currency's sign, on the page too; one without a sign shows as its code
 CURRENCY_SIGNS = {"RUB": "₽", "SUR": "₽", "USD": "$", "EUR": "€", "CNY": "¥"}
@@ -176,14 +179,15 @@ def calendar_xlsx(events: list[dict]) -> bytes:
         cells.append(_text(f"G{n}", cur))
         if e["rate"] is not None:
             cells.append(_number(f"H{n}", e["rate"], _RATE))
+        cells.append(_text(f"I{n}", e.get("portfolio") or ""))
         if (qty := e["qty"]) is not None:
-            cells.append(_number(f"I{n}", qty, _COUNT if qty == int(qty) else _PLAIN))
+            cells.append(_number(f"J{n}", qty, _COUNT if qty == int(qty) else _PLAIN))
         if e["total"] is not None:
-            cells.append(_number(f"J{n}", e["total"], money[cur] + 1))
-        cells.append(_text(f"K{n}", e["note"] or ""))
+            cells.append(_number(f"K{n}", e["total"], money[cur] + 1))
+        cells.append(_text(f"L{n}", e["note"] or ""))
         rows.append(f'<row r="{n}">' + "".join(cells) + "</row>")
 
-    last = f"K{len(rows)}"
+    last = f"L{len(rows)}"
     formats = ["0.00##"] + [_money_format(cur) for cur in currencies]
     xfs = [(0, 0), (0, 1), (14, 0), (_RATE_FMT, 0), (3, 0)]  # 14: the locale's short date
     for i in range(len(currencies)):
@@ -211,18 +215,15 @@ def _sum(x: float | None, cur: str | None) -> str:
 
 def grouped_lines(events: list[dict]) -> tuple[list[list], list[list]]:
     """The grouped export's coupons and other events: [date, short name, rate or event,
-    portfolio, amount] each, a line per portfolio holding the bond (``holdings.shape``'s
-    ``holders``), in the events' order and the portfolios'."""
+    portfolio, amount] each, in the events' order."""
     coupons: list[list] = []
     other: list[list] = []
     for e in events:
         coupon = e["kind"] == bc.COUPON
-        for portfolio, qty in e.get("holders") or [("", e["qty"])]:
-            total = e["amount"] * qty if e["amount"] is not None and qty else None
-            (coupons if coupon else other).append([
-                e["date"], e.get("short") or e["name"], _rate(e["rate"]) if coupon else e["kind"],
-                portfolio, _sum(total, e["cur"]),
-            ])
+        (coupons if coupon else other).append([
+            e["date"], e.get("short") or e["name"], _rate(e["rate"]) if coupon else e["kind"],
+            e.get("portfolio") or "", _sum(e["total"], e["cur"]),
+        ])
     return coupons, other
 
 

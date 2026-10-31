@@ -67,10 +67,26 @@ def test_a_bond_found_by_name_during_the_build_is_matched_by_name() -> None:
     assert e["qty"] == 4.0
 
 
-def test_downloads_carry_the_portfolios_in_the_note() -> None:
+def test_the_ics_carries_the_portfolios_in_the_note() -> None:
     [e] = bh.with_holders_note(bh.shape([_event(SYS[0], SYS[0], SYS[1])],
                                         [_h("Broker", *SYS, qty=10), _h("IIS", *SYS, qty=5)]))
     assert e["note"] == "record date 2027-01-09; Portfolios: Broker 10 · IIS 5"
+
+
+def test_the_tables_take_a_line_per_event_and_portfolio() -> None:
+    events = [_event(SYS[0], SYS[0], SYS[1]),
+              _event(SYS[0], SYS[0], SYS[1], day=date(2027, 3, 26), kind=bc.REDEMPTION,
+                     amount=1000.0)]
+    shaped = bh.shape(events, [_h("Broker", *SYS, qty=10), _h("IIS", *SYS, qty=5),
+                               _h("Old", *SYS)])  # imported without quantities
+    lines = bh.by_portfolio(shaped)
+    assert [(e["kind"], e["portfolio"], e["qty"], e["total"]) for e in lines] == [
+        (bc.COUPON, "Broker", 10, 35.78 * 10), (bc.COUPON, "IIS", 5, 35.78 * 5),
+        (bc.COUPON, "Old", None, None),
+        (bc.REDEMPTION, "Broker", 10, 10000.0), (bc.REDEMPTION, "IIS", 5, 5000.0),
+        (bc.REDEMPTION, "Old", None, None)]
+    assert all(e["note"] == "record date 2027-01-09" for e in lines)  # no portfolios to list
+    assert shaped[0]["qty"] == 15  # the page's events are not touched
 
 
 def test_a_portfolio_exports_as_the_scripts_watchlist() -> None:

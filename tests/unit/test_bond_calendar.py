@@ -207,8 +207,10 @@ def _event(**kw) -> dict:
 def test_csv_text_matches_the_script_and_supports_excel_decimal_commas() -> None:
     lines = bc.csv_text([_event()]).splitlines()
     assert lines[0] == ",".join(f'"{c}"' if "," in c else c for c in bc.COLUMNS)
-    assert lines[1] == ('2027-01-10,Купон,"Bond, 1",RU1,RU1,35.78,RUB,14.35,2,71.56,'
-                        "record date 2027-01-09")
+    assert lines[1] == ('2027-01-10,Купон,"Bond, 1",RU1,RU1,35.78,RUB,14.35,,2,71.56,'
+                        "record date 2027-01-09")  # no portfolio: the script's own events
+    held = bc.csv_text([_event(portfolio="ИИС")]).splitlines()[1]
+    assert held.split(",")[9:12] == ["ИИС", "2", "71.56"]
     assert bc.csv_text([_event()], ";").splitlines()[1].split(";")[5] == "35,78"
 
 

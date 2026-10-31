@@ -393,17 +393,19 @@ their ISINs looked up once, on import), and downloaded back as CSV. Importing a 
 brings a portfolio up to date.
 
 The calendar shows one portfolio or all of them: with all, each bond's quantity is the sum over
-the portfolios holding it, and each event says which those are. It covers a year ahead by default
+the portfolios holding it, and each event says which those are. It covers a month ahead by default
 (or chosen dates, or the whole calendar), with expected payments by month, its amounts written the
 Russian way (120 000,00 ₽). It downloads as the script's CSV and `.ics`, or as an **Excel
-workbook** with real dates and amounts, which opens the same in any locale (the portfolios go in
-the note). The **grouped export** (`grouped_export.xlsx`) puts coupons on one sheet and every
-other event on another, a line per event and portfolio —
+workbook** with real dates and amounts, which opens the same in any locale. The CSV and the
+workbook add a Portfolio column: an event of a bond held in two portfolios is two lines, each with
+that portfolio's quantity and total (the `.ics` keeps one event, the portfolios in its note). The
+**grouped export** (`grouped_export.xlsx`) puts coupons on one sheet and every other event on
+another, a line per event and portfolio —
 `25.10.2026  Систем2P03  21,50  ГПБ  17670`: date, MOEX's short name, the coupon's rate (or
 what the event is), the portfolio and what it receives. It shows as a **list** — an event a line,
 two on a phone — or as a **calendar**: a month's grid (dots on a phone) stepping through the
 period, each day linking to its events below; the tab opens in the view chosen last. A private feed link lets a calendar app
-subscribe to all portfolios; it is shown once and stored only as a hash. The MOEX build is of the
+subscribe to all portfolios, a rolling year ahead; it is shown once and stored only as a hash. The MOEX build is of the
 person's bonds across every portfolio, without quantities, so switching portfolios or changing a
 quantity reuses it; builds take ~5 s for ~80 bonds and are cached for three hours
 (`BONDS__CACHE_TTL_SECONDS`).

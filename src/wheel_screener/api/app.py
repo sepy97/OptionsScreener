@@ -1973,8 +1973,8 @@ _BOND_VIEW_SECONDS = 365 * 24 * 3600
 
 @dataclass(frozen=True)
 class _BondPeriod:
-    """The script's period flags — a year ahead from today by default, --from/--to, or --all —
-    and which portfolio is shown ("" = all of them)."""
+    """The script's period flags — --from/--to, or --all; a month ahead from today by default (the
+    script's is a year) — and which portfolio is shown ("" = all of them)."""
 
     date_from: date | None
     date_to: date | None
@@ -2009,7 +2009,7 @@ def _bond_period(whole: bool, raw_from: str, raw_to: str, portfolio: str = "") -
     if whole:
         return _BondPeriod(None, None, portfolio)
     start = _iso_date(raw_from) or date.today()
-    end = _iso_date(raw_to) or bc.one_year_after(start)
+    end = _iso_date(raw_to) or bc.one_month_after(start)
     return _BondPeriod(min(start, end), max(start, end), portfolio)
 
 
@@ -2127,7 +2127,7 @@ def bonds_page(
         {
             "active_tab": "bonds", "period": period, "portfolios": portfolios,
             "count": len({h.key for h in shown}), "default_from": today,
-            "default_to": bc.one_year_after(today),
+            "default_to": bc.one_month_after(today),
             "view_query": f"&{urlencode(asked)}" if asked else "",
         },
     )
@@ -2179,15 +2179,18 @@ def bonds_events(
 
 
 def _bond_events_for(request: Request, bonds: BondCalendarService, user_id: str,
-                     period: _BondPeriod, *, holders_note: bool = True) -> list[dict]:
-    """The events behind a download: with the portfolios in the note when there are several,
-    since the script's CSV and .ics have no column for them."""
+                     period: _BondPeriod, *, by_portfolio: bool = False) -> list[dict]:
+    """The events behind a download. A table's (``by_portfolio``) are a line per event and
+    portfolio holding the bond; a calendar's are an event each, with the portfolios in the note
+    when there are several, since an .ics has no column for them."""
     holdings = _bond_store(request).holdings(user_id)
     shown = _shown(holdings, period.portfolio)
     if not shown:
         return []
     events = _bond_calendar(bonds, holdings, shown, period)[0].events
-    if holders_note and len({h.portfolio_id for h in shown}) > 1:
+    if by_portfolio:
+        return bh.by_portfolio(events)
+    if len({h.portfolio_id for h in shown}) > 1:
         return bh.with_holders_note(events)
     return events
 
@@ -2202,9 +2205,10 @@ def bonds_export(
     sep: str = ",",
     bonds: BondCalendarService = Depends(get_bonds),
 ) -> Response:
-    """The script's CSV table; ``sep=;`` gives decimal commas for Excel in a Russian locale."""
+    """The script's CSV table, a row per event and portfolio; ``sep=;`` gives decimal commas for
+    Excel in a Russian locale."""
     period = _bond_period(whole, raw_from, raw_to, portfolio)
-    events = _bond_events_for(request, bonds, _me(request), period)
+    events = _bond_events_for(request, bonds, _me(request), period, by_portfolio=True)
     return Response(
         content=bc.csv_text(events, ";" if sep == ";" else ",").encode("utf-8-sig"),
         media_type="text/csv; charset=utf-8",
@@ -2223,7 +2227,7 @@ def bonds_export_xlsx(
 ) -> Response:
     """The CSV's table as an Excel workbook — opens the same in any locale."""
     period = _bond_period(whole, raw_from, raw_to, portfolio)
-    events = _bond_events_for(request, bonds, _me(request), period)
+    events = _bond_events_for(request, bonds, _me(request), period, by_portfolio=True)
     return Response(
         content=sheet.calendar_xlsx(events),
         media_type=sheet.MEDIA_TYPE,
@@ -2243,7 +2247,7 @@ def bonds_grouped_export(
     """Coupons on one sheet and every other event on another, a line per event and portfolio
     (``25.10.2026  Систем2P03  21,50  ГПБ  17670``) — the portfolio has its own column."""
     period = _bond_period(whole, raw_from, raw_to, portfolio)
-    events = _bond_events_for(request, bonds, _me(request), period, holders_note=False)
+    events = _bond_events_for(request, bonds, _me(request), period, by_portfolio=True)
     return Response(
         content=sheet.grouped_xlsx(events),
         media_type=sheet.MEDIA_TYPE,
@@ -2294,7 +2298,9 @@ def bonds_feed(token: str, request: Request,
     user_id = _bond_store(request).user_for_feed(token)
     if user_id is None:
         raise HTTPException(status_code=404, detail="Not Found")
-    events = _bond_events_for(request, bonds, user_id, _bond_period(False, "", ""))
+    today = date.today()
+    period = _BondPeriod(today, bc.one_year_after(today))  # not the tab's month: a year ahead
+    events = _bond_events_for(request, bonds, user_id, period)
     return _bond_ics(request, events)
 
 

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import csv
 import html
+import io
 import json
 import tempfile
 from datetime import date, timedelta
@@ -428,7 +430,7 @@ def test_a_file_that_is_not_a_portfolio_changes_nothing(client) -> None:
 
 # --- the calendar --------------------------------------------------------------------------------
 
-def test_the_tab_shows_your_portfolios_and_lazy_loads_the_default_year(client) -> None:
+def test_the_tab_shows_your_portfolios_and_lazy_loads_the_default_month(client) -> None:
     sam = _as(client)
     _portfolio(sam, "Broker", SYS6)
     r = client.get("/bonds")
@@ -436,8 +438,9 @@ def test_the_tab_shows_your_portfolios_and_lazy_loads_the_default_year(client) -
     assert 'href="/bonds" class="nav-tab active"' in r.text and "1 bond in" in r.text
     assert 'name="portfolio"' not in r.text  # one portfolio: nothing to choose
     today = date.today()
-    q = f"from={today.isoformat()}&amp;to={bc.one_year_after(today).isoformat()}"
+    q = f"from={today.isoformat()}&amp;to={bc.one_month_after(today).isoformat()}"
     assert f'hx-get="/bonds/events?{q}"' in r.text
+    assert f'name="to" value="{bc.one_month_after(today).isoformat()}"' in r.text
     iis = _portfolio(sam, "IIS", OFZ_HELD)
     r = client.get(f"/bonds?portfolio={iis}")
     assert 'name="portfolio"' in r.text and f'value="{iis}" selected' in r.text
@@ -474,17 +477,30 @@ def test_all_portfolios_add_up_and_one_portfolio_shows_its_own() -> None:
         # a changed quantity is the same build too
         _store().set_qty(sam.id, broker, "RU000A0JXN21", 20.0)
         assert "894,50\u00a0₽" in c.get("/bonds/events").text and len(builds.calls) == 1
-        csv = c.get("/bonds/export.csv").content.decode("utf-8-sig")
-        assert "Portfolios: Broker 20 · IIS 5" in csv
-        assert "Portfolios:" not in c.get(
-            f"/bonds/export.csv?portfolio={broker}").content.decode("utf-8-sig")
+        # the downloads that are tables: a line per event and portfolio holding the bond
+        rows = list(csv.reader(io.StringIO(
+            c.get("/bonds/export.csv").content.decode("utf-8-sig"))))
+        assert rows[0][8:11] == ["Portfolio", "Qty", "Total"]
+        assert [(r[2], r[8], r[9], r[10], r[11]) for r in rows[1:]] == [
+            ("АФК Система, 001P-06", "Broker", "20", "715.60", "record date 2027-01-09"),
+            ("АФК Система, 001P-06", "IIS", "5", "178.90", "record date 2027-01-09"),
+            ("ОФЗ 26238", "IIS", "2", "20.00", "record date 2027-01-09")]
+        book = Workbook(c.get("/bonds/export.xlsx").content)
+        assert [r[8:11] for r in book.rows(sheet.SHEET)[1:]] == [
+            ["Broker", "20.0", "715.6"], ["IIS", "5.0", "178.9"], ["IIS", "2.0", "20.0"]]
+        rows = list(csv.reader(io.StringIO(
+            c.get(f"/bonds/export.csv?portfolio={broker}").content.decode("utf-8-sig"))))
+        assert [r[8:10] for r in rows[1:]] == [["Broker", "20"]]
+        # the .ics stays an event each, the portfolios in its note
+        assert "Portfolios: Broker 20 · IIS 5" in c.get(
+            "/bonds/calendar.ics").text.replace("\r\n ", "")
     finally:
         c.__exit__(None, None, None)
 
 
 def test_events_group_by_month_with_problems_notes_and_totals() -> None:
     today = date.today()
-    later = bc.one_year_after(today).replace(day=1)
+    later = bc.one_month_after(today).replace(day=1)  # next month: still in the default month
     c = _client(_Builds([_event(today),
                          _event(later, bc.OFFER_LAST_DAY, amount=None, note="check")],
                         problems=["АФК Система, 001P-06: not found on MOEX",
@@ -505,6 +521,27 @@ def test_events_group_by_month_with_problems_notes_and_totals() -> None:
         broker = _store().portfolios(sam.id)[0].id
         assert "Skipping 1 already matured bonds" in c.get(
             f"/bonds/events?portfolio={broker}").text  # this portfolio's only
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_the_tab_shows_a_month_ahead_and_the_feed_a_year() -> None:
+    today = date.today()
+    c = _client(_Builds([_event(today + timedelta(days=10), name="Soon"),
+                         _event(today + timedelta(days=60), name="Later"),
+                         _event(today + timedelta(days=400), name="Next year")]))
+    try:
+        sam = _as(c)
+        _portfolio(sam, "Broker", SYS6)
+        r = c.get("/bonds/events")
+        assert "<strong>1 event</strong>" in r.text and "Soon" in r.text and "Later" not in r.text
+        assert f"{today} to {bc.one_month_after(today)}" in r.text
+        assert "<strong>2 events</strong>" in c.get(
+            f"/bonds/events?to={bc.one_year_after(today)}").text  # chosen dates still win
+        link = c.post("/bonds/feed").text.split("/feeds/bonds/", 1)[1].split('"', 1)[0]
+        c.cookies.clear()
+        feed = c.get(f"/feeds/bonds/{link}").text
+        assert "— Soon —" in feed and "— Later —" in feed and "Next year" not in feed
     finally:
         c.__exit__(None, None, None)
 
@@ -618,7 +655,7 @@ def test_the_view_chosen_last_is_the_one_the_tab_opens_in(client) -> None:
     assert "bond-grid" not in client.get("/bonds/events").text
     # the tab passes a link's view and month on to the calendar it loads
     today = date.today()
-    q = f"from={today.isoformat()}&amp;to={bc.one_year_after(today).isoformat()}"
+    q = f"from={today.isoformat()}&amp;to={bc.one_month_after(today).isoformat()}"
     r = client.get("/bonds?view=calendar&month=2027-02")
     assert f'hx-get="/bonds/events?{q}&amp;view=calendar&amp;month=2027-02"' in r.text
     assert f'hx-get="/bonds/events?{q}"' in client.get("/bonds?view=grid&month=feb").text
