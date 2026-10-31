@@ -79,6 +79,9 @@
       <a href="/bonds/export.xlsx?{{ period.query }}" role="button"
          class="secondary outline export-btn" download
          title="an Excel workbook: dates and amounts Excel reads as its own, in any locale">{{ icon.download() }} Excel</a>
+      <a href="/bonds/grouped_export.xlsx?{{ period.query }}" role="button"
+         class="secondary outline export-btn" download
+         title="grouped_export.xlsx — coupons on one sheet, every other event on another, a line per portfolio: 25.10.2026 · Систем2P03 · 21,50 · ГПБ · 17670">{{ icon.download() }} Grouped</a>
       <a href="/bonds/calendar.ics?{{ period.query }}" role="button"
          class="secondary outline export-btn" download
          title="import into Apple / Google Calendar">{{ icon.download() }} .ics</a>

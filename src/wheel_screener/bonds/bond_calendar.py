@@ -522,7 +522,8 @@ def events_for(code: str, qty: float | None, expected_matdate: date | None = Non
                           f"{expected_matdate} — looks like a different bond; check ISIN {code}")
     bz = bondization(secid)
 
-    name = name or desc.get("SHORTNAME") or sec.get("shortname") or secid
+    short = desc.get("SHORTNAME") or sec.get("shortname") or secid  # MOEX's own: Систем2P03
+    name = name or short
     isin = desc.get("ISIN") or sec.get("isin") or ""
     events: list[dict] = []
 
@@ -530,8 +531,8 @@ def events_for(code: str, qty: float | None, expected_matdate: date | None = Non
         if day is None:
             return
         events.append({
-            "date": day, "kind": kind, "name": name, "isin": isin, "secid": secid,
-            "amount": amount, "cur": cur, "rate": rate, "qty": qty,
+            "date": day, "kind": kind, "name": name, "short": short, "isin": isin,
+            "secid": secid, "amount": amount, "cur": cur, "rate": rate, "qty": qty,
             "total": amount * qty if amount is not None and qty else None,
             "note": note, "remind": remind,
         })

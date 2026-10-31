@@ -9,7 +9,13 @@ from datetime import date
 
 from wheel_screener.bonds import bond_calendar as bc
 from wheel_screener.bonds.reports import Workbook
-from wheel_screener.bonds.spreadsheet import SHEET, calendar_xlsx
+from wheel_screener.bonds.spreadsheet import (
+    GROUPED_SHEETS,
+    SHEET,
+    calendar_xlsx,
+    grouped_lines,
+    grouped_xlsx,
+)
 
 MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 
@@ -83,3 +89,51 @@ def test_an_empty_calendar_is_a_header_and_the_same_file_each_time() -> None:
     raw = calendar_xlsx([])
     assert Workbook(raw).rows(SHEET) == [bc.COLUMNS]
     assert calendar_xlsx([_event()]) == calendar_xlsx([_event()])
+
+
+# ---- the grouped export ----
+
+def _serial(d: date) -> str:
+    return str((d - date(1899, 12, 30)).days)
+
+
+def test_grouped_export_puts_coupons_and_the_rest_on_two_sheets_a_line_per_portfolio() -> None:
+    day = date(2026, 10, 25)
+    coupon = _event(date=day, name="АФК Система, 002P-03", short="Систем2P03", amount=17.67,
+                    rate=21.5, holders=[("ГПБ", 1000.0), ("ИИС", 5.0)])
+    redemption = _event(date=date(2027, 4, 22), kind=bc.REDEMPTION, short="Роснфт1P4",
+                        amount=1000.0, rate=None, holders=[("ГПБ", 1014.0)])
+    last_day = _event(date=date(2027, 3, 5), kind=bc.OFFER_LAST_DAY, short="Роснфт1P4",
+                      amount=None, cur="", rate=None, holders=[("ГПБ", 1014.0)])
+    raw = grouped_xlsx([coupon, last_day, redemption])
+    book = Workbook(raw)
+    assert book.sheet_names == list(GROUPED_SHEETS)
+    coupons, other = (book.rows(name) for name in GROUPED_SHEETS)
+    assert coupons == [[_serial(day), "Систем2P03", "21,50", "ГПБ", "17670"],
+                       [_serial(day), "Систем2P03", "21,50", "ИИС", "88,35"]]  # no header
+    assert other == [[_serial(date(2027, 3, 5)), "Роснфт1P4", bc.OFFER_LAST_DAY, "ГПБ"],
+                     [_serial(date(2027, 4, 22)), "Роснфт1P4", bc.REDEMPTION, "ГПБ", "1014000"]]
+    z = zipfile.ZipFile(io.BytesIO(raw))
+    styles = ET.fromstring(z.read("xl/styles.xml"))
+    assert [f.get("formatCode") for f in styles.iter(MAIN + "numFmt")] == ["dd.mm.yyyy"]
+    sheet = ET.fromstring(z.read("xl/worksheets/sheet1.xml"))
+    a1 = next(c for c in sheet.iter(MAIN + "c") if c.get("r") == "A1")
+    xfs = styles.find(MAIN + "cellXfs").findall(MAIN + "xf")
+    assert xfs[int(a1.get("s"))].get("numFmtId") == "164"  # 25.10.2026 in any locale
+
+
+def test_grouped_lines_fall_back_and_name_a_foreign_currency() -> None:
+    no_short = _event(holders=[("Main", None)])  # a build cached before short names
+    dollars = _event(cur="USD", amount=25.5, short="X", holders=[("Main", 3.0)])
+    unannounced = _event(amount=None, rate=None, short="Y")  # no holders: the event's own qty
+    coupons, other = grouped_lines([no_short, dollars, unannounced])
+    assert [line[1:] for line in coupons] == [
+        ["АФК Система, 001P-06", "14,35", "Main", ""], ["X", "14,35", "Main", "76,50 USD"],
+        ["Y", "", "", ""]]
+    assert other == []
+
+
+def test_an_empty_grouped_export_is_two_empty_sheets() -> None:
+    book = Workbook(grouped_xlsx([]))
+    assert [book.rows(name) for name in GROUPED_SHEETS] == [[], []]
+    assert grouped_xlsx([_event()]) == grouped_xlsx([_event()])

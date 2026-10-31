@@ -127,6 +127,7 @@ def test_events_for_maps_coupons_amortization_redemption_and_offers(iss) -> None
     c = by[("2027-01-10", bc.COUPON)]
     assert (c["amount"], c["cur"], c["rate"], c["total"]) == (35.5, "RUB", 14.2, 355.0)
     assert c["note"] == "record date 2027-01-09" and c["name"] == "My bond"
+    assert c["short"] == "Bond"  # MOEX's short name, whatever the watchlist calls it
     assert by[("2027-07-10", bc.COUPON)]["note"] == "coupon amount not announced yet"
     assert by[("2027-12-01", bc.AMORTIZATION)]["note"] == "50% of face value"
     assert by[("2028-06-01", bc.REDEMPTION)]["amount"] == 500

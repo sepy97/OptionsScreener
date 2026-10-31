@@ -135,6 +135,7 @@ def test_signed_out_visitors_are_sent_to_sign_in_and_back(client) -> None:
     r = client.get("/bonds/events", headers={"HX-Request": "true"}, follow_redirects=False)
     assert r.status_code == 401 and r.headers["HX-Redirect"] == "/login?next=/bonds"
     for path in ("/bonds/portfolios", "/bonds/portfolios/x", "/bonds/export.csv",
+                 "/bonds/export.xlsx", "/bonds/grouped_export.xlsx",
                  "/bonds/calendar.ics", "/bonds/portfolios/x/holdings.csv",
                  "/bonds/search?q=RU000A0JXN21&portfolio=x"):
         assert client.get(path, follow_redirects=False).status_code == 303
@@ -640,6 +641,34 @@ def test_csv_and_ics_downloads_are_the_scripts_formats(client) -> None:
     assert r.headers["content-type"].startswith("text/calendar")
     assert "BEGIN:VCALENDAR" in r.text and "X-WR-CALNAME:Bonds" in r.text
     assert "Total for 10 pcs" in r.text.replace("\r\n ", "")
+
+
+def test_the_grouped_export_is_a_line_per_event_and_portfolio_on_two_sheets() -> None:
+    day = date(2027, 1, 10)
+    c = _client(_Builds([_event(day, short="СистемБ1P6"),
+                         _event(date(2027, 3, 26), bc.REDEMPTION, amount=1000.0, rate=None,
+                                short="СистемБ1P6")]))
+    try:
+        sam = _as(c)
+        gpb = _portfolio(sam, "ГПБ", SYS6)
+        _portfolio(sam, "ИИС", (*SYS6[:3], 4.0))
+        r = c.get("/bonds/grouped_export.xlsx?all=1")
+        assert r.headers["content-type"] == sheet.MEDIA_TYPE
+        assert 'filename="grouped_export.xlsx"' in r.headers["content-disposition"]
+        book = Workbook(r.content)
+        serial = str((day - date(1899, 12, 30)).days)
+        assert book.rows(sheet.GROUPED_SHEETS[0]) == [
+            [serial, "СистемБ1P6", "14,35", "ГПБ", "357,80"],
+            [serial, "СистемБ1P6", "14,35", "ИИС", "143,12"]]
+        assert [row[2:] for row in book.rows(sheet.GROUPED_SHEETS[1])] == [
+            [bc.REDEMPTION, "ГПБ", "10000"], [bc.REDEMPTION, "ИИС", "4000"]]
+        # one portfolio shown: only its lines
+        r = c.get(f"/bonds/grouped_export.xlsx?all=1&portfolio={gpb}")
+        assert [row[3] for row in Workbook(r.content).rows(sheet.GROUPED_SHEETS[0])] == ["ГПБ"]
+        page = c.get(f"/bonds/events?all=1&portfolio={gpb}").text
+        assert f'href="/bonds/grouped_export.xlsx?all=1&amp;portfolio={gpb}"' in page
+    finally:
+        c.__exit__(None, None, None)
 
 
 def test_the_feed_link_is_shown_once_reads_without_signing_in_and_can_be_replaced() -> None:

@@ -30,8 +30,8 @@ def test_is_expensive_only_matches_start_endpoints() -> None:
     assert not is_expensive("POST", "/runs/j/cancel")
     assert not is_expensive("GET", "/runs/j/export.csv")  # exports a STORED run (no fresh pull)
     # the bond calendar: a MOEX build (cold cache), ISIN lookups, or a bearer link behind these
-    for path in ("/bonds/events", "/bonds/export.csv", "/bonds/calendar.ics",
-                 "/feeds/bonds/TOKEN.ics"):
+    for path in ("/bonds/events", "/bonds/export.csv", "/bonds/export.xlsx",
+                 "/bonds/grouped_export.xlsx", "/bonds/calendar.ics", "/feeds/bonds/TOKEN.ics"):
         assert is_expensive("GET", path)
     for path in ("/bonds/portfolios/p1/add", "/bonds/portfolios/p1/import", "/bonds/feed"):
         assert is_expensive("POST", path)
