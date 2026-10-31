@@ -9,7 +9,12 @@ from datetime import date
 import pytest
 from _workbooks import intelinvest_report, workbook
 
-from wheel_screener.bonds.reports import ReportError, read_portfolio
+from wheel_screener.bonds.reports import (
+    ReportError,
+    file_name,
+    read_portfolio,
+    report_number,
+)
 
 
 @pytest.mark.parametrize("shared", [False, True])
@@ -63,3 +68,14 @@ def test_a_part_that_declares_entities_is_refused() -> None:
             z.writestr(name, data)
     with pytest.raises(ReportError, match="does not accept"):
         read_portfolio(buf.getvalue())
+
+
+def test_a_reports_number_is_read_from_its_file_name() -> None:
+    assert report_number("complex_portfolio_report_11111.xlsx") == "11111"
+    assert report_number("complex_portfolio_report_11111 (1).xlsx") == "11111"  # a second copy
+    assert report_number("Complex_Portfolio_Report_11769.XLSX") == "11769"
+    assert report_number("portfolio.csv") == "" and report_number("") == ""
+    assert file_name("C:\\Users\\sam\\complex_portfolio_report_11111.xlsx") == (
+        "complex_portfolio_report_11111.xlsx")  # no folders, as an old browser may send
+    assert file_name("a\x00b\n.xlsx") == "ab.xlsx" and len(file_name("x" * 500)) == 120
+    assert file_name(None) == ""

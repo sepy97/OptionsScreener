@@ -9,6 +9,9 @@ someone's calendar; the token is a bearer credential to it, so like an invite li
 once, when it is made, and only its hash is stored: neither this file nor a backup of it is a way
 to read anyone's calendar. Making a new link replaces the hash, which turns the old link off.
 
+A portfolio remembers the file it was last imported from, and when, so it can be updated from a
+newer download of the same report — and not from another account's by mistake.
+
 Before portfolios there was one watchlist per person (the ``bond_watchlists`` table). On start,
 each watchlist not moved yet becomes a portfolio named "Main", and its feed link keeps working;
 the old rows are left as they were — marked moved — so going back a version finds them intact.
@@ -32,6 +35,7 @@ from wheel_screener.bonds import bond_calendar as bc
 from wheel_screener.bonds.holdings import Holding, clean_name
 
 _FEED_TOKEN_BYTES = 32
+SOURCE_CHARS = 120
 MAX_BONDS = 500  # per portfolio: a person's bonds, not a market dump — and each costs a request
 MAX_PORTFOLIOS = 20
 NAME_CHARS = 60
@@ -42,7 +46,9 @@ CREATE TABLE IF NOT EXISTS bond_portfolios (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     name TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT '',
+    imported_at TEXT
 );
 CREATE INDEX IF NOT EXISTS bond_portfolios_user ON bond_portfolios (user_id);
 CREATE TABLE IF NOT EXISTS bond_holdings (
@@ -72,6 +78,8 @@ class Portfolio:
     id: str
     name: str
     count: int  # bonds held in it
+    source: str = ""  # the file it was last imported from ("" if none, or pasted)
+    imported_at: str = ""  # when, as an ISO timestamp
 
 
 def _hash(token: str) -> str:
@@ -102,7 +110,18 @@ class BondPortfolioStore:
             conn.executescript(_SCHEMA)  # its own transaction (it commits what is pending)
         finally:
             conn.close()
+        self._add_columns()
         self._move_watchlists()
+
+    def _add_columns(self) -> None:
+        """The columns added since the table was made, on a database from before them."""
+        with self._tx() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(bond_portfolios)")}
+            if "source" not in columns:
+                conn.execute("ALTER TABLE bond_portfolios ADD COLUMN source TEXT NOT NULL"
+                             " DEFAULT ''")
+            if "imported_at" not in columns:
+                conn.execute("ALTER TABLE bond_portfolios ADD COLUMN imported_at TEXT")
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self._path, timeout=5.0)
@@ -163,7 +182,8 @@ class BondPortfolioStore:
         """This person's portfolios, oldest first."""
         with self._read() as conn:
             rows = conn.execute(
-                "SELECT p.id, p.name, COUNT(h.key) FROM bond_portfolios p"
+                "SELECT p.id, p.name, COUNT(h.key), p.source, COALESCE(p.imported_at, '')"
+                " FROM bond_portfolios p"
                 " LEFT JOIN bond_holdings h ON h.portfolio_id = p.id"
                 " WHERE p.user_id = ? GROUP BY p.id ORDER BY p.created_at, p.rowid",
                 (user_id,)).fetchall()
@@ -303,8 +323,10 @@ class BondPortfolioStore:
                 (qty, key, portfolio_id, user_id))
             return cur.rowcount > 0
 
-    def replace(self, user_id: str, portfolio_id: str, items: list[dict]) -> None:
-        """A portfolio's bonds, all at once — an imported list in place of what it held."""
+    def replace(self, user_id: str, portfolio_id: str, items: list[dict], *,
+                source: str = "") -> None:
+        """A portfolio's bonds, all at once — an imported list in place of what it held — and
+        the file it came from ("" for a pasted list)."""
         if len(items) > MAX_BONDS:
             raise PortfolioError(f"A portfolio holds at most {MAX_BONDS} bonds.")
         items = [{**it, "name": clean_name(it["name"])} for it in items]
@@ -312,6 +334,8 @@ class BondPortfolioStore:
             self._owns(conn, user_id, portfolio_id)
             conn.execute("DELETE FROM bond_holdings WHERE portfolio_id = ?", (portfolio_id,))
             self._insert_items(conn, portfolio_id, items)
+            conn.execute("UPDATE bond_portfolios SET source = ?, imported_at = ? WHERE id = ?",
+                         (source[:SOURCE_CHARS], _now(), portfolio_id))
 
     # ── the calendar feed ──
 

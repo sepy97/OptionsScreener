@@ -49,15 +49,34 @@
         </form>
         {% if rename_error %}<small class="bond-flag" role="alert">{{ rename_error }}</small>{% endif %}
       </details>
+      {% if rows %}
+      {# a newer download of the same report: the import below, but it refuses another
+         Intelinvest portfolio's report and says what changed #}
+      <details class="bond-update">
+        <summary>Update</summary>
+        <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/update"
+              enctype="multipart/form-data" class="bond-inline-form">
+          <input type="file" name="file" required aria-label="A newer download of this portfolio's report"
+                 accept=".xlsx,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain">
+          <button type="submit" class="secondary">Update</button>
+        </form>
+        <small>{% if portfolio.source %}A newer download of <b>{{ portfolio.source }}</b>{% else %}A newer download of the report this portfolio came from{% endif %}
+          — what it holds takes the place of the bonds below.</small>
+      </details>
+      {% endif %}
       <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/delete" class="bond-delete"
             onsubmit='return confirm({{ ("Delete " ~ portfolio.name ~ (" and the " ~ portfolio.count ~ " bond" ~ ("" if portfolio.count == 1 else "s") ~ " in it" if portfolio.count else "") ~ "?")|tojson }})'>
         <button type="submit" class="secondary outline">Delete portfolio</button>
       </form>
     </header>
+    {% if portfolio.source and not report %}
+    <p class="bond-source">From <b>{{ portfolio.source }}</b>, imported {{ portfolio.imported_at[:10] }}.</p>
+    {% endif %}
     {% if error %}<p role="alert">{{ icon.warning() }} {{ error }}</p>{% endif %}
     {% if report %}
     <div class="bond-report">
-      <p><strong>Imported {{ report.count }} bond{{ '' if report.count == 1 else 's' }}{{ ' from ' ~ report.source if report.source }}.</strong>
+      <p><strong>{% if updated %}Updated from {{ file }}: {{ report.count }} bond{{ '' if report.count == 1 else 's' }} held{{ ' (' ~ report.source ~ ')' if report.source }}.
+        {%- else %}Imported {{ report.count }} bond{{ '' if report.count == 1 else 's' }}{{ ' from ' ~ report.source if report.source }}.{% endif %}</strong>
         {% if report.sold_out %}{{ report.sold_out }} sold out (a quantity of 0) left out.{% endif %}
         {% if report.reused %}{{ report.reused }} code{{ '' if report.reused == 1 else 's' }} kept
         from what the portfolio held.{% endif %}</p>
@@ -68,6 +87,19 @@
       {% if report.problems %}
       <p>{{ icon.warning() }} Not found:</p>
       <ul>{% for p in report.problems %}<li>{{ p }}</li>{% endfor %}</ul>
+      {% endif %}
+      {% if changes is defined and changes is not none %}
+      {% if changes.any %}
+      <p>Since before: {{ changes.added|length }} new, {{ changes.removed|length }} no longer
+        held, {{ changes.changed|length }} with a new quantity; {{ changes.same }} as they were.</p>
+      <ul class="bond-changes">
+        {% for name, qty in changes.added %}<li><span class="bond-change bond-change--add">new</span> {{ name }} — {{ qty|bond_count if qty is not none else 'no quantity' }}</li>{% endfor %}
+        {% for name, qty in changes.removed %}<li><span class="bond-change bond-change--gone">gone</span> {{ name }}{% if qty is not none %} — held {{ qty|bond_count }}{% endif %}</li>{% endfor %}
+        {% for name, was, now in changes.changed %}<li><span class="bond-change">qty</span> {{ name }} — {{ was|bond_count if was is not none else 'none' }} → {{ now|bond_count if now is not none else 'none' }}</li>{% endfor %}
+      </ul>
+      {% else %}
+      <p>Nothing changed: the same {{ changes.same }} bond{{ '' if changes.same == 1 else 's' }} in the same quantities.</p>
+      {% endif %}
       {% endif %}
     </div>
     {% endif %}
@@ -93,7 +125,8 @@
   <article>
     {# a stable target: every edit re-renders inside it, one at a time (hx-sync), so a quick second
        click lands on the list the first one left #}
-    <section id="bond-list">{% include "_bond_holdings.html" %}</section>
+    <section id="bond-list">{# the page's error is shown above, not again in the list #}
+      {% with error = none %}{% include "_bond_holdings.html" %}{% endwith %}</section>
   </article>
 
   <article>
@@ -104,8 +137,8 @@
             {% if rows %}onsubmit='return confirm({{ ("Replace the " ~ rows|length ~ " bond" ~ ("" if rows|length == 1 else "s") ~ " in " ~ portfolio.name ~ " with the bonds in this file?")|tojson }})'{% endif %}>
         <input type="file" name="file" required aria-label="Portfolio report"
                accept=".xlsx,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain">
-        <small>Replaces what this portfolio holds with the bonds in the file — import a newer
-          report to bring the portfolio up to date.</small>
+        <small>Replaces what this portfolio holds with the bonds in the file.{% if rows %} To
+          bring it up to date from a newer download of its report, use Update above.{% endif %}</small>
         <button type="submit" class="secondary">Import and replace</button>
       </form>
       <ul class="bond-help">

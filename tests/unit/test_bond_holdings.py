@@ -102,3 +102,15 @@ def test_skip_notes_count_the_bonds_shown_each_once() -> None:
     assert bh.skip_notes(shown, date(2026, 1, 1)) == [
         "Skipping 1 already matured bonds (show the whole calendar to include them)."]
     assert bh.skip_notes(shown, None) == []  # the whole calendar skips nothing
+
+
+def test_changes_say_what_is_new_gone_and_held_in_another_quantity() -> None:
+    ofz = ("SU26238RMFS4", "ОФЗ 26238", None)
+    before = [_h("Main", *SYS, qty=10), _h("Main", *ofz, qty=2),
+              _h("Main", "", "ГТЛК, 001P-04", qty=None), _h("Main", "RU000A10EMG2", "", qty=5)]
+    after = [_h("Main", *SYS, qty=15), _h("Main", "", "ГТЛК, 001P-04", qty=None),
+             _h("Main", "RU000A10EMG2", "", qty=5), _h("Main", "RU000A0JS3W6", "ОФЗ 26207", qty=45)]
+    c = bh.changes(before, after)
+    assert c.added == [("ОФЗ 26207", 45)] and c.removed == [("ОФЗ 26238", 2)]
+    assert c.changed == [("АФК Система, 001P-06", 10, 15)] and c.same == 2 and c.any
+    assert not bh.changes(after, after).any and bh.changes(after, after).same == 4

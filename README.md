@@ -389,8 +389,12 @@ imported, in place of what it holds, from an **Intelinvest portfolio report**
 (`complex_portfolio_report_<id>.xlsx`: the bonds on its «Портфель облигаций» sheet with their
 quantities, sold-out positions left out, maturity dates filled in from MOEX), from another
 spreadsheet or a CSV / text list in any format the script reads (bonds given only by name get
-their ISINs looked up once, on import), and downloaded back as CSV. Importing a newer report
-brings a portfolio up to date.
+their ISINs looked up once, on import), and downloaded back as CSV. A portfolio remembers the
+file it was imported from; its **Update** takes a newer download of that report in place of what
+it holds and lists what changed — bonds new, no longer held, or held in another quantity. Update
+refuses a report of another Intelinvest portfolio (told apart by the number in the file's name,
+`…_11111.xlsx`), since two accounts' reports look alike; importing is how a portfolio moves to
+another report.
 
 The calendar shows one portfolio or all of them: with all, each bond's quantity is the sum over
 the portfolios holding it, and each event says which those are. It covers a month ahead by default

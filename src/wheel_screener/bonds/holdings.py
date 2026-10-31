@@ -14,7 +14,7 @@ per portfolio holding the bond, with that portfolio's quantity.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 
 from wheel_screener.bonds import bond_calendar as bc
@@ -39,6 +39,38 @@ class Holding:
         """The bond as ``bond_calendar`` reads a watchlist line."""
         return {"code": self.code, "name": self.name, "matdate": self.matdate,
                 "qty": self.qty if with_qty else None}
+
+
+@dataclass
+class Changes:
+    """What an import changed in a portfolio that already held bonds — each bond by its name."""
+
+    added: list[tuple[str, float | None]] = field(default_factory=list)  # (bond, qty)
+    removed: list[tuple[str, float | None]] = field(default_factory=list)  # (bond, qty it was)
+    changed: list[tuple[str, float | None, float | None]] = field(
+        default_factory=list)  # (bond, qty before, qty now)
+    same: int = 0  # held before, in the same quantity
+
+    @property
+    def any(self) -> bool:
+        return bool(self.added or self.removed or self.changed)
+
+
+def changes(before: list[Holding], after: list[Holding]) -> Changes:
+    """How a portfolio's bonds ``after`` an import differ from those it held ``before``."""
+    old = {h.key: h for h in before}
+    new = {h.key: h for h in after}
+    out = Changes(removed=[(h.name or h.code, h.qty) for k, h in old.items() if k not in new])
+    for key, h in new.items():
+        if key not in old:
+            out.added.append((h.name or h.code, h.qty))
+        elif old[key].qty != h.qty:
+            out.changed.append((h.name or h.code, old[key].qty, h.qty))
+        else:
+            out.same += 1
+    for part in (out.added, out.removed, out.changed):
+        part.sort(key=lambda t: t[0].lower())
+    return out
 
 
 def clean_name(name: str | None) -> str:

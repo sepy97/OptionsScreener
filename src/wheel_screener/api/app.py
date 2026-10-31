@@ -74,7 +74,7 @@ from wheel_screener.bonds import bond_calendar as bc
 from wheel_screener.bonds import holdings as bh
 from wheel_screener.bonds import spreadsheet as sheet
 from wheel_screener.bonds.holdings import Holding
-from wheel_screener.bonds.reports import ReportError, read_portfolio
+from wheel_screener.bonds.reports import ReportError, file_name, read_portfolio, report_number
 from wheel_screener.bonds.search import BondDirectory, MoexUnavailable
 from wheel_screener.bonds.service import BondCalendarService
 from wheel_screener.composition import build_probes, build_service
@@ -2543,14 +2543,42 @@ def bonds_portfolio_import(
     format the script reads — in place of what this portfolio holds. Bonds given only by name are
     looked up; maturity dates come from MOEX's list, as a report has none. The page then shows
     what was read and what matched."""
-    portfolio = _my_portfolio(request, portfolio_id)
+    return _import_into(request, _my_portfolio(request, portfolio_id), text, file, bonds,
+                        directory)
+
+
+@app.post("/bonds/portfolios/{portfolio_id}/update")
+def bonds_portfolio_update(
+    portfolio_id: str,
+    request: Request,
+    file: UploadFile | None = File(None),
+    bonds: BondCalendarService = Depends(get_bonds),
+    directory: BondDirectory = Depends(get_bond_directory),
+):
+    """A newer download of the report this portfolio was imported from, in place of what it
+    holds: the import, but it refuses another Intelinvest portfolio's report — a person with two
+    accounts has two reports that look alike."""
+    return _import_into(request, _my_portfolio(request, portfolio_id), "", file, bonds,
+                        directory, update=True)
+
+
+def _import_into(request: Request, portfolio: Portfolio, text: str, file: UploadFile | None,
+                 bonds: BondCalendarService, directory: BondDirectory, *, update: bool = False):
+    """Replace what ``portfolio`` holds with what a file (else ``text``) says is held, and show
+    what changed; nothing changes if the file can't be read or holds no bonds."""
     store = _bond_store(request)
-    previous = [h.item() for h in store.holdings(_me(request), portfolio.id)]
-    raw = text.encode("utf-8")
+    before = store.holdings(_me(request), portfolio.id)
+    raw, source = text.encode("utf-8"), ""
     if file is not None and file.filename:
-        raw = file.file.read(_MAX_UPLOAD_BYTES + 1)
+        raw, source = file.file.read(_MAX_UPLOAD_BYTES + 1), file_name(file.filename)
         if len(raw) > _MAX_UPLOAD_BYTES:
             return _portfolio_page(request, portfolio, 413, error="That file is too large.")
+    was, now = report_number(portfolio.source), report_number(source)
+    if update and was and now and was != now:
+        return _portfolio_page(request, portfolio, 422, error=(
+            f"That is the report of Intelinvest portfolio {now}, but {portfolio.name} is updated "
+            f"from portfolio {was}'s — nothing changed. To follow portfolio {now} from now on, "
+            "import its report below instead."))
     try:
         found = read_portfolio(raw)
     except ReportError as e:
@@ -2567,10 +2595,12 @@ def bonds_portfolio_import(
         if listed is not None:
             it["matdate"] = it["matdate"] or listed.matdate
             it["name"] = it["name"] or listed.name
-    report = bonds.resolve(items, previous)
+    report = bonds.resolve(items, [h.item() for h in before])
     report.sold_out, report.source = found.sold_out, found.source
     try:
-        store.replace(_me(request), portfolio.id, items)
+        store.replace(_me(request), portfolio.id, items, source=source)
     except PortfolioError as e:
         return _portfolio_page(request, portfolio, 422, error=str(e))
-    return _portfolio_page(request, portfolio, report=report)
+    after = store.holdings(_me(request), portfolio.id)
+    return _portfolio_page(request, portfolio, report=report, updated=update, file=source,
+                           changes=bh.changes(before, after) if before else None)

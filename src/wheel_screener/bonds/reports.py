@@ -6,6 +6,11 @@ has a sheet per kind of holding. Its bonds are on «Портфель облиг�
 «Количество, шт.», and profit columns we don't need — then a row per bond ever held. Bonds sold
 out stay on the sheet with a quantity of 0; a portfolio holds only the rest.
 
+Intelinvest names the file after the portfolio's number in it (11111 in
+complex_portfolio_report_11111.xlsx) and writes nothing inside that tells one portfolio's report
+from another's — so ``report_number`` reads it from the file's name, to tell a newer download of
+the same report from another portfolio's.
+
 Other spreadsheets work the same way: the first sheet whose header names a code or name column,
 read like the script's CSV (``bond_calendar.parse_rows``). Anything that isn't a spreadsheet is
 read as the script's CSV or plain-text list.
@@ -33,6 +38,7 @@ _MAIN = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
 _REL = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
 _PKG_REL = "{http://schemas.openxmlformats.org/package/2006/relationships}"
 _EXCEL_EPOCH = date(1899, 12, 30)  # day 0 of Excel's date numbers
+_REPORT_NAME = re.compile(r"complex_portfolio_report_(\d+)", re.IGNORECASE)
 
 
 class ReportError(ValueError):
@@ -44,6 +50,20 @@ class PortfolioFile:
     items: list[dict]  # the bonds held: code, name, matdate, qty
     sold_out: int = 0  # bonds on the sheet with a quantity of 0, left out
     source: str = ""  # where in the file they came from, for the page
+
+
+def file_name(raw: str | None) -> str:
+    """An uploaded file's name as the page shows it: no folders (a browser may send them), no
+    control characters, at most 120 characters."""
+    name = (raw or "").replace("\\", "/").rsplit("/", 1)[-1]
+    return "".join(ch for ch in name if ch.isprintable()).strip()[:120]
+
+
+def report_number(name: str) -> str:
+    """The Intelinvest portfolio number in a report's file name — also in a renamed copy, such
+    as «complex_portfolio_report_11111 (1).xlsx» — or "" for any other file."""
+    m = _REPORT_NAME.search(name or "")
+    return m.group(1) if m else ""
 
 
 def is_xlsx(raw: bytes) -> bool:

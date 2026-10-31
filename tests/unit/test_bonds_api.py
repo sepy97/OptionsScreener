@@ -411,6 +411,81 @@ def test_imported_bonds_get_their_maturity_from_moexs_list(client) -> None:
     assert held["XX0000000001"].matdate is None  # not traded: no date, and no request for one
 
 
+XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+
+def test_update_brings_a_portfolio_up_to_date_from_a_newer_report(client) -> None:
+    from _workbooks import HEADER, intelinvest_report, workbook
+
+    sam = _as(client)
+    pid = _portfolio(sam, "ГПБ")
+    page = client.get(f"/bonds/portfolios/{pid}").text
+    assert f'action="/bonds/portfolios/{pid}/update"' not in page  # nothing to update yet
+    client.post(f"/bonds/portfolios/{pid}/import",
+                files={"file": ("complex_portfolio_report_11111.xlsx", intelinvest_report(),
+                                XLSX)})
+    page = client.get(f"/bonds/portfolios/{pid}").text
+    assert f'action="/bonds/portfolios/{pid}/update"' in page
+    assert f"From <b>complex_portfolio_report_11111.xlsx</b>, imported {date.today()}" in page
+    # a month on: more of one bond, a new one, the OFZ sold (0, as the report keeps it)
+    newer = workbook({"Портфель облигаций": [
+        ["intelinvest.ru"], HEADER,
+        ["RU000A10EMG2", "НоваБев3Р3", 150.0], ["RU000A0JS3W6", "ОФЗ 26207", 0.0],
+        ["RU000A10FA72", "Систем2P14", 30.0]]})
+    r = client.post(f"/bonds/portfolios/{pid}/update",
+                    files={"file": ("complex_portfolio_report_11111 (1).xlsx", newer, XLSX)})
+    assert r.status_code == 200
+    text = " ".join(html.unescape(r.text).split())
+    assert "Updated from complex_portfolio_report_11111 (1).xlsx: 2 bonds held" in text
+    assert "Since before: 1 new, 1 no longer held, 1 with a new quantity; 0 as they were." in text
+    assert "new</span> Систем2P14 — 30" in text and "gone</span> ОФЗ 26207 — held 45" in text
+    assert "qty</span> НоваБев3Р3 — 120 → 150" in text
+    assert [(h.code, h.qty) for h in _store().holdings(sam.id, pid)] == [
+        ("RU000A10EMG2", 150.0), ("RU000A10FA72", 30.0)]
+    # the same file again: nothing to change
+    r = client.post(f"/bonds/portfolios/{pid}/update",
+                    files={"file": ("complex_portfolio_report_11111.xlsx", newer, XLSX)})
+    assert "Nothing changed: the same 2 bonds in the same quantities." in r.text
+
+
+def test_update_refuses_another_intelinvest_portfolios_report(client) -> None:
+    from _workbooks import intelinvest_report
+
+    sam = _as(client)
+    gpb = _portfolio(sam, "ГПБ")
+    report = intelinvest_report()
+    client.post(f"/bonds/portfolios/{gpb}/import",
+                files={"file": ("complex_portfolio_report_11111.xlsx", report, XLSX)})
+    held = _store().holdings(sam.id, gpb)
+    r = client.post(f"/bonds/portfolios/{gpb}/update",
+                    files={"file": ("complex_portfolio_report_11769.xlsx", report, XLSX)})
+    assert r.status_code == 422
+    says = ("That is the report of Intelinvest portfolio 11769, but ГПБ is updated from "
+            "portfolio 11111's — nothing changed.")
+    assert html.unescape(r.text).count(says) == 1  # above the list, not in it as well
+    assert _store().holdings(sam.id, gpb) == held
+    # the import is how a portfolio moves to another report
+    client.post(f"/bonds/portfolios/{gpb}/import",
+                files={"file": ("complex_portfolio_report_11769.xlsx", report, XLSX)})
+    assert _store().portfolio(sam.id, gpb).source == "complex_portfolio_report_11769.xlsx"
+    # a portfolio made by hand has no report yet: its first update takes any
+    iis = _portfolio(sam, "ИИС", SYS6)
+    r = client.post(f"/bonds/portfolios/{iis}/update",
+                    files={"file": ("complex_portfolio_report_11111.xlsx", report, XLSX)})
+    assert r.status_code == 200 and "2 new, 1 no longer" in r.text
+    assert _store().portfolio(sam.id, iis).source == "complex_portfolio_report_11111.xlsx"
+
+
+def test_update_reaches_only_your_own_portfolio(client) -> None:
+    alex = _as(client, "Alex")
+    theirs = _portfolio(alex, "Alex's", SYS6)
+    _as(client, "Sam")
+    r = client.post(f"/bonds/portfolios/{theirs}/update",
+                    files={"file": ("complex_portfolio_report_1.xlsx", b"", XLSX)})
+    assert r.status_code == 404
+    assert [h.qty for h in _store().holdings(alex.id, theirs)] == [10.0]
+
+
 def test_a_file_that_is_not_a_portfolio_changes_nothing(client) -> None:
     from wheel_screener.api import app as app_module
 
