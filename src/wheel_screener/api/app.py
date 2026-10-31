@@ -351,6 +351,9 @@ def _viewer(request: Request) -> dict:
 
 
 templates = Jinja2Templates(directory=str(_HERE / "templates"), context_processors=[_viewer])
+# on every link to /static: a release's CSS and scripts, never ones a browser kept from before
+# (they are served without cache headers, so a browser may reuse them for days)
+templates.env.globals["asset_v"] = __version__
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
 
 

@@ -39,35 +39,43 @@
   <article>
     <header class="results-head bond-portfolio-head">
       <h3>{{ portfolio.name }}</h3>
-      <details class="bond-rename"{% if rename_error %} open{% endif %}>
-        <summary>Rename</summary>
-        <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/rename" class="bond-inline-form">
-          <input type="text" name="name" required maxlength="60" autocomplete="off"
-                 value="{{ typed_name if rename_error else portfolio.name }}" aria-label="New name"
-                 {% if rename_error %}aria-invalid="true"{% endif %}>
-          <button type="submit" class="secondary">Save</button>
+      {# Rename, Update and Delete: a row of like buttons. A form opens in a panel under the row,
+         one at a time (the menus share a name), so no button moves. #}
+      <div class="bond-head-actions">
+        <details class="bond-head-menu bond-rename" name="bond-head"{% if rename_error %} open{% endif %}>
+          <summary role="button" class="secondary outline bond-head-btn">Rename</summary>
+          <div class="bond-pop">
+            <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/rename" class="bond-inline-form">
+              <input type="text" name="name" required maxlength="60" autocomplete="off"
+                     value="{{ typed_name if rename_error else portfolio.name }}" aria-label="New name"
+                     {% if rename_error %}aria-invalid="true"{% endif %}>
+              <button type="submit" class="secondary">Save</button>
+            </form>
+            {% if rename_error %}<small class="bond-flag" role="alert">{{ rename_error }}</small>{% endif %}
+          </div>
+        </details>
+        {% if rows %}
+        {# a newer download of the same report: the import below, but it refuses another
+           Intelinvest portfolio's report and says what changed #}
+        <details class="bond-head-menu bond-update" name="bond-head">
+          <summary role="button" class="secondary outline bond-head-btn">Update</summary>
+          <div class="bond-pop">
+            <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/update"
+                  enctype="multipart/form-data" class="bond-inline-form">
+              <input type="file" name="file" required aria-label="A newer download of this portfolio's report"
+                     accept=".xlsx,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain">
+              <button type="submit" class="secondary">Update</button>
+            </form>
+            <small>{% if portfolio.source %}A newer download of <b>{{ portfolio.source }}</b>{% else %}A newer download of the report this portfolio came from{% endif %}
+              — what it holds takes the place of the bonds below.</small>
+          </div>
+        </details>
+        {% endif %}
+        <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/delete" class="bond-delete"
+              onsubmit='return confirm({{ ("Delete " ~ portfolio.name ~ (" and the " ~ portfolio.count ~ " bond" ~ ("" if portfolio.count == 1 else "s") ~ " in it" if portfolio.count else "") ~ "?")|tojson }})'>
+          <button type="submit" class="secondary outline bond-head-btn">Delete portfolio</button>
         </form>
-        {% if rename_error %}<small class="bond-flag" role="alert">{{ rename_error }}</small>{% endif %}
-      </details>
-      {% if rows %}
-      {# a newer download of the same report: the import below, but it refuses another
-         Intelinvest portfolio's report and says what changed #}
-      <details class="bond-update">
-        <summary>Update</summary>
-        <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/update"
-              enctype="multipart/form-data" class="bond-inline-form">
-          <input type="file" name="file" required aria-label="A newer download of this portfolio's report"
-                 accept=".xlsx,.csv,.txt,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv,text/plain">
-          <button type="submit" class="secondary">Update</button>
-        </form>
-        <small>{% if portfolio.source %}A newer download of <b>{{ portfolio.source }}</b>{% else %}A newer download of the report this portfolio came from{% endif %}
-          — what it holds takes the place of the bonds below.</small>
-      </details>
-      {% endif %}
-      <form method="post" action="/bonds/portfolios/{{ portfolio.id }}/delete" class="bond-delete"
-            onsubmit='return confirm({{ ("Delete " ~ portfolio.name ~ (" and the " ~ portfolio.count ~ " bond" ~ ("" if portfolio.count == 1 else "s") ~ " in it" if portfolio.count else "") ~ "?")|tojson }})'>
-        <button type="submit" class="secondary outline">Delete portfolio</button>
-      </form>
+      </div>
     </header>
     {% if portfolio.source and not report %}
     <p class="bond-source">From <b>{{ portfolio.source }}</b>, imported {{ portfolio.imported_at[:10] }}.</p>
