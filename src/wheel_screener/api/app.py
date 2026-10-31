@@ -2179,7 +2179,7 @@ def bonds_events(
 
 
 def _bond_events_for(request: Request, bonds: BondCalendarService, user_id: str,
-                     period: _BondPeriod) -> list[dict]:
+                     period: _BondPeriod, *, holders_note: bool = True) -> list[dict]:
     """The events behind a download: with the portfolios in the note when there are several,
     since the script's CSV and .ics have no column for them."""
     holdings = _bond_store(request).holdings(user_id)
@@ -2187,7 +2187,9 @@ def _bond_events_for(request: Request, bonds: BondCalendarService, user_id: str,
     if not shown:
         return []
     events = _bond_calendar(bonds, holdings, shown, period)[0].events
-    return bh.with_holders_note(events) if len({h.portfolio_id for h in shown}) > 1 else events
+    if holders_note and len({h.portfolio_id for h in shown}) > 1:
+        return bh.with_holders_note(events)
+    return events
 
 
 @app.get("/bonds/export.csv")
@@ -2226,6 +2228,26 @@ def bonds_export_xlsx(
         content=sheet.calendar_xlsx(events),
         media_type=sheet.MEDIA_TYPE,
         headers={"Content-Disposition": 'attachment; filename="bond_calendar.xlsx"'},
+    )
+
+
+@app.get("/bonds/grouped_export.xlsx")
+def bonds_grouped_export(
+    request: Request,
+    whole: bool = Query(False, alias="all"),
+    raw_from: str = Query("", alias="from"),
+    raw_to: str = Query("", alias="to"),
+    portfolio: str = "",
+    bonds: BondCalendarService = Depends(get_bonds),
+) -> Response:
+    """Coupons on one sheet and every other event on another, a line per event and portfolio
+    (``25.10.2026  Систем2P03  21,50  ГПБ  17670``) — the portfolio has its own column."""
+    period = _bond_period(whole, raw_from, raw_to, portfolio)
+    events = _bond_events_for(request, bonds, _me(request), period, holders_note=False)
+    return Response(
+        content=sheet.grouped_xlsx(events),
+        media_type=sheet.MEDIA_TYPE,
+        headers={"Content-Disposition": 'attachment; filename="grouped_export.xlsx"'},
     )
 
 

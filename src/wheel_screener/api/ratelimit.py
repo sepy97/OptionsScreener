@@ -75,7 +75,8 @@ def is_expensive(method: str, path: str) -> bool:
         return True  # adding and importing look bonds up on MOEX
     # a fresh search behind a download; the bond calendar (a MOEX build when the cache is cold)
     return method == "GET" and path in (
-        "/search/export.csv", "/bonds/events", "/bonds/export.csv", "/bonds/calendar.ics"
+        "/search/export.csv", "/bonds/events", "/bonds/export.csv", "/bonds/export.xlsx",
+        "/bonds/grouped_export.xlsx", "/bonds/calendar.ics",
     )
 
 
