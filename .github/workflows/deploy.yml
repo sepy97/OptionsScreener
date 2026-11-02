@@ -76,7 +76,10 @@ jobs:
           # after `git checkout`, and the reload would re-read the old file (see compose).
           # fetch_fundcore.sh pulls the private analysis engine into vendor/ using GH_TOKEN from
           # the droplet's .env. It is a no-op without that token, so the build never depends on it.
-          $SSH "set -e; cd /srv/steadybull; git fetch --tags --force; git checkout '$REF'; bash deploy/fetch_fundcore.sh; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || echo '::warning::caddy reload failed; the proxy is still on its previous config'"
+          # Every build leaves ~0.4 GB of stale BuildKit cache, and Docker's default GC lets it grow
+          # to ~35 GiB on this disk. DO backups bill per GiB of restorable disk, so cap it at 3 GB
+          # (keeps the dependency layer warm). A failed prune only warns; it never fails the deploy.
+          $SSH "set -e; cd /srv/steadybull; git fetch --tags --force; git checkout '$REF'; bash deploy/fetch_fundcore.sh; docker compose up -d --build; docker builder prune -f --max-used-space 3GB >/dev/null || echo '::warning::build cache prune failed'; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || echo '::warning::caddy reload failed; the proxy is still on its previous config'"
 
       - name: Verify public health
         run: |
@@ -103,7 +106,7 @@ jobs:
         run: |
           SSH="ssh -i $HOME/.ssh/deploy_key -o IdentitiesOnly=yes $DEPLOY_USER@$DEPLOY_HOST"
           echo "::warning::deploy unhealthy — rolling back to $PREV"
-          $SSH "set -e; cd /srv/steadybull; git checkout '$PREV'; docker compose up -d --build; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || echo '::warning::caddy reload failed; the proxy is still on its previous config'"
+          $SSH "set -e; cd /srv/steadybull; git checkout '$PREV'; docker compose up -d --build; docker builder prune -f --max-used-space 3GB >/dev/null || echo '::warning::build cache prune failed'; docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile || echo '::warning::caddy reload failed; the proxy is still on its previous config'"
           for i in $(seq 1 40); do
             if curl -fsS https://steadybull.net/health | grep -q '"status"'; then
               echo "rolled back to $PREV and healthy"; exit 0
