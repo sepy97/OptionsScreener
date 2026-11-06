@@ -1,0 +1,287 @@
+{% extends "base.html" %}
+{% block scripts %}<script src="/static/copy.js?v={{ asset_v }}" defer></script>{% endblock %}
+{% block content %}
+  {% import "_icons.html" as icon %}
+  {% import "_assignment.html" as am %}
+  {%- macro k(x) -%}${{ '%g'|format(x) }}{%- endmacro -%}
+  {%- macro day(d) -%}{{ d.strftime('%d %b') if d.year == today.year else d.strftime('%d %b %Y') }}{%- endmacro -%}
+  {%- macro pct(x) -%}{{ '%+.1f'|format(x * 100) }}%{%- endmacro -%}
+  {%- macro ticket(id, title, rule, text, why) -%}
+  <div class="ladder-ticket">
+    <div class="ladder-ticket-top"><strong>{{ title }} <small>({{ rule }})</small></strong>
+      <button type="button" class="secondary outline ladder-copy" data-copy="{{ id }}">Copy</button></div>
+    <pre class="ladder-order" id="{{ id }}">{{ text }}</pre>
+    {% if why %}<p class="detail-note">{{ why }}</p>{% endif %}
+  </div>
+  {%- endmacro -%}
+
+  <article>
+    <header class="results-head"><h2>Call ladder</h2></header>
+    <p class="tab-lede">Covered calls on shares you were assigned, stepped up a fixed set of strikes
+      (the rungs) until the shares can leave at what they cost. Two orders rest on each call at the
+      broker: a take-profit, and a roll up to the next rung that waits for the share price.</p>
+    <nav class="bond-portfolios" aria-label="Your ladders">
+      {% for s in plans %}
+      <a href="/ladder/{{ s.id }}" class="bond-pill{{ ' active' if saved and s.id == saved.id }}"
+         {% if saved and s.id == saved.id %}aria-current="page"{% endif %}>{{ s.plan.symbol }}</a>
+      {% endfor %}
+      {% if plans|length < max_plans %}
+      <details class="bond-new"{% if create_error or not plans %} open{% endif %}>
+        <summary>{{ 'New ladder' if plans else 'Start your first ladder' }}</summary>
+        {% with v = typed if create_error else {}, action = "/ladder", button = "Start the ladder", prefix = "new" %}
+          {% include "_ladder_form.html" %}{% endwith %}
+        {% if create_error %}<small class="bond-flag" role="alert">{{ create_error }}</small>{% endif %}
+      </details>
+      {% endif %}
+    </nav>
+  </article>
+
+  {% if saved %}
+  {% set p = saved.plan %}
+  {% set w = view %}
+  <article>
+    <header class="results-head ladder-head">
+      <h3>{{ p.symbol }} <small>{{ p.shares }} shares · cost {{ p.cost|money }}</small></h3>
+      <a href="#numbers" class="link-btn ladder-edit-link">Edit numbers</a>
+    </header>
+
+    {% if market_error %}
+      <p role="alert">{{ icon.warning() }} The {{ p.symbol }} chain didn't load: {{ market_error }}
+        Try again in a moment; the numbers you entered are below.</p>
+    {% elif w %}
+      {% set roll = w.roll %}
+      {# the one line that says what to do today #}
+      {% set tone = {'hold': 'ok', 'sell': 'ok', 'roll-zone': 'warn', 'take-profit': 'warn', 'assignment': 'neg', 'spans': 'neg', 'expired': 'warn', 'target': 'ok', 'thin': 'warn', 'wait': 'warn'}[w.status] %}
+      <p class="ladder-status ladder-status--{{ tone }}">
+        {%- if w.status == 'hold' %}<b>Hold.</b> Both orders rest at the broker; nothing to do today.
+        {%- elif w.status == 'roll-zone' %}<b>In the roll zone.</b> {{ p.symbol }} is at or above {{ roll.trigger|money }}, so the roll order should be filling. If it hasn't, roll by hand.
+        {%- elif w.status == 'take-profit' %}<b>Take profit.</b> The call costs {{ w.quote.ask|money }} to buy back, 25% or less of the {{ p.call_sold_for|money }} it was sold for. The take-profit should have filled: then sell the next call on an up day.
+        {%- elif w.status == 'assignment' %}<b>Early assignment likely.</b> {{ am.badge(w.early) }} Roll now, or accept that the shares go at {{ k(p.call_strike) }}.
+        {%- elif w.status == 'spans' %}<b>Open over the report.</b> The call expires {{ day(p.call_expiry) }}, after the {{ day(w.report) }} report. Close it, or roll it to an expiry before the report.
+        {%- elif w.status == 'target' %}<b>At the target.</b> Sell calls at {{ k(p.target) }} or higher and let the shares go if they're called.
+        {%- elif w.status == 'expired' %}<b>The {{ day(p.call_expiry) }} call has expired.</b> Enter the call that replaced it under Edit numbers, or clear it to see what to sell.
+        {%- elif w.status == 'sell' %}<b>No call open.</b> Sell the {{ k(w.new_call.strike) }} {{ day(w.new_call.expiry) }} call, below.
+        {%- elif w.status == 'thin' %}<b>No call open, and the next one pays too little.</b> The {{ k(w.new_call.strike) }} {{ day(w.new_call.expiry) }} call pays {{ w.new_call.premium|money }}, under the {{ w.new_call.minimum|money }} minimum (1% of the share price). Check again on an up day.
+        {%- elif w.status == 'wait' %}<b>No call open, and none fits before the report.</b> Every expiry three weeks or more out is past the {{ day(w.report) if w.report else '' }} report: wait until after it.
+        {%- endif %}</p>
+      {% if 'no-quote' in w.notes %}<p class="ladder-note">{{ icon.warning() }} No quote for the {{ k(p.call_strike) }} {{ day(p.call_expiry) }} call: check its strike and expiry under Edit numbers.</p>{% endif %}
+      {% if 'no-report' in w.notes %}<p class="ladder-note">{{ icon.warning() }} No earnings date found for {{ p.symbol }}, so the ladder can't keep calls clear of the next report. Check the date yourself.</p>{% endif %}
+      {% if 'breakeven' in w.notes %}<p class="ladder-note">{{ p.symbol }} is at or above the real cost: you could sell the shares at breakeven now.</p>{% endif %}
+
+      {# ---- where things stand ---- #}
+      {% set lead = w.rungs | selectattr('state', 'equalto', 'open') | first %}
+      {% set called_at = p.call_strike if p.has_call else (w.new_call.strike if w.new_call else p.rungs[0]) %}
+      <dl class="ladder-stats">
+        <div><dt>Real cost</dt><dd>{{ p.real_cost|money }}</dd>
+          <p class="detail-note">{{ p.cost|money }} less {{ (p.put_premium + p.call_premiums)|money }} in premiums</p></div>
+        <div><dt>{{ p.symbol }} now</dt><dd>{{ w.spot|money }}</dd>
+          {% if w.iv %}<p class="detail-note">implied volatility {{ '%.0f'|format(w.iv * 100) }}%</p>{% endif %}</div>
+        {% if roll %}
+        <div><dt>Roll trigger</dt><dd>{{ roll.trigger|money }}</dd>
+          {% if w.spot %}<p class="detail-note">{% if w.spot < roll.trigger %}{{ pct(roll.trigger / w.spot - 1) }} from here{% else %}{{ p.symbol }} is past it{% endif %}</p>{% endif %}</div>
+        {% endif %}
+        <div><dt>If called at {{ k(called_at) }}</dt>
+          <dd class="{{ 'neg' if called_at < p.real_cost else 'pos' }}">{{ (called_at - p.real_cost)|signed(2) }}</dd>
+          <p class="detail-note">a share, against real cost</p></div>
+      </dl>
+
+      {% if w.rail %}
+      {% set spot_m = w.rail | selectattr('kind', 'equalto', 'spot') | first %}
+      {% set trig_m = w.rail | selectattr('kind', 'equalto', 'trigger') | first %}
+      <div class="ladder-rail" role="img"
+           aria-label="{{ p.symbol }} at {{ w.spot|money }}; rungs {% for r in p.rungs %}{{ k(r) }}{{ ', ' if not loop.last }}{% endfor %}; real cost {{ p.real_cost|money }}">
+        {% if spot_m and trig_m and trig_m.at > spot_m.at %}
+        <span class="ladder-zone" style="left: {{ '%.2f'|format(spot_m.at * 100) }}%; width: {{ '%.2f'|format((trig_m.at - spot_m.at) * 100) }}%"></span>
+        {% endif %}
+        {% set rung_n = namespace(i=0) %}
+        {% for m in w.rail %}
+          {% if m.kind == 'rung' %}{% set rung_n.i = rung_n.i + 1 %}{% endif %}
+          <span class="ladder-mark ladder-mark--{{ m.kind }}{{ ' ladder-mark--high' if m.kind == 'rung' and rung_n.i is even }}{{ ' ladder-mark--open' if m.kind == 'rung' and p.has_call and m.value == p.call_strike }}"
+                style="left: {{ '%.2f'|format(m.at * 100) }}%">
+            {%- if m.kind == 'rung' %}<span>{{ k(m.value) }}</span>
+            {%- elif m.kind == 'spot' %}<span>{{ p.symbol }} {{ m.value|money }}</span>
+            {%- elif m.kind == 'cost' %}<span>real cost {{ m.value|money }}</span>{% endif -%}
+          </span>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      {% if p.has_call and w.quote %}
+      <p class="ladder-open">Open: <b>{{ k(p.call_strike) }} call, {{ day(p.call_expiry) }}</b>, {{ w.days_left }} day{{ '' if w.days_left == 1 else 's' }} left
+        {%- if w.quote.delta is not none %} · delta {{ '%.2f'|format(w.quote.delta) }}{% endif %}
+        {%- if w.quote.bid is not none and w.quote.ask is not none %} · {{ w.quote.bid|money }} bid / {{ w.quote.ask|money }} ask{% endif %}
+        {%- if w.kept is not none %} · {{ '%.0f'|format(w.kept * 100) }}% of the {{ p.call_sold_for|money }} premium kept{% endif %}</p>
+      {% endif %}
+    {% endif %}
+  </article>
+
+  {% if w %}
+  {# ---- the orders ---- #}
+  <article>
+    <header class="results-head"><h3>Place now</h3></header>
+    {% if p.has_call and w.status not in ('expired', 'target') %}
+      <div class="ladder-oco">
+        <p class="ladder-oco-head"><span class="badge badge--ok">One cancels other</span>
+          <small>Both buy back the same call: link them so a fill of one cancels the other. Without
+            the link, two fills would leave you owning a call.</small></p>
+        {% if w.take_profit is not none %}
+          {{ ticket('order-profit', 'Take profit', 'M1',
+               L.leg('BUY TO CLOSE', p.contracts, p.symbol, p.call_expiry, p.call_strike) ~ '\nLIMIT ' ~ '%.2f'|format(w.take_profit) ~ '\nGOOD TILL CANCELLED',
+               'Fills by itself if ' ~ p.symbol ~ ' falls and the call loses 75% of the ' ~ (p.call_sold_for|money) ~ ' it was sold for.') }}
+        {% else %}
+          <p class="detail-note">Enter what the call was sold for, under Edit numbers, to get the take-profit price.</p>
+        {% endif %}
+        {% if roll and not roll.blocked %}
+          {{ ticket('order-roll', 'Roll up a rung', 'M3 · R2',
+               'WHEN ' ~ p.symbol ~ ' LAST ≥ ' ~ '%.2f'|format(roll.trigger) ~ '\n' ~ roll.lines|join('\n') ~ '\nNET CREDIT LIMIT ' ~ '%.2f'|format(roll.limit) ~ '\nGOOD TILL CANCELLED',
+               none) }}
+          <p class="detail-note">{{ day(roll.to_expiry) }} is {{ roll.added_days }} days after {{ day(p.call_expiry) }}{{ ', and the last expiry before the report' if roll.to_expiry == w.wall }}.
+            {% if w.iv %}The limit is {{ '%.0f'|format(L.LIMIT_SHARE * 100) }}% of the lowest credit the model gives at the trigger
+            over this call's life, with volatility {{ '%.0f'|format(L.LIMIT_IV_DROP * 100) }} points lower than now, since a rally usually lowers it.{% else %}No volatility was quoted, so the limit is the {{ roll.minimum|money }} minimum.{% endif %}
+            {% if roll.credit_mid is not none %}Rolling right now would pay {{ roll.credit_mid|money }} at the mid{% if roll.credit_natural is not none %} ({{ roll.credit_natural|money }} at the bid and ask){% endif %}.{% endif %}</p>
+        {% elif roll and roll.blocked == 'report' %}
+          <p class="ladder-note"><b>No roll on this call.</b> Every expiry four weeks or more after {{ day(p.call_expiry) }} is past the {{ day(w.report) }} report.
+            Only the take-profit rests; if {{ p.symbol }} is above {{ k(p.call_strike) }} at expiry, the shares are called there.</p>
+        {% elif roll and roll.blocked == 'unlisted' %}
+          <p class="ladder-note">No expiry is listed four to six weeks after {{ day(p.call_expiry) }} yet. Place the roll once one is.</p>
+        {% elif roll and roll.blocked == 'no-strike' %}
+          <p class="ladder-note">No strike at the next rung or above is listed for {{ day(roll.to_expiry) }}.</p>
+        {% endif %}
+      </div>
+      <p class="detail-note">In thinkorswim the roll is a conditional order ("submit at specified market
+        condition", on {{ p.symbol }}'s last price) in an OCO bracket with the take-profit. Check that both
+        show as linked before you close the order screen.</p>
+    {% elif w.new_call %}
+      {% set n = w.new_call %}
+      {{ ticket('order-sell', 'Sell a call', 'O1–O4',
+           n.line ~ ('\nLIMIT ' ~ '%.2f'|format(n.premium) if n.premium is not none else '') ~ '\nDAY',
+           ('At the mid price; walk it down in small steps if it doesn\'t fill. ' if not n.estimated else '') ~ 'Once it fills, enter it under Edit numbers to get its two orders.') }}
+    {% elif w.status == 'target' %}
+      <p>Sell calls at {{ k(p.target) }} or higher, four to six weeks out, and let the shares go if they're called.</p>
+    {% else %}
+      <p class="detail-note">Nothing to place.</p>
+    {% endif %}
+  </article>
+
+  {# ---- the rungs ---- #}
+  <article>
+    <header class="results-head"><h3>The rungs</h3></header>
+    <figure>
+    <table class="ladder-rungs">
+      <thead><tr><th>Rung</th><th class="n">Roll at</th><th>Rolls to</th>
+        <th class="n" title="the model's credit at the trigger with {{ L.GAP_DAYS_LEFT }} days left and four weeks added">Credit</th>
+        <th class="n">If called here</th></tr></thead>
+      <tbody>
+      {% for r in w.rungs %}
+        <tr class="ladder-rung--{{ r.state }}">
+          <td><b>{{ k(r.strike) }}</b>
+            {%- if r.state == 'open' %} <span class="badge badge--ok">open</span>
+            {%- elif r.state == 'target' %} <span class="badge badge--ok">target</span>
+            {%- elif r.state == 'passed' %} <span class="detail-note">passed</span>{% endif %}</td>
+          {% if r.state == 'target' %}
+            <td class="n">—</td><td>Stop rolling up. Sell calls here or higher and let the shares go.</td><td class="n">—</td>
+          {% else %}
+            <td class="n">{{ r.trigger|money }}</td>
+            <td>{{ k(r.to_strike) }}{% if r.state == 'open' and roll and roll.to_expiry %} · {{ day(roll.to_expiry) }}{% else %} · four weeks later{% endif %}</td>
+            <td class="n">{{ r.credit|money if r.credit is not none and r.credit > 0 else ('none' if r.credit is not none else '—') }}</td>
+          {% endif %}
+          <td class="n {{ 'neg' if r.if_called < 0 else 'pos' }}">{{ r.if_called|signed(2) }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </figure>
+    <p class="detail-note">"If called here" is against today's real cost, {{ p.real_cost|money }}. Every
+      premium and roll credit lowers it, so those numbers improve as the ladder climbs.</p>
+  </article>
+
+  {# ---- the calendar the report sets ---- #}
+  <article>
+    <header class="results-head"><h3>{{ 'Until the ' ~ day(w.report) ~ ' report' if w.report else 'Ahead' }}</h3>
+      <small class="detail-note">No option is held over a report.</small></header>
+    <ol class="ladder-cal">
+    {% for e in w.events %}
+      <li class="ladder-cal--{{ e.kind }}{{ ' ladder-cal--wall' if e.wall }}"><time datetime="{{ e.day.isoformat() }}">{{ day(e.day) }}</time>
+        <p>
+        {%- if e.kind == 'now' %}<b>Now.</b>
+          {% if p.has_call and w.status != 'expired' %}The {{ k(p.call_strike) }} {{ day(p.call_expiry) }} call is open. {% if w.status in ('hold', 'roll-zone') %}Place both orders.{% endif %}
+          {% elif w.new_call %}No call is open: sell the {{ k(w.new_call.strike) }} {{ day(w.new_call.expiry) }}.
+          {% else %}No call is open.{% endif %}
+        {%- elif e.kind == 'dividend' %}<b>Ex-dividend, {{ e.dividend.amount|money }}</b>{{ ' (estimated)' if e.dividend.estimated }}. It matters only if the call is in the money then, with less than that left in time value.
+        {%- elif e.kind == 'expiry' and p.has_call and w.status != 'expired' %}<b>The {{ day(p.call_expiry) }} call expires.</b>
+          {% set nc = w.next_call %}
+          {% if nc %}If {{ p.symbol }} is under {{ k(p.call_strike) }}, it expires worthless: sell the {{ k(nc.strike) }} {{ day(nc.expiry) }} call if it pays {{ nc.minimum|money }} or more{% if nc.premium is not none %}. At today's price it would pay about {{ nc.premium|money }}{{ ', so sell it' if nc.sells else ', under the minimum, so skip the cycle' }}{% endif %}.
+          {% elif w.status != 'target' %}If {{ p.symbol }} is under {{ k(p.call_strike) }}, it expires worthless, and no expiry fits before the report: wait until after it.{% endif %}
+          {% if roll and not roll.blocked %}If the roll has run, you hold the {{ k(roll.to_strike) }} {{ day(roll.to_expiry) }} instead.{% endif %}
+          {% if e.wall %}It is the last expiry before the report, so it can't roll.{% endif %}
+        {%- elif e.kind == 'expiry' %}<b>The call you'd sell expires.</b>{% if e.wall %} It is the last expiry before the report, so it can't roll.{% endif %}
+        {%- elif e.kind == 'wall' %}<b>Last expiry before the report.</b> The call that expires here can't roll, so only a take-profit rests on it. If {{ p.symbol }} is above its strike then, the shares are called there.
+        {%- elif e.kind == 'report' %}<b>Report.</b> No call is open.
+        {%- elif e.kind == 'resume' %}<b>Back to the ladder.</b> Sell the current rung again, four to six weeks out, if it pays 1% of the share price or more, and place the two orders.
+        {%- endif %}</p></li>
+    {% endfor %}
+    </ol>
+    {% if w.report %}
+    <p class="ladder-note">The call that expires just before each report can't roll, because every later
+      expiry spans the report. That leaves room for about two rolls between reports: the ladder climbs at
+      most two rungs a quarter.</p>
+    {% endif %}
+  </article>
+
+  {# ---- what the roll pays, by share price and days left ---- #}
+  {% if w.grid %}
+  {% set g = w.grid %}
+  <article>
+    <header class="results-head"><h3>What the roll pays</h3>
+      <small class="detail-note">{{ k(p.call_strike) }} {{ day(p.call_expiry) }} to {{ k(roll.to_strike) }} {{ day(roll.to_expiry) }}, per share, at {{ '%.0f'|format(w.iv * 100) }}% volatility</small></header>
+    <figure>
+    <table class="ladder-credit">
+      <thead><tr><th class="n">{{ p.symbol }}</th>{% for d in g.days_left %}<th class="n">{{ d }} day{{ '' if d == 1 else 's' }} left</th>{% endfor %}</tr></thead>
+      <tbody>
+      {% for s in g.prices %}
+        <tr{% if s == g.trigger %} class="ladder-credit--trigger"{% endif %}>
+          <td class="n">{{ s|money }}{% if s == g.trigger %} <small>trigger</small>{% endif %}</td>
+          {% for c in g.cells[loop.index0] %}<td class="n{{ ' ladder-credit--low' if g.limit is not none and c < g.limit }}">{{ '%.2f'|format(c) }}</td>{% endfor %}
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </figure>
+    <p class="detail-note">Shaded: under the {{ g.limit|money }} limit, where the order would sit unfilled. Near
+      the strike the credit grows as expiry nears, because the old call's time value decays faster than the
+      new one's. Far above the strike it shrinks to nothing: that is a gap.</p>
+  </article>
+  {% endif %}
+
+  {# ---- what still needs a person ---- #}
+  {% if p.has_call and w.status not in ('expired', 'target') %}
+  <article>
+    <header class="results-head"><h3>What the orders don't cover</h3></header>
+    <ul class="ladder-watch">
+      {% if roll and roll.gap %}<li><b>A gap past about {{ roll.gap|money }}.</b> The roll order is sent but can't fill at {{ roll.limit|money }}. Try the roll once by hand; if nothing pays, let the shares be called at {{ k(p.call_strike) }}.</li>{% endif %}
+      <li><b>Early assignment.</b> The call in the money with little time value left, or an ex-dividend near{% if w.early and w.early.risk in ('likely', 'possible') %}: {{ am.badge(w.early) }}{% else %}. Not close now.{% endif %}</li>
+      {% if w.report %}<li><b>The report on {{ day(w.report) }}.</b> Nothing stays open over it{{ ', and the call expiring ' ~ day(w.wall) ~ ' can\'t roll' if w.wall }}.</li>{% endif %}
+      <li><b>A fill.</b> After either order fills, update this ladder (the new call, what it sold for, the premiums), and place the next pair.</li>
+    </ul>
+  </article>
+  {% endif %}
+  <p class="detail-note ladder-foot">Prices from the {{ p.symbol }} chain now. The limit, the gap and the
+    tables are estimates: Black–Scholes{% if w.iv %} at {{ '%.0f'|format(w.iv * 100) }}% volatility{% endif %},
+    mid prices before the bid–ask, no dividends. A resting order fills at the market's bid and ask, which is lower.</p>
+  {% endif %}
+
+  {# ---- the plan's own numbers ---- #}
+  <article id="numbers">
+    <details class="advanced"{% if edit_error or not view %} open{% endif %}>
+      <summary>Edit numbers</summary>
+      {% with v = typed if edit_error else values, action = "/ladder/" ~ saved.id, button = "Save", prefix = "edit" %}
+        {% include "_ladder_form.html" %}{% endwith %}
+      {% if edit_error %}<small class="bond-flag" role="alert">{{ edit_error }}</small>{% endif %}
+      <form method="post" action="/ladder/{{ saved.id }}/delete" class="ladder-delete"
+            onsubmit='return confirm({{ ("Delete the " ~ p.symbol ~ " ladder? Nothing at the broker changes.")|tojson }})'>
+        <button type="submit" class="secondary outline danger">Delete this ladder</button>
+      </form>
+    </details>
+  </article>
+  {% endif %}
+{% endblock %}

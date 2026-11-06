@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from datetime import UTC, datetime
 
 import pytest
 
@@ -43,7 +44,8 @@ def test_the_list_has_a_size_cap(tmp_path) -> None:
 
 def test_it_shares_the_jobs_database_without_disturbing_it(tmp_path) -> None:
     path = str(tmp_path / "jobs.sqlite")
-    JobStore(path).create("j", "2026-10-05T00:00:00+00:00")
+    # made now: the store prunes jobs older than a month each time it opens
+    JobStore(path).create("j", datetime.now(tz=UTC).isoformat())
     BlocklistStore(path).add("GME")
     assert JobStore(path).get("j") is not None and BlocklistStore(path).symbols() == ["GME"]
 
