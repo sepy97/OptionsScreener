@@ -119,7 +119,9 @@ def test_a_new_ladder_shows_the_orders_to_place(client) -> None:
     assert L.leg("SELL TO OPEN", 1, "TER", NEXT, 355) in page
     assert "NET CREDIT LIMIT" in page and "One cancels other" in page
     assert "$384.00" in page  # real cost: $390 less the $6.00 call
-    assert "Last expiry before the report." in page
+    assert "and the last expiry before the report." in page  # where the roll lands
+    # the plan: 1% a month unless told, $340 calls sold again and again to start with
+    assert "if TER grows 1% a month, steadily" in page and "Sell the $340 call," in page
     assert 'data-copy="order-roll"' in page and "/static/copy.js" in page
 
 
@@ -166,8 +168,63 @@ def test_editing_the_numbers_after_a_roll(client) -> None:
     assert "$380.85" in page  # $390 less $9.15
     # the new call expires on the last expiry before the report, so it can't roll
     assert "No roll on this call." in page
-    r = client.post(where, data={**TER, "rungs": ""})
-    assert r.status_code == 422 and "Enter the rungs" in r.text
+    # rungs cleared: planned again, from the $355 call now open
+    r = client.post(where, data={**TER, "call_strike": "355", "call_expiry": NEXT.isoformat(),
+                                 "rungs": ""}, follow_redirects=False)
+    assert r.status_code == 303
+    assert app.state.ladder_plans.plans(_user_id(client))[0].plan.rungs[0] == 355.0
+
+
+def test_the_plan_takes_the_growth_it_is_given(client) -> None:
+    _as(client)
+    where = _create(client, growth="2.5%")
+    assert app.state.ladder_plans.plans(_user_id(client))[0].plan.growth == 0.025
+    page = html.unescape(client.get(where).text)
+    assert "if TER grows 2.5% a month, steadily" in page and 'value="2.5"' in page
+    r = client.post(where, data={**TER, "growth": "40"})
+    assert r.status_code == 422 and "between -10% and 10% a month" in r.text
+
+
+def test_a_ladder_saved_before_growth_was_kept_gets_the_column(tmp_path) -> None:
+    import sqlite3
+    path = str(tmp_path / "jobs.sqlite")
+    conn = sqlite3.connect(path)
+    conn.execute("CREATE TABLE ladder_plans (id TEXT PRIMARY KEY, user_id TEXT NOT NULL,"
+                 " symbol TEXT NOT NULL, shares INTEGER NOT NULL, cost REAL NOT NULL,"
+                 " rungs TEXT NOT NULL, put_premium REAL NOT NULL DEFAULT 0,"
+                 " call_premiums REAL NOT NULL DEFAULT 0, call_strike REAL, call_expiry TEXT,"
+                 " call_sold_for REAL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)")
+    conn.execute("INSERT INTO ladder_plans VALUES ('p1', 'u1', 'TER', 100, 390, '340,390', 0, 6,"
+                 " NULL, NULL, NULL, 'x', 'x')")
+    conn.commit()
+    conn.close()
+    plan = LadderPlanStore(path).plan("u1", "p1").plan
+    assert plan.rungs == (340.0, 390.0) and plan.growth is None and plan.monthly_growth == 0.01
+
+
+def test_rungs_left_empty_are_planned_from_the_chain(client) -> None:
+    _as(client)
+    where = _create(client, rungs="", call_premiums="")
+    plan = app.state.ladder_plans.plans(_user_id(client))[0].plan
+    assert plan.rungs == (340.0, 355.0, 375.0, 390.0)
+    assert plan.call_premiums == 6.0  # left empty: what the open call was sold for
+    page = html.unescape(client.get(where).text)
+    assert "3 rolls to the target" in page and "$384.00" in page
+    assert 'value="340, 355, 375, 390"' in page  # to edit, or clear and plan again
+
+
+def test_rungs_that_can_not_be_planned_are_said() -> None:
+    c = _client(_Service(ProviderUnavailableError("schwab chain fetch failed for TER")))
+    try:
+        _as(c)
+        r = c.post("/ladder", data={**TER, "rungs": ""})
+        assert r.status_code == 422
+        assert "the rungs can't be planned" in html.unescape(r.text)
+        assert app.state.ladder_plans.plans(_user_id(c)) == []
+        assert c.post("/ladder", data=TER, follow_redirects=False).status_code == 303
+    finally:
+        app.dependency_overrides.clear()
+        c.__exit__(None, None, None)
 
 
 def test_deleting_a_ladder(client) -> None:
@@ -229,3 +286,14 @@ def test_the_store_keeps_each_person_s_plans_apart(tmp_path) -> None:
     again = store.plan("u1", saved.id)
     assert again.plan == plan
     store.create("u2", plan)  # one per ticker is per person
+
+
+def test_static_links_change_with_what_they_link_to(tmp_path) -> None:
+    from wheel_screener import __version__
+    from wheel_screener.api.app import _asset_version, templates
+    (tmp_path / "a.css").write_text("a { }")
+    before = _asset_version(tmp_path)
+    assert before.startswith(__version__ + ".")
+    (tmp_path / "a.css").write_text("a { color: red }")
+    assert _asset_version(tmp_path) != before
+    assert templates.env.globals["asset_v"].startswith(__version__ + ".")

@@ -9,23 +9,12 @@
     <label for="{{ prefix }}-shares">Shares
       <input type="text" id="{{ prefix }}-shares" name="shares" required inputmode="numeric"
              value="{{ v.shares|default('') }}" placeholder="100"></label>
-    <label for="{{ prefix }}-cost">Cost, $/share <small>the put strike you were assigned at</small>
+    <label for="{{ prefix }}-cost">Assigned at, $/share <small>the strike of the put</small>
       <input type="text" id="{{ prefix }}-cost" name="cost" required inputmode="decimal"
              value="{{ v.cost|default('') }}" placeholder="390"></label>
-    <label for="{{ prefix }}-put">Put premium, $/share
-      <input type="text" id="{{ prefix }}-put" name="put_premium" inputmode="decimal"
-             value="{{ v.put_premium|default('') }}" placeholder="0"></label>
-    <label for="{{ prefix }}-calls">Call premiums, $/share <small>every call so far, the open one
-        included, less what buying any back cost</small>
-      <input type="text" id="{{ prefix }}-calls" name="call_premiums" inputmode="decimal"
-             value="{{ v.call_premiums|default('') }}" placeholder="6.00"></label>
-    <label for="{{ prefix }}-rungs" class="ladder-wide">Rungs <small>the strikes the call steps up;
-        the last is the target</small>
-      <input type="text" id="{{ prefix }}-rungs" name="rungs" required
-             value="{{ v.rungs|default('') }}" placeholder="340, 355, 370, 390"></label>
   </fieldset>
   <fieldset class="ladder-fields">
-    <legend>The call open now <small>leave empty if none is</small></legend>
+    <legend>The call you sold <small>leave empty if none is open</small></legend>
     <label for="{{ prefix }}-strike">Strike
       <input type="text" id="{{ prefix }}-strike" name="call_strike" inputmode="decimal"
              value="{{ v.call_strike|default('') }}" placeholder="340"></label>
@@ -35,6 +24,23 @@
     <label for="{{ prefix }}-sold">Sold for, $/share
       <input type="text" id="{{ prefix }}-sold" name="call_sold_for" inputmode="decimal"
              value="{{ v.call_sold_for|default('') }}" placeholder="6.00"></label>
+  </fieldset>
+  <fieldset class="ladder-fields">
+    <legend>Optional</legend>
+    <label for="{{ prefix }}-put">Put premium, $/share
+      <input type="text" id="{{ prefix }}-put" name="put_premium" inputmode="decimal"
+             value="{{ v.put_premium|default('') }}" placeholder="0"></label>
+    <label for="{{ prefix }}-calls">Call premiums, $/share <small>every call so far, less what
+        buying any back cost; empty: what the call above sold for</small>
+      <input type="text" id="{{ prefix }}-calls" name="call_premiums" inputmode="decimal"
+             value="{{ v.call_premiums|default('') }}" placeholder="6.00"></label>
+    <label for="{{ prefix }}-growth">Growth, % a month <small>the steady climb the plan
+        assumes; empty: {{ '%g'|format(L.DEFAULT_GROWTH * 100) }}%</small>
+      <input type="text" id="{{ prefix }}-growth" name="growth" inputmode="decimal"
+             value="{{ v.growth|default('') }}" placeholder="{{ '%g'|format(L.DEFAULT_GROWTH * 100) }}"></label>
+    <label for="{{ prefix }}-rungs" class="ladder-wide">Rungs <small>{{ 'clear them to plan them again from today\'s prices' if v.rungs else 'empty: planned for you from the chain' }}</small>
+      <input type="text" id="{{ prefix }}-rungs" name="rungs"
+             value="{{ v.rungs|default('') }}" placeholder="planned for you"></label>
   </fieldset>
   <button type="submit" class="secondary">{{ button }}</button>
 </form>

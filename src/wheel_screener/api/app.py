@@ -12,13 +12,14 @@ from __future__ import annotations
 import base64
 import calendar
 import csv
+import hashlib
 import io
 import logging
 import re
 import secrets
 import time
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import quote, urlencode
@@ -371,10 +372,20 @@ def _viewer(request: Request) -> dict:
     return {"viewer": session.user if session is not None else None}
 
 
+def _asset_version(static: Path) -> str:
+    """The release, and a digest of what /static serves: a release cut again under the same
+    version still links to its own CSS and scripts."""
+    digest = hashlib.sha256()
+    for f in sorted(static.rglob("*")):
+        if f.is_file():
+            digest.update(f.relative_to(static).as_posix().encode() + b"\0" + f.read_bytes())
+    return f"{__version__}.{digest.hexdigest()[:8]}"
+
+
 templates = Jinja2Templates(directory=str(_HERE / "templates"), context_processors=[_viewer])
 # on every link to /static: a release's CSS and scripts, never ones a browser kept from before
 # (they are served without cache headers, so a browser may reuse them for days)
-templates.env.globals["asset_v"] = __version__
+templates.env.globals["asset_v"] = _asset_version(_HERE / "static")
 app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
 
 
@@ -2644,7 +2655,7 @@ def _import_into(request: Request, portfolio: Portfolio, text: str, file: Upload
 # chain when its page opens (core.ladder). Signed in only: /ladder is behind the session gate.
 
 _LADDER_FIELDS = ("symbol", "shares", "cost", "rungs", "put_premium", "call_premiums",
-                  "call_strike", "call_expiry", "call_sold_for")
+                  "call_strike", "call_expiry", "call_sold_for", "growth")
 
 
 def _ladder_store(request: Request) -> LadderPlanStore:
@@ -2683,6 +2694,24 @@ def _ladder_form(**fields: str) -> dict[str, str]:
     return {k: fields.get(k, "") for k in _LADDER_FIELDS}
 
 
+def _with_rungs(plan: ladder.Plan, service: ScreenerService) -> ladder.Plan:
+    """The plan with its rungs: as typed, or, left empty, planned from the chain now."""
+    if plan.rungs:
+        return plan
+    today = date.today()
+    try:
+        market = service.ladder_market(plan.symbol, today)
+    except ProviderError as e:
+        raise PlanError(f"The {plan.symbol} chain didn't load, so the rungs can't be planned"
+                        f" ({e}). Try again in a moment, or type the rungs.") from e
+    planned = ladder.plan_rungs(plan, market, today,
+                                getattr(service, "carry_rate", ladder.DEFAULT_CARRY_RATE))
+    if planned is None:
+        raise PlanError(f"No {plan.symbol} chain or share price to plan the rungs from. Check"
+                        " the ticker, or type the rungs.")
+    return replace(plan, rungs=planned.rungs)
+
+
 @app.get("/ladder")
 def ladder_home(request: Request):
     """Your first ladder — or, with none yet, the form to start one."""
@@ -2694,16 +2723,19 @@ def ladder_home(request: Request):
 
 @app.post("/ladder")
 def ladder_create(
-    request: Request, symbol: str = Form(""), shares: str = Form(""), cost: str = Form(""),
-    rungs: str = Form(""), put_premium: str = Form(""), call_premiums: str = Form(""),
-    call_strike: str = Form(""), call_expiry: str = Form(""), call_sold_for: str = Form(""),
+    request: Request, service: ScreenerService = Depends(get_service),
+    symbol: str = Form(""), shares: str = Form(""), cost: str = Form(""), rungs: str = Form(""),
+    put_premium: str = Form(""), call_premiums: str = Form(""), call_strike: str = Form(""),
+    call_expiry: str = Form(""), call_sold_for: str = Form(""), growth: str = Form(""),
 ):
+    """A new ladder. Its rungs, left empty, are planned from the chain."""
     typed = _ladder_form(symbol=symbol, shares=shares, cost=cost, rungs=rungs,
                          put_premium=put_premium, call_premiums=call_premiums,
                          call_strike=call_strike, call_expiry=call_expiry,
-                         call_sold_for=call_sold_for)
+                         call_sold_for=call_sold_for, growth=growth)
     try:
-        created = _ladder_store(request).create(_me(request), plan_from_form(typed))
+        created = _ladder_store(request).create(
+            _me(request), _with_rungs(plan_from_form(typed), service))
     except PlanError as e:
         return _ladder_page(request, None, status_code=422, create_error=str(e), typed=typed)
     return RedirectResponse(f"/ladder/{created.id}", status_code=303)
@@ -2721,16 +2753,18 @@ def ladder_plan_save(
     plan_id: str, request: Request, service: ScreenerService = Depends(get_service),
     symbol: str = Form(""), shares: str = Form(""), cost: str = Form(""), rungs: str = Form(""),
     put_premium: str = Form(""), call_premiums: str = Form(""), call_strike: str = Form(""),
-    call_expiry: str = Form(""), call_sold_for: str = Form(""),
+    call_expiry: str = Form(""), call_sold_for: str = Form(""), growth: str = Form(""),
 ):
-    """The plan's numbers, edited: after a roll, a new call, or a correction."""
+    """The plan's numbers, edited: after a roll, a new call, or a correction. Rungs cleared
+    are planned again from the chain."""
     saved = _my_plan(request, plan_id)
     typed = _ladder_form(symbol=symbol, shares=shares, cost=cost, rungs=rungs,
                          put_premium=put_premium, call_premiums=call_premiums,
                          call_strike=call_strike, call_expiry=call_expiry,
-                         call_sold_for=call_sold_for)
+                         call_sold_for=call_sold_for, growth=growth)
     try:
-        _ladder_store(request).update(_me(request), saved.id, plan_from_form(typed))
+        _ladder_store(request).update(_me(request), saved.id,
+                                      _with_rungs(plan_from_form(typed), service))
     except PlanError as e:
         return _ladder_page(request, saved, service, 422, edit_error=str(e), typed=typed)
     return RedirectResponse(f"/ladder/{saved.id}", status_code=303)
