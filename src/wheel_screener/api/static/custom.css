@@ -40,9 +40,10 @@ body { background: #f5f7f9; -webkit-font-smoothing: antialiased; }
 
 /* --- primary nav: Screener | Search tabs --- */
 .app-nav { background: #fff; border-bottom: 1px solid var(--border); }
-.app-nav__inner { display: flex; gap: 0.25rem; }
+/* a tab's name never breaks across lines: with more tabs than fit, whole tabs wrap instead */
+.app-nav__inner { display: flex; flex-wrap: wrap; gap: 0 0.25rem; }
 .nav-tab {
-  padding: 0.7rem 1rem; font-weight: 600; font-size: 0.95rem; text-decoration: none;
+  padding: 0.7rem 0.85rem; font-weight: 600; font-size: 0.95rem; text-decoration: none; white-space: nowrap;
   color: var(--pico-muted-color); border-bottom: 2px solid transparent; margin-bottom: -1px;
 }
 .nav-tab:hover { color: var(--wheel-accent); }
@@ -916,3 +917,90 @@ a.bond-day:hover { background: var(--wheel-accent-soft); }
   .bond-chip.ev-deadline { background: var(--neg); }
   .bond-more { display: none; }
 }
+
+/* --- Call ladder ------------------------------------------------------------------------ */
+.ladder-head h3 { margin: 0; font-size: 1.1rem; }
+.ladder-head h3 small { font-size: 0.8rem; font-weight: 400; color: var(--pico-muted-color); }
+.ladder-edit-link { margin-left: auto; font-size: 0.85rem; }
+.ladder-status { margin: 0.25rem 0 0.75rem; padding: 0.6rem 0.85rem; border-radius: var(--radius-sm); font-size: 0.95rem; }
+.ladder-status--ok { background: var(--wheel-accent-soft); }
+.ladder-status--warn { background: var(--warn-soft); }
+.ladder-status--neg { background: var(--neg-soft); }
+.ladder-note { margin: 0 0 0.6rem; font-size: 0.875rem; }
+/* where things stand: four figures in a row, two by two on a phone */
+.ladder-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 1rem; border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.ladder-stats > div { padding: 0.6rem 0.85rem; min-width: 0; }
+.ladder-stats > div + div { border-left: 1px solid var(--border); }
+.ladder-stats dt { font-size: 0.7rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--pico-muted-color); }
+.ladder-stats dd { margin: 0; font-size: 1.25rem; font-weight: 600; font-variant-numeric: tabular-nums; }
+.ladder-stats dd.neg { color: var(--neg); }
+.ladder-stats dd.pos { color: var(--wheel-accent-strong); }
+.ladder-stats .detail-note { margin: 0; }
+@media (max-width: 640px) {
+  .ladder-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ladder-stats > div:nth-child(3) { border-left: 0; }
+  .ladder-stats > div:nth-child(n+3) { border-top: 1px solid var(--border); }
+}
+/* the rungs, the real cost and the share price along one price scale */
+.ladder-rail { position: relative; height: 5.5rem; margin: 0 0.75rem 0.75rem; }
+.ladder-rail::before { content: ""; position: absolute; left: 0; right: 0; top: 3.2rem; border-top: 1px solid var(--pico-muted-color); }
+.ladder-zone { position: absolute; top: 2.85rem; height: 0.7rem; background: var(--wheel-accent-soft); }
+.ladder-mark { position: absolute; top: 2.2rem; width: 0; height: 1.4rem; }
+.ladder-mark > span { position: absolute; left: 0; transform: translateX(-50%); white-space: nowrap; font-size: 0.75rem; font-variant-numeric: tabular-nums; }
+.ladder-mark--rung { border-left: 2px solid var(--wheel-accent); }
+.ladder-mark--rung > span { bottom: 100%; color: var(--wheel-accent-strong); font-weight: 600; }
+.ladder-mark--high { top: 1.3rem; height: 2.3rem; }
+.ladder-mark--open { border-left-width: 4px; }
+.ladder-mark--trigger { top: 2.7rem; height: 1rem; border-left: 1px dashed var(--warn); }
+.ladder-mark--cost { top: 2.9rem; height: 1.9rem; border-left: 1px dashed var(--neg); }
+.ladder-mark--cost > span { top: 100%; color: var(--neg); }
+.ladder-mark--spot { top: 2.85rem; height: 0.7rem; width: 0.7rem; margin-left: -0.35rem; border-radius: 50%; background: var(--ink); }
+.ladder-mark--spot > span { top: 100%; left: 0.35rem; margin-top: 0.15rem; font-weight: 700; color: var(--ink); }
+.ladder-open { margin: 0; font-size: 0.875rem; }
+/* the two orders, linked: one cancels the other */
+.ladder-oco { display: grid; gap: 0.75rem; padding: 0.85rem; border: 1.5px solid var(--wheel-accent); border-radius: var(--radius); background: var(--wheel-accent-soft); }
+.ladder-oco-head { margin: 0; display: flex; flex-wrap: wrap; gap: 0.25rem 0.6rem; align-items: baseline; }
+.ladder-oco-head small { color: var(--pico-muted-color); font-size: 0.8rem; }
+.ladder-ticket { display: grid; gap: 0.4rem; min-width: 0; padding: 0.75rem 0.85rem; background: var(--pico-card-background-color); border: 1px solid var(--border); border-radius: var(--radius-sm); }
+.ladder-ticket-top { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
+.ladder-ticket-top small { font-weight: 400; color: var(--pico-muted-color); }
+.ladder-ticket .ladder-copy { width: auto; margin: 0; padding: 0.15rem 0.7rem; font-size: 0.8rem; }
+.ladder-order { margin: 0; padding: 0.5rem 0.7rem; background: var(--sunken); border-radius: 6px; font-size: 0.82rem; line-height: 1.6; white-space: pre; overflow-x: auto; }
+.ladder-ticket .detail-note, .ladder-oco > .detail-note { margin: 0; font-size: 0.8rem; }
+@media (max-width: 480px) { .ladder-order { font-size: 0.72rem; } }
+/* the rungs and the roll table */
+.ladder-rungs td.n, .ladder-rungs th.n, .ladder-credit td.n, .ladder-credit th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ladder-rungs { min-width: 34rem; }
+/* where a rung rolls to is words, not a figure: it reads from the left like the rung */
+.ladder-rungs th:nth-child(3), .ladder-rungs td:nth-child(3) { text-align: left; white-space: normal; }
+.ladder-rungs td.neg, .ladder-credit td.neg { color: var(--neg); }
+.ladder-rungs td.pos { color: var(--wheel-accent-strong); }
+.ladder-rungs tr.ladder-rung--open > td { background: var(--wheel-accent-soft); }
+.ladder-rungs tr.ladder-rung--passed > td { color: var(--pico-muted-color); }
+.ladder-credit--trigger > td { font-weight: 700; }
+.ladder-credit--trigger > td:first-child { color: var(--warn); }
+.ladder-credit td.ladder-credit--low { background: var(--neg-soft); color: var(--pico-muted-color); }
+/* the calendar to the report */
+.ladder-cal { list-style: none; margin: 0 0 0.75rem; padding: 0; }
+.ladder-cal li { list-style: none; display: grid; grid-template-columns: 6.5rem 1fr; gap: 0.75rem; padding: 0.55rem 0; border-bottom: 1px solid var(--border); }
+.ladder-cal li:last-child { border-bottom: 0; }
+.ladder-cal time { font-size: 0.85rem; font-weight: 600; color: var(--pico-muted-color); font-variant-numeric: tabular-nums; }
+.ladder-cal li.ladder-cal--now time { color: var(--wheel-accent-strong); }
+.ladder-cal li.ladder-cal--wall time, .ladder-cal li.ladder-cal--report time { color: var(--warn); }
+.ladder-cal p { margin: 0; font-size: 0.9rem; }
+@media (max-width: 480px) { .ladder-cal li { grid-template-columns: 1fr; gap: 0.1rem; } }
+.ladder-watch { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; }
+.ladder-watch li { margin-bottom: 0.35rem; }
+.ladder-foot { margin: 0 0 1.5rem; }
+/* the plan's numbers */
+.ladder-form { display: grid; gap: 0.75rem; }
+.ladder-fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.6rem 0.9rem; margin: 0; }
+.ladder-fields legend { font-weight: 600; font-size: 0.875rem; margin-bottom: 0.25rem; }
+.ladder-fields legend small, .ladder-fields label small { display: block; font-weight: 400; font-size: 0.75rem; color: var(--pico-muted-color); }
+.ladder-fields label { display: flex; flex-direction: column; justify-content: flex-end; font-size: 0.85rem; font-weight: 600; margin: 0; }
+.ladder-fields input { margin: 0.2rem 0 0; }
+.ladder-fields .ladder-wide { grid-column: span 2; }
+@media (max-width: 480px) { .ladder-fields .ladder-wide { grid-column: auto; } }
+.ladder-form > button { width: auto; justify-self: start; margin: 0; }
+.ladder-delete { margin: 1rem 0 0; }
+.ladder-delete button { width: auto; margin: 0; }

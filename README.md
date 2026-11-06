@@ -414,6 +414,24 @@ person's bonds across every portfolio, without quantities, so switching portfoli
 quantity reuses it; builds take ~5 s for ~80 bonds and are cached for three hours
 (`BONDS__CACHE_TTL_SECONDS`).
 
+## The Call ladder tab
+
+Covered calls on shares you were assigned, stepped up a fixed set of strikes (the rungs) until the
+shares can leave at what they cost. Each signed-in person keeps a ladder per holding: the ticker,
+how many shares, what they cost, the premiums collected, the rungs and the call open now. Its page
+prices it against the chain when it opens and gives the two orders to rest on the call at the
+broker, linked so that one cancels the other: a take-profit at 25% of the premium, and a
+conditional roll up to the next rung once the share price reaches 97% of the strike, with its
+limit. It also shows each rung's trigger and what being called there means against the real cost,
+the calendar up to the next earnings report (no option is held over one, so the call expiring just
+before it can't roll), a table of what the roll pays by share price and days left, and what the
+orders can't handle. The rules are in [docs/CALL_LADDER.md](docs/CALL_LADDER.md). Nothing is read
+from a broker: after a fill, the ladder's numbers are updated by hand.
+
+## The AI analysis tab
+
+A qualitative read of a company, written by AI. Not built yet: the tab holds its place.
+
 ## How it's built
 
 Hexagonal **ports & adapters**: a framework-free `core/` (models, pipeline, ranking,

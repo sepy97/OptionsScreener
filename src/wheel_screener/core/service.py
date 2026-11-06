@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-from wheel_screener.core import exits, rollgrid
+from wheel_screener.core import exits, ladder, rollgrid
 from wheel_screener.core.assignment import DEFAULT_CARRY_RATE
 from wheel_screener.core.assignment import assess as assess_assignment
 from wheel_screener.core.dividends import in_life, upcoming
@@ -658,6 +658,33 @@ class ScreenerService:
                 "fundamental reports are not configured for this deployment"
             )
         return self.reports.fundamental_report(symbol, period=period, years=years)
+
+    def ladder_market(
+        self, symbol: str, today: date, *, max_dte: int = ladder.CHAIN_DAYS
+    ) -> ladder.Market:
+        """What one holding's call ladder is priced from: its calls, the share price, the next
+        report and the ex-dividends ahead. One chain pull, as a search is.
+
+        The report and the dividends are context that must not take the page down: without them
+        the ladder says it can't see a report, rather than failing.
+        """
+        symbol = symbol.strip().upper()
+        snapshot = self.chains.get_chain(symbol, ChainFilter(
+            option_type=OptionType.CALL, min_dte=0, max_dte=max_dte, min_open_interest=0
+        ))
+        histories = self._dividend_histories([symbol])
+        history = histories.get(symbol) if histories is not None else None
+        market = ladder.Market(
+            spot=self._spot(symbol, snapshot, None),
+            calls=[c for c in snapshot.contracts if c.option_type is OptionType.CALL],
+            next_earnings=self._symbol_earnings(symbol, ScreenCriteria(), today),
+            dividends=upcoming(history or [], today, today + timedelta(days=366)),
+            dividends_known=history is not None,
+        )
+        logger.info("ladder %s: %d calls · spot=%s · earnings=%s", symbol, len(market.calls),
+                    "unknown" if market.spot is None else f"{market.spot:.2f}",
+                    market.next_earnings or "unknown")
+        return market
 
     def company_profile(self, symbol: str) -> CompanyProfile | None:
         """Who this ticker is, or None when the deployment can't say.
