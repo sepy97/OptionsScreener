@@ -5,8 +5,11 @@ takes the person's user id and touches only their rows: a plan id from a request
 on its own to reach a plan.
 
 A plan is what the person types (``core.ladder.Plan``): the holding, what it cost, the premiums
-collected, the rungs and the call open on it. Nothing here is fetched from a broker; the page
-prices it against the chain each time it is opened.
+collected, the call open on it, the growth a month the plan assumes and, if they choose, the
+rungs; left empty, the rungs are planned
+from the chain when the plan is saved (``core.ladder.plan_rungs``) and kept from then on, since
+orders rest on them. Nothing here is fetched from a broker; the page prices the plan against the
+chain each time it is opened.
 """
 
 from __future__ import annotations
@@ -40,6 +43,7 @@ CREATE TABLE IF NOT EXISTS ladder_plans (
     call_strike REAL,
     call_expiry TEXT,
     call_sold_for REAL,
+    growth REAL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -85,7 +89,8 @@ def rungs_text(rungs: tuple[float, ...]) -> str:
 
 
 def plan_from_form(form: Mapping[str, str]) -> Plan:
-    """The plan a form describes, or a PlanError saying what to fix."""
+    """The plan a form describes, or a PlanError saying what to fix. Its rungs are empty when
+    none were typed: they are for the chain to plan."""
     symbol = (form.get("symbol") or "").strip().upper()
     if not _SYMBOL.match(symbol):
         raise PlanError("Enter the ticker of the shares, e.g. TER.")
@@ -99,15 +104,13 @@ def plan_from_form(form: Mapping[str, str]) -> Plan:
     put_premium = _number(form.get("put_premium"), "the put's premium") or 0.0
     if put_premium < 0:
         raise PlanError("The put's premium can't be below 0.")
-    call_premiums = _number(form.get("call_premiums"), "the call premiums") or 0.0
+    call_premiums = _number(form.get("call_premiums"), "the call premiums")
 
     parts = [p for p in re.split(r"[,;\s]+", form.get("rungs") or "") if p]
     rungs = sorted({_number(p, "each rung") for p in parts})
-    if not rungs:
-        raise PlanError("Enter the rungs, the strikes the call steps up, e.g. 340, 355, 370, 390.")
     if len(rungs) > MAX_RUNGS:
         raise PlanError(f"Keep it to {MAX_RUNGS} rungs or fewer.")
-    if rungs[0] <= 0:
+    if rungs and rungs[0] <= 0:
         raise PlanError("Every rung should be above 0.")
 
     strike = _number(form.get("call_strike"), "the open call's strike")
@@ -127,8 +130,14 @@ def plan_from_form(form: Mapping[str, str]) -> Plan:
         raise PlanError("What the call was sold for can't be below 0.")
     if strike is None:
         sold_for = None
+    if call_premiums is None:
+        # left empty: the open call is the only one sold so far
+        call_premiums = sold_for or 0.0
+    growth = _number((form.get("growth") or "").replace("%", ""), "the growth a month")
+    if growth is not None and not -10 <= growth <= 10:
+        raise PlanError("Keep the growth between -10% and 10% a month.")
     return Plan(symbol, int(shares), cost, tuple(rungs), put_premium, call_premiums, strike,
-                expiry, sold_for)
+                expiry, sold_for, None if growth is None else growth / 100)
 
 
 def form_values(plan: Plan) -> dict[str, str]:
@@ -141,21 +150,22 @@ def form_values(plan: Plan) -> dict[str, str]:
         "rungs": rungs_text(plan.rungs), "call_strike": num(plan.call_strike),
         "call_expiry": plan.call_expiry.isoformat() if plan.call_expiry else "",
         "call_sold_for": num(plan.call_sold_for),
+        "growth": "" if plan.growth is None else f"{plan.growth * 100:g}",
     }
 
 
 def _plan(row: tuple) -> SavedPlan:
     (pid, symbol, shares, cost, rungs, put_premium, call_premiums, strike, expiry, sold_for,
-     updated_at) = row
+     growth, updated_at) = row
     return SavedPlan(pid, Plan(
         symbol, int(shares), float(cost), tuple(float(r) for r in rungs.split(",") if r),
         float(put_premium), float(call_premiums), strike,
-        date.fromisoformat(expiry) if expiry else None, sold_for,
+        date.fromisoformat(expiry) if expiry else None, sold_for, growth,
     ), updated_at)
 
 
 _COLUMNS = ("id, symbol, shares, cost, rungs, put_premium, call_premiums, call_strike,"
-            " call_expiry, call_sold_for, updated_at")
+            " call_expiry, call_sold_for, growth, updated_at")
 
 
 class LadderPlanStore:
@@ -169,6 +179,14 @@ class LadderPlanStore:
             conn.executescript(_SCHEMA)
         finally:
             conn.close()
+        self._add_columns()
+
+    def _add_columns(self) -> None:
+        """The columns added since the table was made, on a database from before them."""
+        with self._tx() as conn:
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(ladder_plans)")}
+            if "growth" not in columns:
+                conn.execute("ALTER TABLE ladder_plans ADD COLUMN growth REAL")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self._path, timeout=5.0)
@@ -213,7 +231,8 @@ class LadderPlanStore:
     def _values(plan: Plan) -> tuple:
         return (plan.symbol, plan.shares, plan.cost, rungs_text(plan.rungs).replace(" ", ""),
                 plan.put_premium, plan.call_premiums, plan.call_strike,
-                plan.call_expiry.isoformat() if plan.call_expiry else None, plan.call_sold_for)
+                plan.call_expiry.isoformat() if plan.call_expiry else None, plan.call_sold_for,
+                plan.growth)
 
     def create(self, user_id: str, plan: Plan) -> SavedPlan:
         with self._tx() as conn:
@@ -226,8 +245,8 @@ class LadderPlanStore:
             pid, now = uuid.uuid4().hex, _now()
             conn.execute(
                 "INSERT INTO ladder_plans (id, user_id, symbol, shares, cost, rungs, put_premium,"
-                " call_premiums, call_strike, call_expiry, call_sold_for, created_at, updated_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " call_premiums, call_strike, call_expiry, call_sold_for, growth, created_at,"
+                " updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (pid, user_id, *self._values(plan), now, now))
         return SavedPlan(pid, plan, now)
 
@@ -238,7 +257,7 @@ class LadderPlanStore:
             conn.execute(
                 "UPDATE ladder_plans SET symbol = ?, shares = ?, cost = ?, rungs = ?,"
                 " put_premium = ?, call_premiums = ?, call_strike = ?, call_expiry = ?,"
-                " call_sold_for = ?, updated_at = ? WHERE id = ? AND user_id = ?",
+                " call_sold_for = ?, growth = ?, updated_at = ? WHERE id = ? AND user_id = ?",
                 (*self._values(plan), _now(), plan_id, user_id))
 
     def delete(self, user_id: str, plan_id: str) -> None:

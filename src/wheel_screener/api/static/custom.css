@@ -927,6 +927,8 @@ a.bond-day:hover { background: var(--wheel-accent-soft); }
 .ladder-status--warn { background: var(--warn-soft); }
 .ladder-status--neg { background: var(--neg-soft); }
 .ladder-note { margin: 0 0 0.6rem; font-size: 0.875rem; }
+.ladder-how { padding-left: 1.25rem; margin-bottom: 1rem; }
+.ladder-how li { margin-bottom: 0.25rem; }
 /* where things stand: four figures in a row, two by two on a phone */
 .ladder-stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0 0 1rem; border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .ladder-stats > div { padding: 0.6rem 0.85rem; min-width: 0; }
@@ -988,6 +990,9 @@ a.bond-day:hover { background: var(--wheel-accent-soft); }
 .ladder-cal li.ladder-cal--now time { color: var(--wheel-accent-strong); }
 .ladder-cal li.ladder-cal--wall time, .ladder-cal li.ladder-cal--report time { color: var(--warn); }
 .ladder-cal p { margin: 0; font-size: 0.9rem; }
+.ladder-cal p.ladder-step { margin-bottom: 0.15rem; }
+.ladder-cal li.ladder-cal--step time { color: var(--pico-color); }
+.ladder-cal li.ladder-cal--end time { color: var(--wheel-accent-strong); }
 @media (max-width: 480px) { .ladder-cal li { grid-template-columns: 1fr; gap: 0.1rem; } }
 .ladder-watch { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; }
 .ladder-watch li { margin-bottom: 0.35rem; }

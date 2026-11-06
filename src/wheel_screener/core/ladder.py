@@ -12,6 +12,12 @@ No option is held over an earnings report. The last expiry before a report is a 
 must land on or before it, so the call that expires there cannot roll at all, and after the
 report the ladder starts again.
 
+The rungs can be typed, or planned from the chain (``plan_rungs``): from the call sold now up to
+the strike at the cost, in the fewest even steps a roll still pays for. The plan (``Projection``)
+lays the rungs out in time: the share price taken to grow a steady amount a month, the ladder's
+rules are run on it a day at a time — take-profits, rolls, calls sold again after they expire,
+the reports — from the call open now until the shares are called.
+
 Pure: everything here comes from what the person entered and one chain pull (``Market``). The
 model prices are Black-Scholes at one volatility — the open call's — and are what the limit and
 the roll table are judged against, because the trigger price is in the future and no chain
@@ -48,6 +54,15 @@ LIMIT_IV_DROP = 0.10  # ...with volatility this much lower, since a rally usuall
 GAP_DAYS_LEFT = 10  # the gap price is judged with this many days left on the open call
 CHAIN_DAYS = 200  # how far out the chain is pulled: past one roll, and the report after it
 MAX_RUNGS = 12
+PLAN_STEP_SHARE = 0.05  # with no volatility quoted, planned rungs are about 5% of the price apart
+# With no call open, a planned ladder starts at the strike of this delta, by how far the price is
+# below the real cost: far below, the recovery is what's needed, so it isn't sold cheap
+START_DELTAS = ((0.15, 0.15), (0.05, 0.25), (-math.inf, 0.40))  # (at least this far below, delta)
+DEFAULT_GROWTH = 0.01  # a month: the steady climb the plan takes when the person sets none
+DAYS_PER_MONTH = 365.25 / 12
+PLAN_DAYS = 4 * 365  # the plan runs this far ahead, or until the shares are called
+REPORT_EVERY = 91  # reports past the next one are taken to be a quarter apart
+MAX_CALLS = 80
 SHARES_PER_CONTRACT = 100
 
 
@@ -74,6 +89,23 @@ def call_value(spot: float, strike: float, days: float, iv: float,
     v = iv * math.sqrt(t)
     d1 = (math.log(spot / strike) + (rate + iv * iv / 2) * t) / v
     return spot * _cdf(d1) - strike * math.exp(-rate * t) * _cdf(d1 - v)
+
+
+def call_delta(spot: float, strike: float, days: float, iv: float,
+               rate: float = DEFAULT_CARRY_RATE) -> float:
+    """Black-Scholes delta of a call."""
+    if days <= 0 or iv <= 0:
+        return 1.0 if spot > strike else 0.0
+    t = days / 365.0
+    v = iv * math.sqrt(t)
+    return _cdf((math.log(spot / strike) + (rate + iv * iv / 2) * t) / v)
+
+
+def start_delta(spot: float, real_cost: float) -> float:
+    """The delta a planned ladder starts at with no call open: 0.15 with the price 15% or more
+    below the real cost, 0.25 within 5-15% of it, 0.40 closer."""
+    below = 1 - spot / real_cost if real_cost > 0 else 0.0
+    return next(delta for gap, delta in START_DELTAS if below >= gap)
 
 
 def roll_credit(spot: float, strike: float, to_strike: float, days_left: float, added_days: int,
@@ -103,6 +135,7 @@ class Plan:
     call_strike: float | None = None
     call_expiry: date | None = None
     call_sold_for: float | None = None  # what the open call was sold for
+    growth: float | None = None  # a month, what the plan takes the share price to grow by
 
     @property
     def contracts(self) -> int:
@@ -120,6 +153,10 @@ class Plan:
     @property
     def target(self) -> float:
         return self.rungs[-1]
+
+    @property
+    def monthly_growth(self) -> float:
+        return DEFAULT_GROWTH if self.growth is None else self.growth
 
 
 @dataclass(frozen=True)
@@ -141,6 +178,22 @@ class Rung:
     credit: float | None  # model credit at the trigger, GAP_DAYS_LEFT days left, 4 weeks added
     if_called: float  # strike less real cost, per share
     state: str  # "passed", "open", "ahead" or "target"
+    pays: bool | None = None  # the step to ``to_strike`` pays the minimum at its worst (``_pays``)
+
+
+@dataclass(frozen=True)
+class RungPlan:
+    """Rungs planned from the chain (``plan_rungs``), and what the first one came from."""
+
+    rungs: tuple[float, ...]
+    # the first rung is "call": the open call's strike; "delta": the strike at start_delta;
+    # "premium": below that, the highest strike a new call still pays the minimum at; "price":
+    # the lowest above the share price, when none pays yet; "target": the shares are at or past
+    # the target already
+    start: str
+    iv: float | None  # the volatility the steps were judged at; None: none quoted, even steps
+    tight: bool = False  # even MAX_RUNGS rungs leave steps that pay under the minimum
+    delta: float | None = None  # with "delta" or "premium": the delta it was aimed at
 
 
 @dataclass(frozen=True)
@@ -174,11 +227,43 @@ class NewCall:
 
 
 @dataclass(frozen=True)
-class Event:
-    day: date
-    kind: str  # now, dividend, expiry, wall, report, resume
-    dividend: Dividend | None = None
-    wall: bool = False  # this day is also the last expiry before the report
+class Stretch:
+    """A stretch of the plan: the call open now, calls sold at one rung cycle after cycle, a roll
+    up a rung, or how it ends."""
+
+    # "open", "sell", "roll"; and the end: "called" (the shares go at the strike), "above" (the
+    # price is past the last rung), "end" (PLAN_DAYS on, still climbing)
+    how: str
+    strike: float
+    start: date  # sold, rolled into or called on; "open": today
+    end: date  # its last call's expiry
+    spot: float  # the share price on the path at ``start``
+    spot_end: float  # ...and at ``end``
+    calls: int = 1
+    amount: float = 0.0  # what it brings in, per share: premiums less buybacks, or a roll's credit
+    profits: int = 0  # calls closed early at the take-profit
+    reports: int = 0  # reports waited out before its calls, with none open
+    skipped: int = 0  # weeks with no call, as none paid the minimum
+    short_days: int = 0  # its calls' days to expiry when sold: the fewest and the most
+    long_days: int = 0
+    from_strike: float | None = None  # a roll's: the strike it leaves
+    trigger: float | None = None  # a roll's: the share price that sets it off
+    credit: float | None = None  # a roll's net credit, before any buyback of the new call
+    walls: tuple[date, ...] = ()  # days the trigger was reached on a call that couldn't roll
+    outcome: str = ""  # its last call's: "expired", "profit", "rolled", "called" or "open"
+    outcome_on: date | None = None
+    real_cost: float = 0.0  # after it
+
+
+@dataclass(frozen=True)
+class Projection:
+    """The plan, on a path where the share price grows by ``growth`` a month."""
+
+    growth: float
+    stretches: list[Stretch]
+    real_cost: float  # at the end
+    premiums: float  # brought in along the way, per share, net of buybacks
+    called: Stretch | None = None  # the end, if the shares are called
 
 
 @dataclass(frozen=True)
@@ -213,7 +298,8 @@ class Ladder:
     roll: Roll | None = None
     new_call: NewCall | None = None  # nothing open: the call to sell now
     next_call: NewCall | None = None  # what follows the open call if it expires below its strike
-    events: list[Event] = field(default_factory=list)
+    projection: Projection | None = None
+    dividends: list[Dividend] = field(default_factory=list)  # ex-dates while the open call is
     grid: CreditGrid | None = None
     early: EarlyAssignment | None = None
     rail: list[RailMark] = field(default_factory=list)
@@ -235,7 +321,7 @@ def _mid(c: OptionContract | None) -> float | None:
     return c.last or None
 
 
-def _volatility(plan: Plan, market: Market, quote: OptionContract | None) -> float | None:
+def _volatility(market: Market, quote: OptionContract | None) -> float | None:
     """The one volatility the model uses: the open call's, else the nearest-to-the-money call's
     a month or more out."""
     if quote is not None and quote.implied_volatility and quote.implied_volatility > 0:
@@ -273,26 +359,39 @@ def _step(price: float) -> float:
     return 100.0
 
 
+def _next_rung(plan: Plan, price: float, reached: float = 0.0) -> float | None:
+    """The rung a new call is sold at: the lowest above the price whose roll trigger is too (a
+    call sold in its roll zone would roll at once), never below the rung already reached. The
+    target has no roll, so it only has to be above the price."""
+    return next((r for r in plan.rungs if r > price + 1e-6 and r >= reached - 1e-6
+                 and (r == plan.target or ROLL_TRIGGER * r > price)), None)
+
+
 def _allowed(e: date, today: date, report: date | None) -> bool:
     """An expiry a call may have: no more than 90 days out, and before the report."""
     return (e - today).days <= MAX_DAYS and (report is None or e < report)
 
 
-def _new_call(plan: Plan, calls: list[OptionContract], expiries: list[date], strike: float,
-              start: date, today: date, report: date | None, spot: float | None,
-              iv: float | None, rate: float) -> NewCall | None:
-    """The latest listed expiry four to six weeks after ``start``. Failing that, with a report
-    ahead, the last expiry before it at least three weeks out; with none, the nearest one."""
+def _open_expiry(expiries: list[date], start: date, today: date,
+                 report: date | None) -> date | None:
+    """A new call's expiry: the latest listed four to six weeks after ``start``. Failing that, the
+    one nearest those weeks, three weeks out or more, before the report."""
     lo, hi = start + timedelta(days=OPEN_DAYS[0]), start + timedelta(days=OPEN_DAYS[1])
     window = [e for e in expiries if lo <= e <= hi and _allowed(e, today, report)]
     if window:
-        expiry = max(window)
-    else:
-        later = [e for e in expiries
-                 if e >= start + timedelta(days=21) and _allowed(e, today, report)]
-        if not later:
-            return None
-        expiry = max(later) if report is not None else min(later)
+        return max(window)
+    later = [e for e in expiries if e >= start + timedelta(days=21) and _allowed(e, today, report)]
+    if not later:
+        return None
+    return min(later, key=lambda e: ((lo - e).days if e < lo else (e - hi).days, e))
+
+
+def _new_call(plan: Plan, calls: list[OptionContract], expiries: list[date], strike: float,
+              start: date, today: date, report: date | None, spot: float | None,
+              iv: float | None, rate: float) -> NewCall | None:
+    expiry = _open_expiry(expiries, start, today, report)
+    if expiry is None:
+        return None
     listed = _strike_at_or_above(calls, expiry, strike)
     k = listed if listed is not None else strike
     quoted = _mid(_quote(calls, k, expiry)) if start == today else None
@@ -333,10 +432,7 @@ def _roll(plan: Plan, calls: list[OptionContract], expiries: list[date], today: 
 
     limit = gap = None
     if iv is not None:
-        low = max(0.05, iv - LIMIT_IV_DROP)
-        worst = min(roll_credit(trigger, strike, to_strike, d, added, low, rate)
-                    for d in range(1, days_left + 1))
-        limit = max(floor, math.floor(worst * LIMIT_SHARE * 20) / 20)
+        limit = max(floor, _model_limit(strike, to_strike, days_left, added, iv, rate))
         at = min(GAP_DAYS_LEFT, days_left)
         s, step = trigger, max(0.01, strike / 400)
         while s < 3 * to_strike:
@@ -361,6 +457,319 @@ def _roll(plan: Plan, calls: list[OptionContract], expiries: list[date], today: 
                leg("SELL TO OPEN", plan.contracts, plan.symbol, to_expiry, to_strike)),
         minimum=floor,
     )
+
+
+def _model_limit(strike: float, to_strike: float, days_left: int, added: int, iv: float,
+                 rate: float) -> float:
+    """LIMIT_SHARE of the model's worst credit for the roll at the trigger, over the days left on
+    the call, at volatility LIMIT_IV_DROP lower, to the $0.05 below. The roll order's limit,
+    before the minimum."""
+    low = max(0.05, iv - LIMIT_IV_DROP)
+    trigger = round(ROLL_TRIGGER * strike, 2)
+    worst = min(roll_credit(trigger, strike, to_strike, d, added, low, rate)
+                for d in range(1, max(1, days_left) + 1))
+    return math.floor(worst * LIMIT_SHARE * 20) / 20
+
+
+def _pays(strike: float, to_strike: float, iv: float, rate: float) -> bool:
+    """A step up the ladder that a roll pays for even at its worst: the trigger reached with a
+    whole cycle (OPEN_DAYS) left on the call, four weeks added — the roll order's limit, from the
+    model, is still the minimum or more."""
+    return (_model_limit(strike, to_strike, OPEN_DAYS[1], ROLL_DAYS[0], iv, rate)
+            >= min_roll_credit(strike))
+
+
+def _strikes(calls: list[OptionContract], today: date, top: float) -> list[float]:
+    """The strikes a rung can be: those listed a new call's four weeks or more out, carried on
+    past the highest at its spacing until they reach ``top`` (a long way above the price, the
+    chain may not list them yet)."""
+    out_there = [c for c in calls if (c.expiration - today).days >= OPEN_DAYS[0]] or calls
+    listed = sorted({c.strike for c in out_there})
+    if not listed:
+        return []
+    gap = listed[-1] - listed[-2] if len(listed) > 1 else _step(top)
+    while listed[-1] < top - 1e-6:
+        listed.append(round(listed[-1] + gap, 2))
+    return listed
+
+
+def _even(start: float, target: float, steps: int, strikes: list[float]) -> tuple[float, ...]:
+    """``steps`` steps from ``start`` to ``target``, each rung the strike nearest an even split
+    (the lower one on a tie)."""
+    rungs = [start]
+    for i in range(1, steps):
+        want = start + (target - start) * i / steps
+        between = [s for s in strikes if rungs[-1] + 1e-6 < s < target - 1e-6]
+        if between:
+            rungs.append(min(between, key=lambda s: (abs(s - want), s)))
+    return (*rungs, target)
+
+
+def plan_rungs(plan: Plan, market: Market, today: date,
+               rate: float = DEFAULT_CARRY_RATE) -> RungPlan | None:
+    """The rungs for a plan typed without them. They start at the open call's strike — with none
+    open, at the strike of ``start_delta``, or below it, the highest that still pays the minimum
+    — and end at the first strike at or above the cost, in the fewest even steps each of which a
+    roll pays for at its worst (``_pays``). None when there is nothing to plan from: no chain,
+    or, with no call open, no share price."""
+    calls = [c for c in market.calls if c.option_type is OptionType.CALL]
+    spot = market.spot
+    strikes = _strikes(calls, today, plan.cost)
+    if not strikes or (spot is None and not plan.has_call):
+        return None
+    target = next(s for s in strikes if s >= plan.cost - 1e-6)
+    quote = _quote(calls, plan.call_strike, plan.call_expiry) if plan.has_call else None
+    iv = _volatility(market, quote)
+
+    wanted = None
+    if plan.has_call:
+        start, how = plan.call_strike, "call"
+    else:
+        above = [s for s in strikes if spot + 1e-6 < s <= target + 1e-6]
+        if not above:
+            # past the cost already: the one rung is the first strike above the price
+            first = next((s for s in strikes if s > spot + 1e-6), target)
+            return RungPlan((first,), "target", iv)
+        expiries = sorted({c.expiration for c in calls if c.expiration >= today})
+        report = (market.next_earnings
+                  if market.next_earnings and market.next_earnings >= today else None)
+        expiry = _open_expiry(expiries, today, today, report)
+        days = (expiry - today).days if expiry is not None else OPEN_DAYS[1]
+
+        def premium(k: float) -> float | None:
+            quoted = _mid(_quote(calls, k, expiry)) if expiry is not None else None
+            if quoted is not None or iv is None:
+                return quoted
+            return call_value(spot, k, days, iv, rate)
+
+        aim = above[-1]
+        if iv is not None:
+            wanted = start_delta(spot, plan.real_cost)
+            aim = min(above, key=lambda k: (abs(call_delta(spot, k, days, iv, rate) - wanted), k))
+        floor = min_premium(spot)
+        paying = [k for k in above if k <= aim + 1e-6 and (premium(k) or 0.0) >= floor]
+        if not paying:
+            start, how = above[0], "price"
+        else:
+            start = max(paying)
+            how = "delta" if iv is not None and abs(start - aim) < 1e-6 else "premium"
+    if start >= target - 1e-6:
+        return RungPlan((start,), how, iv, delta=wanted)
+
+    if iv is None:
+        steps = max(1, round((target - start) / (PLAN_STEP_SHARE * start)))
+        return RungPlan(_even(start, target, min(steps, MAX_RUNGS - 1), strikes), how, None)
+    for steps in range(1, MAX_RUNGS):
+        rungs = _even(start, target, steps, strikes)
+        if all(_pays(a, b, iv, rate) for a, b in zip(rungs, rungs[1:], strict=False)):
+            return RungPlan(rungs, how, iv, delta=wanted)
+    return RungPlan(_even(start, target, MAX_RUNGS - 1, strikes), how, iv, tight=True,
+                    delta=wanted)
+
+
+def _third_friday(year: int, month: int) -> date:
+    first = date(year, month, 1)
+    return first + timedelta(days=(4 - first.weekday()) % 7 + 14)
+
+
+def _ahead(listed: list[date], today: date) -> list[date]:
+    """The expiries a plan can use: those listed, and the ones to come that aren't yet — every
+    Friday for a chain that lists weeklies, the third Friday of each month for one that doesn't."""
+    weekly = any((b - a).days == 7 for a, b in zip(listed, listed[1:], strict=False))
+    end = today + timedelta(days=PLAN_DAYS + OPEN_DAYS[1])
+    out = set(listed)
+    if weekly:
+        day = today + timedelta(days=(4 - today.weekday()) % 7)
+        while day <= end:
+            out.add(day)
+            day += timedelta(days=7)
+    else:
+        y, m = today.year, today.month
+        while (f := _third_friday(y, m)) <= end:
+            if f >= today:
+                out.add(f)
+            y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return sorted(out)
+
+
+def _reports(report: date | None, today: date) -> list[date]:
+    """The next report, and the ones after it, a quarter apart, to the end of the plan."""
+    if report is None:
+        return []
+    out = [report]
+    while out[-1] < today + timedelta(days=PLAN_DAYS + REPORT_EVERY):
+        out.append(out[-1] + timedelta(days=REPORT_EVERY))
+    return out
+
+
+@dataclass
+class _Call:
+    """One call on the plan's path, as it is lived."""
+
+    how: str  # "open", "sell", "roll"
+    strike: float
+    on: date
+    expiry: date
+    spot: float
+    amount: float  # what it brought in: its premium, or the roll's credit, less any buyback
+    sold_for: float | None  # what it was sold for alone: the take-profit is a share of this
+    from_strike: float | None = None
+    trigger: float | None = None
+    credit: float | None = None
+    reports: int = 0
+    skipped: int = 0
+    walls: list[date] = field(default_factory=list)
+    outcome: str = "open"
+    outcome_on: date | None = None
+
+
+def _project(plan: Plan, spot: float | None, iv: float | None, listed: list[date],
+             reports: list[date], today: date, rate: float) -> Projection | None:
+    """The ladder's rules, run a day at a time on a path where the share price grows a steady
+    ``plan.monthly_growth`` a month at today's volatility, from the call open now (or the one to
+    sell) until the shares are called, the price passes the last rung, or PLAN_DAYS go by.
+
+    A call is bought back at the take-profit, or rolled up a rung once the price reaches its
+    trigger and the roll pays the order's limit, or held to expiry: called if the price is past
+    the strike then. Else a new one is sold (``_next_rung``, never below the rung reached), four
+    to six weeks out, before the next report; one that pays under the minimum waits a week."""
+    if spot is None or iv is None or not plan.rungs:
+        return None
+    growth, expiries = plan.monthly_growth, _ahead(listed, today)
+    end = today + timedelta(days=PLAN_DAYS)
+
+    def at(d: date) -> float:
+        return spot * (1 + growth) ** ((d - today).days / DAYS_PER_MONTH)
+
+    def value(d: date, strike: float, expiry: date) -> float:
+        return call_value(at(d), strike, (expiry - d).days, iv, rate)
+
+    lived: list[_Call] = []
+    cur: _Call | None = None
+    start, waited, skipped, stop, reached = today, 0, 0, "", 0.0
+    if plan.has_call and plan.call_expiry >= today:
+        cur = _Call("open", plan.call_strike, today, plan.call_expiry, spot, 0.0,
+                    plan.call_sold_for)
+    while len(lived) < MAX_CALLS:
+        if cur is None:
+            if start > end:
+                stop = "end"
+                break
+            price = at(start)
+            strike = _next_rung(plan, price, reached)
+            if strike is None:
+                stop = "above"
+                break
+            report = next((r for r in reports if r > start), None)
+            expiry = _open_expiry(expiries, start, start, report)
+            if expiry is None:
+                if report is None:
+                    stop = "end"
+                    break
+                start, waited = report + timedelta(days=1), waited + 1
+                continue
+            premium = value(start, strike, expiry)
+            if premium < min_premium(price):
+                start, skipped = start + timedelta(days=7), skipped + 1
+                continue
+            cur = _Call("sell", strike, start, expiry, price, premium, premium, reports=waited,
+                        skipped=skipped)
+            waited = skipped = 0
+        lived.append(cur)
+        reached = max(reached, cur.strike)
+
+        higher = [r for r in plan.rungs if r > cur.strike + 1e-6]
+        to_expiry = limit = None
+        if higher:
+            report = next((r for r in reports if r > cur.on), None)
+            lo = cur.expiry + timedelta(days=ROLL_DAYS[0])
+            hi = cur.expiry + timedelta(days=ROLL_DAYS[1])
+            fits = [e for e in expiries if lo <= e <= hi and (report is None or e < report)]
+            if fits:
+                to_expiry = min(fits)
+                limit = max(min_roll_credit(cur.strike),
+                            _model_limit(cur.strike, higher[0], (cur.expiry - cur.on).days,
+                                         (to_expiry - cur.expiry).days, iv, rate))
+        trigger = round(ROLL_TRIGGER * cur.strike, 2)
+        take = TAKE_PROFIT * cur.sold_for if cur.sold_for else None
+        rolled: _Call | None = None
+        day = cur.on + timedelta(days=1)
+        while day < cur.expiry and cur.outcome == "open":
+            if higher and at(day) >= trigger:
+                if to_expiry is None:
+                    if not cur.walls:
+                        cur.walls.append(day)
+                else:
+                    new = value(day, higher[0], to_expiry)
+                    credit = new - value(day, cur.strike, cur.expiry)
+                    if credit >= limit:
+                        cur.outcome, cur.outcome_on = "rolled", day
+                        rolled = _Call("roll", higher[0], day, to_expiry, at(day), credit, new,
+                                       from_strike=cur.strike, trigger=trigger, credit=credit)
+                        break
+            if take is not None and value(day, cur.strike, cur.expiry) <= take:
+                cur.amount -= value(day, cur.strike, cur.expiry)
+                cur.outcome, cur.outcome_on = "profit", day
+                break
+            day += timedelta(days=1)
+        if rolled is not None:
+            cur = rolled
+            continue
+        if cur.outcome == "profit":
+            start, cur = cur.outcome_on, None
+            continue
+        if cur.expiry > end:
+            stop = "end"
+            break
+        cur.outcome_on = cur.expiry
+        if at(cur.expiry) >= cur.strike:
+            cur.outcome, stop = "called", "called"
+            break
+        cur.outcome, start, cur = "expired", cur.expiry, None
+    return _stretches(plan, lived, at, stop, start, growth)
+
+
+def _stretches(plan: Plan, lived: list[_Call], at, stop: str, stopped: date,
+               growth: float) -> Projection:
+    """The calls lived, as the page tells them: those sold again and again at one rung, one
+    line."""
+    rows: list[dict] = []
+    rc = plan.real_cost  # the open call's premium is in it already
+    for c in lived:
+        rc -= c.amount
+        days = (c.expiry - c.on).days
+        last = rows[-1] if rows else None
+        if (c.how == "sell" and last is not None and last["how"] == "sell"
+                and last["strike"] == c.strike):
+            last.update(end=c.expiry, spot_end=at(c.expiry), calls=last["calls"] + 1,
+                        amount=last["amount"] + c.amount, reports=last["reports"] + c.reports,
+                        skipped=last["skipped"] + c.skipped,
+                        short_days=min(last["short_days"], days),
+                        long_days=max(last["long_days"], days),
+                        walls=last["walls"] + tuple(c.walls))
+        else:
+            last = dict(how=c.how, strike=c.strike, start=c.on, end=c.expiry, spot=c.spot,
+                        spot_end=at(c.expiry), amount=c.amount, reports=c.reports,
+                        skipped=c.skipped, short_days=days, long_days=days,
+                        from_strike=c.from_strike, trigger=c.trigger,
+                        credit=None if c.credit is None else round(c.credit, 2),
+                        walls=tuple(c.walls), calls=1, profits=0)
+            rows.append(last)
+        last.update(profits=last["profits"] + (c.outcome == "profit"), outcome=c.outcome,
+                    outcome_on=c.outcome_on, real_cost=round(rc, 2))
+    stretches = [Stretch(**{**r, "amount": round(r["amount"], 2)}) for r in rows]
+    called = None
+    if stop == "called":
+        c = lived[-1]
+        called = Stretch("called", c.strike, c.expiry, c.expiry, at(c.expiry), at(c.expiry),
+                         calls=0, real_cost=round(rc, 2))
+        stretches.append(called)
+    elif stop in ("above", "end"):
+        day = stopped if stop == "above" or not lived else lived[-1].expiry
+        stretches.append(Stretch(stop, lived[-1].strike if lived else plan.rungs[0], day, day,
+                                 at(day), at(day), calls=0, real_cost=round(rc, 2)))
+    premiums = sum(c.amount for c in lived)
+    return Projection(growth, stretches, round(rc, 2), round(premiums, 2), called)
 
 
 def _grid(plan: Plan, roll: Roll, days_left: int, iv: float, rate: float) -> CreditGrid:
@@ -401,7 +810,7 @@ def build(plan: Plan, market: Market, today: date, rate: float = DEFAULT_CARRY_R
     wall = _wall(expiries, report, today)
     spot = market.spot
     quote = _quote(calls, plan.call_strike, plan.call_expiry) if plan.has_call else None
-    iv = _volatility(plan, market, quote)
+    iv = _volatility(market, quote)
     notes: list[str] = []
     if report is None:
         notes.append("no-report")
@@ -414,6 +823,7 @@ def build(plan: Plan, market: Market, today: date, rate: float = DEFAULT_CARRY_R
         to = None if last else plan.rungs[i + 1]
         credit = (roll_credit(trigger, r, to, GAP_DAYS_LEFT, ROLL_DAYS[0], iv, rate)
                   if trigger is not None and iv is not None else None)
+        pays = _pays(r, to, iv, rate) if to is not None and iv is not None else None
         if last:
             state = "target"
         elif plan.has_call and abs(r - plan.call_strike) < 1e-6:
@@ -423,24 +833,19 @@ def build(plan: Plan, market: Market, today: date, rate: float = DEFAULT_CARRY_R
         else:
             state = "ahead"
         rungs.append(Rung(r, trigger, to, None if credit is None else round(credit, 2),
-                          round(r - rc, 2), state))
+                          round(r - rc, 2), state, pays))
 
-    events = [Event(today, "now")]
     trigger = round(ROLL_TRIGGER * plan.call_strike, 2) if plan.has_call else None
     base = dict(plan=plan, spot=spot, iv=iv, rungs=rungs, report=report, wall=wall,
                 rail=_rail(plan, spot, trigger))
+    projection = _project(plan, spot, iv, expiries, _reports(report, today), today, rate)
 
     if not plan.has_call:
-        # the lowest rung above the share price: never a call in the money, never below the
-        # first rung, and never a step down the ladder
-        strike = next((r for r in plan.rungs if spot is None or r > spot), plan.rungs[-1])
+        # never a call in the money, nor one in its roll zone already
+        strike = (plan.rungs[0] if spot is None else _next_rung(plan, spot)) or plan.rungs[-1]
         new = _new_call(plan, calls, expiries, strike, today, today, report, spot, iv, rate)
-        if new is not None:
-            events.append(Event(new.expiry, "expiry", wall=new.expiry == wall))
-        events += [e for e in _report_events(wall, report)
-                   if not (e.kind == "wall" and new is not None and e.day == new.expiry)]
         status = "wait" if new is None else ("sell" if new.sells else "thin")
-        return Ladder(**base, status=status, new_call=new, events=_sorted(events), notes=notes)
+        return Ladder(**base, status=status, new_call=new, projection=projection, notes=notes)
 
     expiry = plan.call_expiry
     days_left = (expiry - today).days
@@ -453,27 +858,19 @@ def build(plan: Plan, market: Market, today: date, rate: float = DEFAULT_CARRY_R
         notes.append("no-quote")
 
     if days_left < 0:
-        events += _report_events(wall, report)
-        return Ladder(**base, status="expired", days_left=days_left, events=_sorted(events),
-                      notes=notes)
+        return Ladder(**base, status="expired", days_left=days_left, notes=notes)
 
     roll = _roll(plan, calls, expiries, today, report, iv, quote, rate)
+    dividends = [d for d in market.dividends if today < d.ex_date <= expiry]
     early = None
     if spot is not None:
         price = None if quote is None else (quote.bid if quote.bid else mid)
         early = assess_assignment(OptionType.CALL, plan.call_strike, spot, price, expiry, today,
-                                  [d for d in market.dividends if today < d.ex_date <= expiry],
-                                  rate)
+                                  dividends, rate)
     next_call = None
     if roll.blocked != "target":
         next_call = _new_call(plan, calls, expiries, plan.call_strike, expiry, today, report,
                               spot, iv, rate)
-    for d in market.dividends:
-        if today < d.ex_date <= expiry:
-            events.append(Event(d.ex_date, "dividend", dividend=d))
-    events.append(Event(expiry, "expiry", wall=expiry == wall))
-    events += [e for e in _report_events(wall, report)
-               if not (e.kind == "wall" and e.day == expiry)]
     grid = (_grid(plan, roll, days_left, iv, rate)
             if iv is not None and roll.blocked is None and days_left > 0 else None)
 
@@ -495,23 +892,6 @@ def build(plan: Plan, market: Market, today: date, rate: float = DEFAULT_CARRY_R
         notes.append("breakeven")
     return Ladder(**base, status=status, quote=quote, days_left=days_left,
                   take_profit=take_profit, kept=kept, roll=roll, next_call=next_call,
-                  events=_sorted(events), grid=grid, early=early, notes=notes)
+                  projection=projection, dividends=dividends, grid=grid, early=early,
+                  notes=notes)
 
-
-def _report_events(wall: date | None, report: date | None) -> list[Event]:
-    out = []
-    if wall is not None:
-        out.append(Event(wall, "wall", wall=True))
-    if report is not None:
-        out += [Event(report, "report"), Event(report + timedelta(days=1), "resume")]
-    return out
-
-
-def _sorted(events: list[Event]) -> list[Event]:
-    order = {"now": 0, "dividend": 1, "expiry": 2, "wall": 3, "report": 4, "resume": 5}
-    seen, out = set(), []
-    for e in sorted(events, key=lambda e: (e.day, order[e.kind])):
-        if (e.day, e.kind) not in seen:
-            seen.add((e.day, e.kind))
-            out.append(e)
-    return out

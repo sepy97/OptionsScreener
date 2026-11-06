@@ -1,9 +1,9 @@
-"""The covered-call ladder (core.ladder): the orders, the rungs and the report's calendar, on the
-TER plan the tab was designed with — 100 shares assigned at $390, a $340 call sold for $6."""
+"""The covered-call ladder (core.ladder): the orders, the rungs and the plan through the reports,
+on the TER plan the tab was designed with — 100 shares assigned at $390, a $340 call sold for $6."""
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
@@ -40,6 +40,9 @@ def _plan(**kw) -> L.Plan:
     fields = dict(symbol="TER", shares=100, cost=390.0, rungs=RUNGS, put_premium=0.0,
                   call_premiums=6.0, call_strike=340.0, call_expiry=DEC, call_sold_for=6.0)
     return L.Plan(**{**fields, **kw})
+
+
+NO_CALL = dict(call_strike=None, call_expiry=None, call_sold_for=None, call_premiums=0.0)
 
 
 def test_black_scholes_matches_the_textbook_value() -> None:
@@ -88,11 +91,79 @@ def test_each_rung_says_where_it_rolls_and_what_being_called_there_means() -> No
     assert view.rungs[0].credit == pytest.approx(8.85, abs=0.01)
 
 
-def test_the_calendar_runs_to_the_report_and_past_it() -> None:
+RUNGS4 = (340.0, 355.0, 375.0, 390.0)
+
+
+def test_on_a_steady_climb_the_plan_runs_until_the_shares_are_called() -> None:
+    # TER 2% a month, at 45% volatility: $340 calls until it reaches the $329.80 trigger, then a
+    # rung a quarter or so, a report between each roll and the next
+    view = L.build(_plan(rungs=RUNGS4, growth=0.02), _market(iv=0.45), TODAY)
+    plan = view.projection
+    assert [(x.how, x.strike) for x in plan.stretches] == [
+        ("open", 340), ("sell", 340), ("roll", 355), ("sell", 355), ("roll", 375),
+        ("sell", 375), ("roll", 390), ("sell", 390), ("called", 390)]
+    sells = plan.stretches[1]
+    assert (sells.start, sells.end, sells.calls) == (date(2027, 1, 28), date(2027, 9, 17), 5)
+    assert sells.reports == 3 and sells.skipped == 8  # under the minimum, it waits
+    roll = plan.stretches[2]
+    assert (roll.start, roll.end, roll.trigger, roll.from_strike) == (
+        date(2027, 9, 11), date(2027, 10, 15), 329.80, 340)
+    assert roll.spot >= roll.trigger and roll.credit > L.min_roll_credit(340)
+    assert plan.called.start == date(2028, 6, 16) and plan.called.spot > 390
+    assert plan.premiums > 0 and plan.real_cost == pytest.approx(
+        _plan().real_cost - plan.premiums, abs=0.02)
+
+
+def test_the_plan_never_steps_down_or_sells_into_a_roll_zone() -> None:
+    for growth in (0.005, 0.01, 0.03):
+        plan = L.build(_plan(rungs=RUNGS4, growth=growth), _market(), TODAY).projection
+        strikes = [x.strike for x in plan.stretches]
+        assert strikes == sorted(strikes)
+        for x in plan.stretches:
+            if x.how == "sell" and x.strike != 390:
+                assert x.spot < L.ROLL_TRIGGER * x.strike
+
+
+def test_flat_shares_sell_the_first_rung_until_the_plan_stops() -> None:
+    plan = L.build(_plan(rungs=RUNGS4, growth=0.0), _market(), TODAY).projection
+    assert [(x.how, x.strike) for x in plan.stretches] == [
+        ("open", 340), ("sell", 340), ("end", 340)]
+    assert plan.called is None and plan.stretches[1].reports == 15  # four years of them
+
+
+def test_with_no_call_the_plan_starts_with_the_one_to_sell() -> None:
+    view = L.build(_plan(rungs=(355.0, 370.0, 390.0), growth=0.02, **NO_CALL),
+                   _market(iv=0.45), TODAY)
+    assert [(x.how, x.strike) for x in view.projection.stretches] == [
+        ("sell", 355), ("roll", 370), ("sell", 390), ("called", 390)]
+
+
+def test_reports_past_the_next_are_a_quarter_apart() -> None:
+    assert L._reports(REPORT, TODAY)[:3] == [REPORT, date(2027, 4, 28), date(2027, 7, 28)]
+    assert L._reports(None, TODAY) == []
+
+
+def test_expiries_to_come_are_the_usual_fridays() -> None:
+    monthly = L._ahead(list(EXPIRIES), TODAY)
+    assert date(2027, 6, 18) in monthly and date(2027, 6, 11) not in monthly
+    weeklies = [date(2026, 11, 6) + timedelta(days=7 * i) for i in range(8)]
+    weekly = L._ahead(weeklies, TODAY)
+    assert date(2027, 6, 11) in weekly and date(2027, 6, 18) in weekly
+
+
+def test_without_volatility_there_is_no_plan() -> None:
+    chain = [c.model_copy(update={"implied_volatility": None}) for c in _chain()]
+    view = L.build(_plan(), L.Market(spot=269.28, calls=chain, next_earnings=REPORT), TODAY)
+    assert view.projection is None
+
+
+def test_the_plan_takes_one_percent_a_month_unless_told() -> None:
+    assert _plan().monthly_growth == L.DEFAULT_GROWTH == 0.01
+    assert _plan(growth=0.0).monthly_growth == 0.0
+
+
+def test_if_the_open_call_expires_the_next_has_four_weeks_to_the_wall() -> None:
     view = L.build(_plan(), _market(), TODAY)
-    assert [(e.day, e.kind) for e in view.events] == [
-        (TODAY, "now"), (DEC, "expiry"), (JAN, "wall"), (REPORT, "report"),
-        (date(2027, 1, 28), "resume")]
     # if December's call expires, January's has four weeks to the wall
     nxt = view.next_call
     assert (nxt.strike, nxt.expiry, nxt.estimated) == (340.0, JAN, True)
@@ -103,8 +174,6 @@ def test_the_call_before_the_report_can_not_roll() -> None:
     view = L.build(_plan(call_strike=355.0, call_expiry=JAN), _market(), TODAY)
     assert view.roll.blocked == "report"
     assert view.grid is None
-    expiry = next(e for e in view.events if e.kind == "expiry")
-    assert expiry.day == JAN and expiry.wall
 
 
 def test_a_call_open_over_the_report_is_flagged() -> None:
@@ -119,9 +188,10 @@ def test_with_no_call_open_it_suggests_the_lowest_rung_above_the_price() -> None
     new = view.new_call
     assert (new.strike, new.expiry, new.estimated) == (340.0, DEC, False)
     assert new.line == "SELL TO OPEN 1 TER 18 DEC 26 340 CALL"
-    # with TER at $345, the $340 rung would be in the money: the next one up
+    # with TER at $345, the $340 rung would be in the money, and the $355 past its $344.35
+    # trigger, in its roll zone already: the next one up
     above = L.build(_plan(call_strike=None, call_expiry=None), _market(spot=345.0), TODAY)
-    assert above.new_call.strike == 355.0
+    assert above.new_call.strike == 370.0
 
 
 def test_a_call_that_pays_too_little_waits() -> None:
@@ -159,13 +229,12 @@ def test_a_strike_the_chain_does_not_list_is_noted() -> None:
     assert "no-quote" in view.notes and view.quote is None
 
 
-def test_a_dividend_inside_the_call_is_on_the_calendar() -> None:
+def test_a_dividend_inside_the_call_is_on_the_plan() -> None:
     market = L.Market(spot=269.28, calls=_chain(), next_earnings=REPORT, dividends_known=True,
                       dividends=[Dividend(ex_date=date(2026, 12, 4), amount=0.13,
                                           estimated=True)])
     view = L.build(_plan(), market, TODAY)
-    div = next(e for e in view.events if e.kind == "dividend")
-    assert div.day == date(2026, 12, 4) and div.dividend.amount == 0.13
+    assert [(d.ex_date, d.amount) for d in view.dividends] == [(date(2026, 12, 4), 0.13)]
     assert view.early is not None and view.early.risk.value == "low"
 
 
@@ -189,3 +258,67 @@ def test_the_minimums_scale_with_the_price() -> None:
                             next_earnings=date(2027, 2, 11)), TODAY)
     assert view.new_call.strike == 33.0 and view.new_call.minimum == 0.31
     assert view.status == "sell"
+
+
+
+def test_the_ter_call_plans_its_rungs_up_to_the_cost() -> None:
+    planned = L.plan_rungs(_plan(rungs=()), _market(), TODAY)
+    assert planned.rungs == (340.0, 355.0, 375.0, 390.0)
+    assert (planned.start, planned.iv, planned.tight) == ("call", 0.68, False)
+    # every step pays the minimum, even with the trigger reached the day after a call is sold
+    view = L.build(_plan(rungs=planned.rungs), _market(), TODAY)
+    assert [r.pays for r in view.rungs] == [True, True, True, None]
+
+
+def test_a_step_too_big_for_a_roll_is_marked() -> None:
+    view = L.build(_plan(rungs=(340.0, 390.0)), _market(), TODAY)
+    assert view.rungs[0].pays is False
+
+
+def test_lower_volatility_plans_more_smaller_steps() -> None:
+    calm = L.plan_rungs(_plan(rungs=()), _market(iv=0.45), TODAY)
+    assert calm.rungs == (340.0, 350.0, 360.0, 370.0, 380.0, 390.0)
+
+
+def test_with_no_call_the_plan_starts_at_the_delta_the_gap_to_cost_asks() -> None:
+    # TER 31% under the $390 real cost: delta 0.15, on the call that would be sold, Dec 18
+    planned = L.plan_rungs(_plan(rungs=(), **NO_CALL), _market(), TODAY)
+    assert (planned.start, planned.delta) == ("delta", 0.15)
+    assert planned.rungs == (355.0, 370.0, 390.0)
+    assert L.call_delta(269.28, 355.0, (DEC - TODAY).days, 0.68) == pytest.approx(0.15, abs=0.02)
+
+
+def test_the_start_delta_follows_the_gap_to_the_real_cost() -> None:
+    assert [L.start_delta(s, 384.0) for s in (300, 350, 380, 400)] == [0.15, 0.25, 0.40, 0.40]
+
+
+def test_near_or_past_the_cost_the_plan_is_one_rung() -> None:
+    # 11% under it: delta 0.25, which with TER at $345 is past $390 already
+    assert L.plan_rungs(_plan(rungs=(), **NO_CALL), _market(spot=345.0), TODAY).rungs == (390.0,)
+    above = L.plan_rungs(_plan(rungs=(), **NO_CALL), _market(spot=400.0), TODAY)
+    assert (above.rungs, above.start) == ((405.0,), "target")
+
+
+def test_strikes_past_the_listed_ones_carry_on_at_their_spacing() -> None:
+    planned = L.plan_rungs(_plan(rungs=(), cost=478.0), _market(), TODAY)  # listed up to $450
+    assert planned.rungs[0] == 340.0 and planned.rungs[-1] == 480.0
+
+
+def test_without_volatility_the_steps_are_about_five_percent() -> None:
+    chain = [c.model_copy(update={"implied_volatility": None}) for c in _chain()]
+    planned = L.plan_rungs(_plan(rungs=()), L.Market(spot=269.28, calls=chain), TODAY)
+    assert planned.iv is None and planned.rungs == (340.0, 355.0, 375.0, 390.0)
+
+
+def test_a_calm_stock_far_under_its_cost_plans_tight() -> None:
+    # 18% volatility, $70 against an $80 cost: even twelve rungs leave steps that pay too little
+    market = L.Market(spot=70.0, calls=_chain(spot=70.0, iv=0.18,
+                                              strikes=[x / 2 for x in range(120, 180)]))
+    planned = L.plan_rungs(_plan(symbol="KO", cost=80.0, rungs=(), **NO_CALL), market, TODAY)
+    assert planned.tight and len(planned.rungs) == L.MAX_RUNGS and planned.rungs[-1] == 80.0
+
+
+def test_with_nothing_to_plan_from_there_is_no_plan() -> None:
+    no_price = L.Market(spot=None, calls=_chain())
+    assert L.plan_rungs(_plan(rungs=(), **NO_CALL), no_price, TODAY) is None
+    assert L.plan_rungs(_plan(rungs=()), L.Market(spot=269.28, calls=[]), TODAY) is None

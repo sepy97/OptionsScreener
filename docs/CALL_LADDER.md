@@ -15,6 +15,48 @@ floor (the $340 the TER plan would accept being called at) rather than at the sh
 keeps a jump from locking in a large loss. Within each rung, the delta rises on its own as the
 price approaches it: about 0.19 for the $340 call with TER at $300, 0.44 at $330.
 
+## Planning the rungs
+
+Rungs can be typed, or left empty and planned from the chain when the ladder is saved
+(`plan_rungs`). They are kept from then on, since orders rest on them; clearing them plans them
+again from that day's prices.
+
+- **The first rung** is the strike of the call sold now. With none open, it is the strike at a
+  delta set by how far the share price is under the real cost: 0.15 at 15% or more under it, 0.25
+  within 5–15%, 0.40 closer. Far under the cost, the recovery is what's needed, so it isn't sold
+  cheap. If that strike pays less than the minimum premium, the first rung is the highest strike
+  below it that does.
+- **The last rung**, the target, is the first strike at or above the cost.
+- **The steps** in between are the fewest even ones, rounded to listed strikes, where every roll
+  still pays the minimum roll credit at its worst: the trigger reached the day after a call is
+  sold (45 days left), four weeks added, at volatility 10 points lower. That is the limit the roll
+  order would carry, so each roll fills as soon as the trigger is reached.
+
+On the TER plan, with TER at $269 and 68% volatility, the $340 call plans $340, $355, $375 and
+$390. The lower the volatility, the less a roll pays for a step up and the more rungs it takes; at
+two rolls a quarter, a ladder of many rungs takes a long time to climb. Steps that pay under the
+minimum at their worst are marked on the page, typed or planned.
+
+## The plan
+
+The page runs the ladder's rules a day at a time on a path where the share price grows a steady
+amount a month (1% unless the ladder says otherwise), at today's volatility, from the call open
+now until the shares are called, the price passes the target, or four years go by:
+
+- a call is bought back at its take-profit, rolled up a rung once the price reaches its trigger
+  and the roll pays the order's limit, or held to expiry and called if the price is past the
+  strike then;
+- a new call is sold when the last one closes or expires, four to six weeks out and before the
+  next report, at the lowest rung above both the price and its roll zone, and never below the
+  rung reached. One that pays under the minimum waits a week;
+- reports past the next one are taken to be a quarter apart, and expiries not listed yet to come
+  on the usual Fridays: every Friday for a chain that lists weeklies, the third of each month for
+  one that doesn't.
+
+Calls sold again and again at one rung are one line of the plan. A steady path has none of the
+stock's swings, so on it every call decays and every take-profit fills: the plan gives the order
+of things and about when, and doesn't add up the premiums, which would be a best case.
+
 ## The two orders on each call
 
 Linked so that one cancels the other: both buy back the same call, and two fills would leave a
