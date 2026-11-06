@@ -14,11 +14,12 @@ TODAY = date(2026, 11, 3)
 DEC, JAN, FEB = date(2026, 12, 18), date(2027, 1, 15), date(2027, 2, 19)
 REPORT = date(2027, 1, 27)
 RUNGS = (340.0, 355.0, 370.0, 390.0)
+EXPIRIES = (date(2026, 11, 20), DEC, JAN, FEB, date(2027, 3, 19))
+STRIKES = tuple(range(250, 455, 5))
 
 
 def _chain(spot: float = 269.28, iv: float = 0.68, today: date = TODAY,
-           expiries=(date(2026, 11, 20), DEC, JAN, FEB, date(2027, 3, 19)),
-           strikes=range(250, 455, 5)) -> list[OptionContract]:
+           expiries=EXPIRIES, strikes=STRIKES) -> list[OptionContract]:
     """A chain priced by the model itself, 30 cents either side of the mid."""
     out = []
     for e in expiries:
