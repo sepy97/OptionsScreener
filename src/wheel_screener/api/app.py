@@ -65,14 +65,7 @@ from wheel_screener.api.deps import (
 )
 from wheel_screener.api.expiries import DTE_HORIZON_DAYS, expiry_ladder, next_monthly
 from wheel_screener.api.jobs import SOURCE_REFRESH, JobBusyError, JobRunner, JobStore
-from wheel_screener.api.ladder_plans import (
-    MAX_PLANS,
-    LadderPlanStore,
-    PlanError,
-    SavedPlan,
-    form_values,
-    plan_from_form,
-)
+from wheel_screener.api.ladder_form import PlanError, form_values, plan_from_form
 from wheel_screener.api.passkeys import PasskeyError, Passkeys
 from wheel_screener.api.ratelimit import SlidingWindowLimiter, client_ip, is_expensive
 from wheel_screener.api.schemas import ScreenRequest
@@ -216,8 +209,6 @@ async def lifespan(app: FastAPI):
         cache_ttl_seconds=settings.bonds.cache_ttl_seconds, workers=settings.bonds.workers)
     app.state.bond_portfolios = BondPortfolioStore(settings.jobs_db_path)
     app.state.bond_directory = BondDirectory()  # MOEX's bond list, for a portfolio's Add
-    # the Call ladder: each person's plans, also in the jobs database
-    app.state.ladder_plans = LadderPlanStore(settings.jobs_db_path)
     # credentialed connections, built once: a probe owns an HTTP client
     app.state.probes = build_probes(settings, service)
     app.state.probe_cache = {}
@@ -263,30 +254,20 @@ app = FastAPI(title="Wheel Screener API", version=__version__, lifespan=lifespan
 # The Bond calendar is per-person in the same way — each signed-in person has their own portfolios —
 # so /bonds is gated by the same rule, also without exceptions. Its calendar feed (for calendar
 # apps, which cannot sign in) lives outside the prefix, at /feeds/bonds/<token>.
-#
-# The Call ladder is per-person too — each signed-in person's plans — and /ladder takes the rule
-# the same way.
 _BONDS_PREFIX = "/bonds"
-_LADDER_PREFIX = "/ladder"
 
 
 def _under_bonds(path: str) -> bool:
     return path == _BONDS_PREFIX or path.startswith(_BONDS_PREFIX + "/")
 
 
-def _under_ladder(path: str) -> bool:
-    return path == _LADDER_PREFIX or path.startswith(_LADDER_PREFIX + "/")
-
-
 def _needs_portfolio_session(path: str) -> bool:
-    return _under_portfolio(path) or _under_bonds(path) or _under_ladder(path)
+    return _under_portfolio(path) or _under_bonds(path)
 
 
 def _signin_home(path: str) -> str:
     """The tab a gated path belongs to — where signing in returns a fragment request to."""
-    if _under_bonds(path):
-        return _BONDS_PREFIX
-    return _LADDER_PREFIX if _under_ladder(path) else _PORTFOLIO_PREFIX
+    return _BONDS_PREFIX if _under_bonds(path) else _PORTFOLIO_PREFIX
 
 
 def _safe_next(raw: str | None) -> str:
@@ -1275,6 +1256,54 @@ def portfolio_exits(
          "expiry_label": expiration.strftime('%d %b'),
          "early": early, "div": div},
     )
+
+
+def _ladders_of(account) -> dict[str, ladder.Plan]:
+    """The ladders an account's holdings need, by ticker (``core.ladder.for_holding``)."""
+    found = {}
+    for p in account.positions:
+        plan = ladder.for_holding(p, account.positions)
+        if plan is not None:
+            found[plan.symbol] = plan
+    return found
+
+
+templates.env.globals["ladders_of"] = _ladders_of
+templates.env.globals["ladder_values"] = form_values
+
+
+@app.get("/portfolio/ladder")
+def portfolio_ladder(
+    request: Request,
+    symbol: str = "", shares: str = "", cost: str = "", premiums: str = "",
+    call_strike: str = "", call_expiry: str = "", sold_for: str = "", growth: str = "",
+    service: ScreenerService = Depends(get_service),
+):
+    """One holding's call ladder, opened beneath its row: the broker's numbers, as adjusted,
+    with the rungs planned from the chain now. A ladder that can't be priced is a message in
+    the panel, with the numbers to adjust; always a 200, so htmx swaps it in."""
+    typed = {"symbol": symbol, "shares": shares, "cost": cost, "premiums": premiums,
+             "call_strike": call_strike, "call_expiry": call_expiry, "sold_for": sold_for,
+             "growth": growth}
+    today = date.today()
+    rate = getattr(service, "carry_rate", ladder.DEFAULT_CARRY_RATE)
+    plan = view = error = None
+    try:
+        plan = plan_from_form(typed)
+        market = service.ladder_market(plan.symbol, today)
+        planned = ladder.plan_rungs(plan, market, today, rate)
+        if planned is None:
+            raise PlanError(f"No {plan.symbol} chain or share price to plan the ladder from.")
+        plan = replace(plan, rungs=planned.rungs)
+        view = ladder.build(plan, market, today, rate)
+    except PlanError as e:
+        error = str(e)
+    except ProviderError as e:
+        error = f"The {symbol.upper()} chain didn't load: {e} Try again in a moment."
+    return templates.TemplateResponse(request, "_ladder.html", {
+        "p": plan if view is not None else None, "w": view, "error": error, "v": typed,
+        "uid": secrets.token_hex(3), "today": today, "L": ladder,
+    })
 
 
 @app.get("/portfolio")
@@ -2650,129 +2679,3 @@ def _import_into(request: Request, portfolio: Portfolio, text: str, file: Upload
                            changes=bh.changes(before, after) if before else None)
 
 
-# --- Call ladder tab -----------------------------------------------------------------------------
-# A person's covered-call ladders, one per holding (api.ladder_plans), each priced against the
-# chain when its page opens (core.ladder). Signed in only: /ladder is behind the session gate.
-
-_LADDER_FIELDS = ("symbol", "shares", "cost", "rungs", "put_premium", "call_premiums",
-                  "call_strike", "call_expiry", "call_sold_for", "growth")
-
-
-def _ladder_store(request: Request) -> LadderPlanStore:
-    return request.app.state.ladder_plans
-
-
-def _my_plan(request: Request, plan_id: str) -> SavedPlan:
-    found = _ladder_store(request).plan(_me(request), plan_id)
-    if found is None:
-        raise HTTPException(status_code=404, detail="Not Found")
-    return found
-
-
-def _ladder_page(request: Request, saved: SavedPlan | None,
-                 service: ScreenerService | None = None, status_code: int = 200, **extra):
-    """The tab: the person's ladders as pills, and one of them priced. A chain that can't be
-    read is a message on the page, and the plan's own numbers still show."""
-    view = market_error = None
-    if saved is not None and service is not None:
-        today = date.today()
-        try:
-            market = service.ladder_market(saved.plan.symbol, today)
-            view = ladder.build(saved.plan, market, today,
-                                 getattr(service, "carry_rate", ladder.DEFAULT_CARRY_RATE))
-        except ProviderError as e:
-            market_error = str(e)
-    return templates.TemplateResponse(request, "ladder.html", {
-        "active_tab": "ladder", "plans": _ladder_store(request).plans(_me(request)),
-        "saved": saved, "view": view, "market_error": market_error, "max_plans": MAX_PLANS,
-        "values": form_values(saved.plan) if saved is not None else {}, "today": date.today(),
-        "L": ladder, **extra,
-    }, status_code=status_code)
-
-
-def _ladder_form(**fields: str) -> dict[str, str]:
-    return {k: fields.get(k, "") for k in _LADDER_FIELDS}
-
-
-def _with_rungs(plan: ladder.Plan, service: ScreenerService) -> ladder.Plan:
-    """The plan with its rungs: as typed, or, left empty, planned from the chain now."""
-    if plan.rungs:
-        return plan
-    today = date.today()
-    try:
-        market = service.ladder_market(plan.symbol, today)
-    except ProviderError as e:
-        raise PlanError(f"The {plan.symbol} chain didn't load, so the rungs can't be planned"
-                        f" ({e}). Try again in a moment, or type the rungs.") from e
-    planned = ladder.plan_rungs(plan, market, today,
-                                getattr(service, "carry_rate", ladder.DEFAULT_CARRY_RATE))
-    if planned is None:
-        raise PlanError(f"No {plan.symbol} chain or share price to plan the rungs from. Check"
-                        " the ticker, or type the rungs.")
-    return replace(plan, rungs=planned.rungs)
-
-
-@app.get("/ladder")
-def ladder_home(request: Request):
-    """Your first ladder — or, with none yet, the form to start one."""
-    plans = _ladder_store(request).plans(_me(request))
-    if plans:
-        return RedirectResponse(f"/ladder/{plans[0].id}", status_code=303)
-    return _ladder_page(request, None)
-
-
-@app.post("/ladder")
-def ladder_create(
-    request: Request, service: ScreenerService = Depends(get_service),
-    symbol: str = Form(""), shares: str = Form(""), cost: str = Form(""), rungs: str = Form(""),
-    put_premium: str = Form(""), call_premiums: str = Form(""), call_strike: str = Form(""),
-    call_expiry: str = Form(""), call_sold_for: str = Form(""), growth: str = Form(""),
-):
-    """A new ladder. Its rungs, left empty, are planned from the chain."""
-    typed = _ladder_form(symbol=symbol, shares=shares, cost=cost, rungs=rungs,
-                         put_premium=put_premium, call_premiums=call_premiums,
-                         call_strike=call_strike, call_expiry=call_expiry,
-                         call_sold_for=call_sold_for, growth=growth)
-    try:
-        created = _ladder_store(request).create(
-            _me(request), _with_rungs(plan_from_form(typed), service))
-    except PlanError as e:
-        return _ladder_page(request, None, status_code=422, create_error=str(e), typed=typed)
-    return RedirectResponse(f"/ladder/{created.id}", status_code=303)
-
-
-@app.get("/ladder/{plan_id}")
-def ladder_plan_page(plan_id: str, request: Request,
-                     service: ScreenerService = Depends(get_service)):
-    """One ladder, priced against the chain now."""
-    return _ladder_page(request, _my_plan(request, plan_id), service)
-
-
-@app.post("/ladder/{plan_id}")
-def ladder_plan_save(
-    plan_id: str, request: Request, service: ScreenerService = Depends(get_service),
-    symbol: str = Form(""), shares: str = Form(""), cost: str = Form(""), rungs: str = Form(""),
-    put_premium: str = Form(""), call_premiums: str = Form(""), call_strike: str = Form(""),
-    call_expiry: str = Form(""), call_sold_for: str = Form(""), growth: str = Form(""),
-):
-    """The plan's numbers, edited: after a roll, a new call, or a correction. Rungs cleared
-    are planned again from the chain."""
-    saved = _my_plan(request, plan_id)
-    typed = _ladder_form(symbol=symbol, shares=shares, cost=cost, rungs=rungs,
-                         put_premium=put_premium, call_premiums=call_premiums,
-                         call_strike=call_strike, call_expiry=call_expiry,
-                         call_sold_for=call_sold_for, growth=growth)
-    try:
-        _ladder_store(request).update(_me(request), saved.id,
-                                      _with_rungs(plan_from_form(typed), service))
-    except PlanError as e:
-        return _ladder_page(request, saved, service, 422, edit_error=str(e), typed=typed)
-    return RedirectResponse(f"/ladder/{saved.id}", status_code=303)
-
-
-@app.post("/ladder/{plan_id}/delete")
-def ladder_plan_delete(plan_id: str, request: Request):
-    """The ladder (the page asks first). Nothing at the broker changes."""
-    saved = _my_plan(request, plan_id)
-    _ladder_store(request).delete(_me(request), saved.id)
-    return RedirectResponse("/ladder", status_code=303)

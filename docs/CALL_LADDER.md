@@ -2,8 +2,23 @@
 
 Covered calls on shares that came from an assigned put, stepped up a fixed set of strikes (the
 **rungs**) until the shares can leave at what they cost. Worked out on TER: 100 shares assigned at
-$390 with TER near $270, a $340 call sold for about $6, and rungs at $340, $355, $370 and $390. The
-Call ladder tab prices a plan like that against the chain; `core/ladder.py` holds the rules.
+$390 with TER near $270, a $340 call sold for about $6, and rungs at $340, $355, $370 and $390.
+`core/ladder.py` holds the rules.
+
+## Where it shows
+
+On the Portfolio tab, under Holdings. A holding needs a ladder (`for_holding`) when it is 100
+shares or more with an average cost, and the call open on it is below that cost — or, with none
+open, the share price is. With several calls open, the ladder follows the lowest strike. Its row
+is marked and opens the ladder beneath it, priced against the chain when it opens; the call itself
+is marked under Open options. A call at or above the cost is at the target already, and shares
+above their cost with no call need a plain covered call, not a ladder.
+
+The numbers are the broker's: the shares, their average cost (which, at some brokers, already
+counts the put's premium), the call's strike and expiry, and what it sold for, read from the
+broker's trades, which go back 60 days; past that, its average price. Under Adjust, the cost, what
+the call sold for, the premiums the cost doesn't count and the growth can be changed for one look.
+Nothing is saved: after a fill, the broker's positions are the ladder's next state.
 
 ## Why fixed rungs
 
@@ -17,9 +32,9 @@ price approaches it: about 0.19 for the $340 call with TER at $300, 0.44 at $330
 
 ## Planning the rungs
 
-Rungs can be typed, or left empty and planned from the chain when the ladder is saved
-(`plan_rungs`). They are kept from then on, since orders rest on them; clearing them plans them
-again from that day's prices.
+The rungs are planned from the chain each time the ladder opens (`plan_rungs`). After a roll,
+they are planned from the new call: the steps ahead can shift a little with the volatility, but
+the orders resting on the call are only ever to its next rung.
 
 - **The first rung** is the strike of the call sold now. With none open, it is the strike at a
   delta set by how far the share price is under the real cost: 0.15 at 15% or more under it, 0.25
@@ -35,13 +50,13 @@ again from that day's prices.
 On the TER plan, with TER at $269 and 68% volatility, the $340 call plans $340, $355, $375 and
 $390. The lower the volatility, the less a roll pays for a step up and the more rungs it takes; at
 two rolls a quarter, a ladder of many rungs takes a long time to climb. Steps that pay under the
-minimum at their worst are marked on the page, typed or planned.
+minimum at their worst are marked.
 
 ## The plan
 
-The page runs the ladder's rules a day at a time on a path where the share price grows a steady
-amount a month (1% unless the ladder says otherwise), at today's volatility, from the call open
-now until the shares are called, the price passes the target, or four years go by:
+The ladder's rules are run a day at a time on a path where the share price grows a steady amount
+a month (1% unless adjusted), at today's volatility, from the call open now until the shares are
+called, the price passes the target, or four years go by:
 
 - a call is bought back at its take-profit, rolled up a rung once the price reaches its trigger
   and the roll pays the order's limit, or held to expiry and called if the price is past the
@@ -88,10 +103,10 @@ and $0.50 at $300 and $340):
 - a new call has to pay 1% of the share price;
 - a roll has to pay 0.15% of the strike, and never a debit.
 
-## What the page can't see
+## What the ladder can't see
 
 The model prices are Black–Scholes at one volatility (the open call's), at mid prices, without
-dividends. A resting order fills at the bid and ask, which is lower. The page reads what the
-person types: after a fill, the plan's numbers (the new call, what it sold for, the premiums) are
-updated by hand. Gaps past the roll window, early assignment, the report and fills are what need a
-person.
+dividends. A resting order fills at the bid and ask, which is lower. The premiums collected before
+the open call (the put's, earlier calls') aren't in what the broker reports, unless its average
+cost counts them; they can be added under Adjust. Gaps past the roll window, early assignment, the
+report and fills are what need a person.
