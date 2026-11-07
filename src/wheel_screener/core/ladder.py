@@ -12,15 +12,17 @@ No option is held over an earnings report. The last expiry before a report is a 
 must land on or before it, so the call that expires there cannot roll at all, and after the
 report the ladder starts again.
 
-The rungs can be typed, or planned from the chain (``plan_rungs``): from the call sold now up to
-the strike at the cost, in the fewest even steps a roll still pays for. The plan (``Projection``)
-lays the rungs out in time: the share price taken to grow a steady amount a month, the ladder's
-rules are run on it a day at a time — take-profits, rolls, calls sold again after they expire,
-the reports — from the call open now until the shares are called.
+A holding needs a ladder when the call open on it is below what the shares cost, or, with none
+open, the shares are (``for_holding``, from what the broker reports). The rungs are planned from
+the chain (``plan_rungs``): from the call sold now up to the strike at the cost, in the fewest even
+steps a roll still pays for. The plan (``Projection``) lays the rungs out in time: the share price
+taken to grow a steady amount a month, the ladder's rules are run on it a day at a time —
+take-profits, rolls, calls sold again after they expire, the reports — from the call open now
+until the shares are called.
 
-Pure: everything here comes from what the person entered and one chain pull (``Market``). The
-model prices are Black-Scholes at one volatility — the open call's — and are what the limit and
-the roll table are judged against, because the trigger price is in the future and no chain
+Pure: everything here comes from the holding, what the person adjusts, and one chain pull
+(``Market``). The model prices are Black-Scholes at one volatility — the open call's — and are
+what the roll's limit is judged against, because the trigger price is in the future and no chain
 quotes the future. The roll that would be placed today is priced from the chain as well.
 """
 
@@ -38,6 +40,8 @@ from wheel_screener.core.models import (
     EarlyAssignment,
     OptionContract,
     OptionType,
+    Position,
+    PositionKind,
 )
 
 ROLL_TRIGGER = 0.97  # a share price at 97% of the strike counts as close to it
@@ -123,15 +127,15 @@ def leg(action: str, contracts: int, symbol: str, expiry: date, strike: float) -
 
 @dataclass(frozen=True)
 class Plan:
-    """What a person enters for one holding. Prices are per share."""
+    """One holding's ladder: what the broker reports, and what the person adjusts. Prices are
+    per share."""
 
     symbol: str
     shares: int
-    cost: float  # what the shares cost: the strike of the put they were assigned on
+    cost: float  # what the shares cost: the broker's average cost, or the put's strike
     rungs: tuple[float, ...]  # ascending; the last is the target
-    put_premium: float = 0.0
-    # every call premium so far, the open call's included, less whatever buying calls back cost
-    call_premiums: float = 0.0
+    premiums: float = 0.0  # what the cost doesn't count: the put's premium, earlier calls'
+    call_premiums: float = 0.0  # the open call's premium
     call_strike: float | None = None
     call_expiry: date | None = None
     call_sold_for: float | None = None  # what the open call was sold for
@@ -144,7 +148,7 @@ class Plan:
     @property
     def real_cost(self) -> float:
         """What the shares stand at after every premium — what being called away is judged by."""
-        return self.cost - self.put_premium - self.call_premiums
+        return self.cost - self.premiums - self.call_premiums
 
     @property
     def has_call(self) -> bool:
@@ -157,6 +161,32 @@ class Plan:
     @property
     def monthly_growth(self) -> float:
         return DEFAULT_GROWTH if self.growth is None else self.growth
+
+
+def for_holding(holding: Position, positions: list[Position]) -> Plan | None:
+    """The ladder a holding needs, from what its broker reports: the shares and their average
+    cost, and the call open on them (with several, the lowest strike). None when it needs none:
+    under 100 shares, no cost reported, a call open at or above the cost already, or none open
+    with the shares at or above it. Its rungs are empty, for the chain to plan."""
+    if holding.kind is not PositionKind.SHARES or not holding.covered_call_lots:
+        return None
+    cost = holding.average_price
+    if not cost or cost <= 0:
+        return None
+    shares = int(holding.quantity)
+    calls = [p for p in positions
+             if p.kind is PositionKind.SHORT_CALL and p.underlying == holding.underlying
+             and p.strike and p.expiration and not p.expired]
+    if calls:
+        call = min(calls, key=lambda p: (p.strike, p.expiration))
+        if call.strike >= cost - 1e-6:
+            return None
+        sold = call.opening_price or call.average_price
+        return Plan(holding.underlying, shares, cost, (), call_premiums=sold or 0.0,
+                    call_strike=call.strike, call_expiry=call.expiration, call_sold_for=sold)
+    if not holding.market_value or holding.market_value / holding.quantity >= cost - 1e-6:
+        return None
+    return Plan(holding.underlying, shares, cost, ())
 
 
 @dataclass(frozen=True)
@@ -267,15 +297,6 @@ class Projection:
 
 
 @dataclass(frozen=True)
-class CreditGrid:
-    prices: list[float]
-    days_left: list[int]
-    cells: list[list[float]]  # [price][days_left]
-    trigger: float
-    limit: float | None
-
-
-@dataclass(frozen=True)
 class RailMark:
     value: float
     at: float  # 0..1 along the rail
@@ -300,7 +321,6 @@ class Ladder:
     next_call: NewCall | None = None  # what follows the open call if it expires below its strike
     projection: Projection | None = None
     dividends: list[Dividend] = field(default_factory=list)  # ex-dates while the open call is
-    grid: CreditGrid | None = None
     early: EarlyAssignment | None = None
     rail: list[RailMark] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
@@ -772,17 +792,6 @@ def _stretches(plan: Plan, lived: list[_Call], at, stop: str, stopped: date,
     return Projection(growth, stretches, round(rc, 2), round(premiums, 2), called)
 
 
-def _grid(plan: Plan, roll: Roll, days_left: int, iv: float, rate: float) -> CreditGrid:
-    strike, step = plan.call_strike, _step(plan.call_strike)
-    base = math.floor(roll.trigger / step) * step
-    below = [base - step, base] if base < roll.trigger else [base - 2 * step, base - step]
-    prices = sorted({*below, roll.trigger, strike, *(strike + step * k for k in range(1, 6))})
-    lefts = [days_left] + [d for d in (30, 20, 10, 5, 1) if d < days_left]
-    cells = [[round(roll_credit(s, strike, roll.to_strike, d, roll.added_days, iv, rate), 2)
-              for d in lefts] for s in prices]
-    return CreditGrid(prices, lefts, cells, roll.trigger, roll.limit)
-
-
 def _rail(plan: Plan, spot: float | None, trigger: float | None) -> list[RailMark]:
     """The rungs, the real cost, the share price and the roll trigger along one price scale."""
     values = [*plan.rungs, plan.real_cost] + ([spot] if spot else [])
@@ -871,8 +880,6 @@ def build(plan: Plan, market: Market, today: date, rate: float = DEFAULT_CARRY_R
     if roll.blocked != "target":
         next_call = _new_call(plan, calls, expiries, plan.call_strike, expiry, today, report,
                               spot, iv, rate)
-    grid = (_grid(plan, roll, days_left, iv, rate)
-            if iv is not None and roll.blocked is None and days_left > 0 else None)
 
     spans = report is not None and expiry >= report
     if spans:
@@ -892,6 +899,6 @@ def build(plan: Plan, market: Market, today: date, rate: float = DEFAULT_CARRY_R
         notes.append("breakeven")
     return Ladder(**base, status=status, quote=quote, days_left=days_left,
                   take_profit=take_profit, kept=kept, roll=roll, next_call=next_call,
-                  projection=projection, dividends=dividends, grid=grid, early=early,
+                  projection=projection, dividends=dividends, early=early,
                   notes=notes)
 

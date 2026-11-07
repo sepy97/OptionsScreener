@@ -1,5 +1,6 @@
 """The covered-call ladder (core.ladder): the orders, the rungs and the plan through the reports,
-on the TER plan the tab was designed with — 100 shares assigned at $390, a $340 call sold for $6."""
+on the TER plan the ladder was designed with — 100 shares assigned at $390, a $340 call sold for
+$6 — and which holdings need one."""
 
 from __future__ import annotations
 
@@ -8,7 +9,13 @@ from datetime import date, timedelta
 import pytest
 
 from wheel_screener.core import ladder as L
-from wheel_screener.core.models import Dividend, OptionContract, OptionType
+from wheel_screener.core.models import (
+    Dividend,
+    OptionContract,
+    OptionType,
+    Position,
+    PositionKind,
+)
 
 TODAY = date(2026, 11, 3)
 DEC, JAN, FEB = date(2026, 12, 18), date(2027, 1, 15), date(2027, 2, 19)
@@ -37,7 +44,7 @@ def _market(spot: float = 269.28, report: date | None = REPORT, **kw) -> L.Marke
 
 
 def _plan(**kw) -> L.Plan:
-    fields = dict(symbol="TER", shares=100, cost=390.0, rungs=RUNGS, put_premium=0.0,
+    fields = dict(symbol="TER", shares=100, cost=390.0, rungs=RUNGS, premiums=0.0,
                   call_premiums=6.0, call_strike=340.0, call_expiry=DEC, call_sold_for=6.0)
     return L.Plan(**{**fields, **kw})
 
@@ -57,7 +64,7 @@ def test_an_order_line_reads_as_a_ticket_does() -> None:
 
 
 def test_real_cost_is_the_cost_less_every_premium() -> None:
-    plan = _plan(put_premium=8.4, call_premiums=6.0)
+    plan = _plan(premiums=8.4, call_premiums=6.0)
     assert plan.real_cost == pytest.approx(375.6)
     assert plan.contracts == 1 and _plan(shares=250).contracts == 2
 
@@ -173,7 +180,6 @@ def test_if_the_open_call_expires_the_next_has_four_weeks_to_the_wall() -> None:
 def test_the_call_before_the_report_can_not_roll() -> None:
     view = L.build(_plan(call_strike=355.0, call_expiry=JAN), _market(), TODAY)
     assert view.roll.blocked == "report"
-    assert view.grid is None
 
 
 def test_a_call_open_over_the_report_is_flagged() -> None:
@@ -238,13 +244,14 @@ def test_a_dividend_inside_the_call_is_on_the_plan() -> None:
     assert view.early is not None and view.early.risk.value == "low"
 
 
-def test_the_roll_table_brackets_the_trigger() -> None:
-    grid = L.build(_plan(), _market(), TODAY).grid
-    assert grid.prices[:4] == [310.0, 320.0, 329.80, 340.0]
-    assert grid.days_left == [45, 30, 20, 10, 5, 1]
-    trigger_row = grid.cells[grid.prices.index(329.80)]
-    assert min(trigger_row) >= grid.limit  # at the trigger, the limit fills all cycle long
-    assert grid.cells[-1][0] < grid.limit  # $50 past the strike, it doesn't
+def test_the_roll_limit_fills_at_the_trigger_all_cycle_long() -> None:
+    view = L.build(_plan(), _market(), TODAY)
+    roll = view.roll
+    for left in (45, 30, 20, 10, 5, 1):
+        credit = L.roll_credit(roll.trigger, 340.0, 355.0, left, roll.added_days, view.iv, 0.04)
+        assert credit >= roll.limit, left
+    # $50 past the strike, it doesn't
+    assert L.roll_credit(390.0, 340.0, 355.0, 45, roll.added_days, view.iv, 0.04) < roll.limit
 
 
 def test_the_minimums_scale_with_the_price() -> None:
@@ -322,3 +329,64 @@ def test_with_nothing_to_plan_from_there_is_no_plan() -> None:
     no_price = L.Market(spot=None, calls=_chain())
     assert L.plan_rungs(_plan(rungs=(), **NO_CALL), no_price, TODAY) is None
     assert L.plan_rungs(_plan(rungs=()), L.Market(spot=269.28, calls=[]), TODAY) is None
+
+
+# --- which holdings need a ladder -------------------------------------------------------------
+
+def _shares(quantity=100, cost=390.0, price=269.28, symbol="TER") -> Position:
+    return Position(symbol=symbol, underlying=symbol, kind=PositionKind.SHARES, quantity=quantity,
+                    asset_type="EQUITY", market_value=price * quantity, average_price=cost)
+
+
+def _short_call(strike=340.0, expiry=DEC, sold=6.0, average=None, symbol="TER", dte=45):
+    return Position(symbol=f"{symbol} {expiry:%y%m%d}C{strike:g}", underlying=symbol,
+                    kind=PositionKind.SHORT_CALL, quantity=1, option_type=OptionType.CALL,
+                    strike=strike, expiration=expiry, dte=dte, opening_price=sold,
+                    average_price=average)
+
+
+def test_a_call_below_the_cost_needs_a_ladder_from_it() -> None:
+    held = _shares()
+    plan = L.for_holding(held, [held, _short_call()])
+    assert plan == L.Plan("TER", 100, 390.0, (), call_premiums=6.0, call_strike=340.0,
+                          call_expiry=DEC, call_sold_for=6.0)
+    assert plan.real_cost == 384.0
+
+
+def test_with_no_call_open_shares_below_the_cost_need_one() -> None:
+    held = _shares(quantity=250)
+    plan = L.for_holding(held, [held])
+    assert plan == L.Plan("TER", 250, 390.0, ()) and plan.contracts == 2
+
+
+def test_the_ladder_follows_the_lowest_call_of_several() -> None:
+    held = _shares(quantity=200)
+    plan = L.for_holding(held, [_short_call(355.0, JAN), _short_call(340.0, DEC), held])
+    assert (plan.call_strike, plan.call_expiry) == (340.0, DEC)
+
+
+def test_a_sale_too_old_for_the_broker_s_record_falls_back_to_the_average_price() -> None:
+    held = _shares()
+    plan = L.for_holding(held, [held, _short_call(sold=None, average=5.8)])
+    assert plan.call_sold_for == 5.8
+    plan = L.for_holding(held, [held, _short_call(sold=None)])
+    assert plan.call_sold_for is None and plan.call_premiums == 0.0
+
+
+@pytest.mark.parametrize("held, others", [
+    (_shares(), [_short_call(strike=390.0)]),  # the call is at the cost: the target already
+    (_shares(price=395.0), []),  # no call, and the shares are past the cost
+    (_shares(quantity=99), [_short_call()]),  # too few shares for a call
+    (_shares(cost=None), [_short_call()]),  # no cost reported
+])
+def test_holdings_that_need_no_ladder(held, others) -> None:
+    assert L.for_holding(held, [held, *others]) is None
+
+
+def test_only_a_live_call_on_these_shares_counts() -> None:
+    held = _shares()
+    plan = L.for_holding(held, [held, _short_call(expiry=TODAY, dte=-1)])
+    assert plan is not None and not plan.has_call
+    # nor does a call on something else
+    assert not L.for_holding(held, [held, _short_call(symbol="KGC")]).has_call
+    assert L.for_holding(_short_call(), [_short_call()]) is None  # only shares have a ladder

@@ -1,5 +1,7 @@
 {% extends "base.html" %}
 {% import "_icons.html" as icon %}
+{# the Copy buttons on a holding's call ladder #}
+{% block scripts %}<script src="/static/copy.js?v={{ asset_v }}" defer></script>{% endblock %}
 {% block content %}
   <article>
     {# Signing out ends the site session only; broker links are untouched and wait for next time. #}

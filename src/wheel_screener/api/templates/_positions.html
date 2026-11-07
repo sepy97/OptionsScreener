@@ -21,6 +21,9 @@
     {% endif %}
     {% for a in accounts %}
       {% set b = a.balances %}
+      {# the holdings whose call is below what the shares cost (or, with none open, the shares
+         are): each opens its call ladder #}
+      {% set ladders = ladders_of(a) %}
       <section class="account">
         <h3>{{ a.display_name }}
           <span class="company-tags">{{ a.account_type.value if a.account_type else '' }}</span>
@@ -92,7 +95,10 @@
                   <td class="card-head"><b>{{ p.underlying }}</b>
                     <span class="card-only"> &middot; {{ p.position_label }}</span></td>
                   <td data-label="Position" class="card-hide">{{ p.position_label }}</td>
-                  <td data-label="Strike">{{ p.strike | money }}</td>
+                  {% set lp = ladders.get(p.underlying) if p.kind == 'short_call' else none %}
+                  <td data-label="Strike">{{ p.strike | money }}
+                    {%- if lp and lp.call_strike == p.strike and lp.call_expiry == p.expiration %}
+                      <span class="badge" title="under the {{ lp.cost | money }} the shares cost: the ladder up from it opens from {{ p.underlying }} under Holdings">below cost</span>{% endif %}</td>
                   <td data-label="Expiry">{{ p.expiration.strftime('%d %b') if p.expiration else '—' }}</td>
                   {# An expired contract is still listed until the broker processes expirations
                      (a Friday expiry, over the weekend); say so rather than print "-1". #}
@@ -183,11 +189,19 @@
           <table class="cards">
             <thead><tr>
               <th>Holding</th><th>Type</th><th>Quantity</th><th>Avg cost</th>
-              <th>Value</th><th>Covered calls</th>
+              <th>Value</th><th>Covered calls</th><th>Ladder</th>
             </tr></thead>
             <tbody>
               {% for p in holdings | sort(attribute='market_value', reverse=true) %}
-                <tr>
+                {# A holding that needs a ladder opens it like an option row opens its ways out:
+                   the broker's numbers go along, and the chain plans the rungs. #}
+                {% set lp = ladders.get(p.underlying) if p.kind == 'shares' else none %}
+                <tr{% if lp %} class="row-open" hx-get="/portfolio/ladder" hx-sync="this:drop"
+                    hx-vals='{{ ladder_values(lp) | tojson }}'
+                    hx-target="this" hx-swap="afterend"
+                    hx-on::before-request="let d=this.nextElementSibling;
+                      if(d&&d.classList.contains('detail')){d.remove();event.preventDefault();}"
+                  {% endif %}>
                   <td class="card-head">
                     <b>{{ p.label }}</b>
                     {% if p.symbol_is_cusip %}
@@ -208,6 +222,11 @@
                     {% else %}
                       <span class="detail-note">under 100</span>
                     {% endif %}
+                  </td>
+                  <td data-label="Ladder">
+                    {%- if lp and lp.has_call %}<span class="badge" title="the {{ '$%g' | format(lp.call_strike) }} call is under the {{ lp.cost | money }} cost: open the row for the ladder up to it">call below cost</span>
+                    {%- elif lp %}<span class="badge" title="no call open, and the shares are under the {{ lp.cost | money }} cost: open the row for the call to sell and the ladder up">below cost</span>
+                    {%- else %}<span class="detail-note">&mdash;</span>{% endif -%}
                   </td>
                 </tr>
               {% endfor %}

@@ -414,23 +414,25 @@ person's bonds across every portfolio, without quantities, so switching portfoli
 quantity reuses it; builds take ~5 s for ~80 bonds and are cached for three hours
 (`BONDS__CACHE_TTL_SECONDS`).
 
-## The Call ladder tab
+## Call ladders, on the Portfolio tab
 
 Covered calls on shares you were assigned, stepped up a fixed set of strikes (the rungs) until the
-shares can leave at what they cost. Each signed-in person keeps a ladder per holding: the ticker,
-how many shares, what they were assigned at, the call open now and the premiums collected. The
-rungs are planned from the chain (from the open call up to the cost, in the fewest even steps a
-roll still pays for) or typed. Its page prices the ladder against the chain when it opens and
-gives the two orders to rest on the call at the broker, linked so that one cancels the other: a
+shares can leave at what they cost. Under Holdings, a stock whose open call is below its average
+cost — or, with no call open, whose price is — is marked, and its row opens its ladder, as an
+option's row opens its ways out. Everything comes from the broker: the shares, their average cost,
+the call open on them and what it sold for. The rungs are planned from the chain each time (from
+the open call up to the cost, in the fewest even steps a roll still pays for), and the panel gives
+the two orders to rest on the call at the broker, linked so that one cancels the other: a
 take-profit at 25% of the premium, and a conditional roll up to the next rung once the share price
-reaches 97% of the strike, with its limit. It also shows the plan ahead: the call to sell or hold
-now and each call it rolls into, strike and expiry, through the earnings reports to the target,
-on a steady climb of 1% a month or what the ladder sets (no option is held over a report, so the
-call expiring just before one can't roll). And each rung's
-trigger and what being called there means against the real cost, a table of what the roll pays by
-share price and days left, and what the orders can't handle. The rules are in
-[docs/CALL_LADDER.md](docs/CALL_LADDER.md). Nothing is read from a broker: after a fill, the
-ladder's numbers are updated by hand.
+reaches 97% of the strike, with its limit. With no call open, it gives the call to sell. It also
+shows the plan ahead: the call to sell or hold now and each call it rolls into, strike and expiry,
+through the earnings reports to the target, on a steady climb of 1% a month (no option is held
+over a report, so the call expiring just before one can't roll); each rung's trigger and what
+being called there means against the real cost; and what the orders can't handle. Under Adjust,
+the cost, what the call sold for (when the broker's record of the sale is too old to read),
+premiums the cost doesn't count and the growth can be changed for a look; nothing is saved. After a
+fill, the broker's positions move the ladder on. The rules are in
+[docs/CALL_LADDER.md](docs/CALL_LADDER.md).
 
 ## The AI analysis tab
 
