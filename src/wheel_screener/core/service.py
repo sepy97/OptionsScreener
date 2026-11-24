@@ -49,7 +49,7 @@ from wheel_screener.core.pipeline.select_strike import (
     select_top_contracts,
     signed_target_delta,
 )
-from wheel_screener.core.pipeline.universe import build_universe, drop_blocked
+from wheel_screener.core.pipeline.universe import build_universe, drop_blocked, in_price_range
 from wheel_screener.core.ports import (  # noqa: F401 - EtfUniverseProvider is a field type
     ChainProvider,
     CompanyProfileProvider,
@@ -57,6 +57,7 @@ from wheel_screener.core.ports import (  # noqa: F401 - EtfUniverseProvider is a
     EtfUniverseProvider,
     FundamentalReportProvider,
     FundamentalsProvider,
+    QuoteProvider,
 )
 from wheel_screener.core.swap import (
     OpenCall,
@@ -137,6 +138,9 @@ class ScreenerService:
     etfs: EtfUniverseProvider | None = None
     # optional: dividend history for the ex-dividend flag. Without it nothing is flagged.
     dividends: DividendProvider | None = None
+    # optional: live share prices, for a fundamentals source whose own price is a snapshot.
+    # Without it the price range is judged on that snapshot (and again on each chain's spot).
+    quotes: QuoteProvider | None = None
     # the short-term rate a put holder earns on the strike — the early-exercise test for puts
     carry_rate: float = DEFAULT_CARRY_RATE
     # limits for the put swap rule (keep or redeploy the cash behind an open put)
@@ -258,7 +262,7 @@ class ScreenerService:
         self, criteria: ScreenCriteria, today: date, guard: EarningsGuard | None = None
     ) -> list[Underlying]:
         """Universe -> fundamental gate + cross-sectional rank -> ranked names."""
-        universe = build_universe(self.fundamentals, criteria)
+        universe = build_universe(self.fundamentals, criteria, self.quotes)
         guard = guard or self._build_guard(criteria, today)
         return rate_and_rank(self.fundamentals, universe, criteria, today, guard)
 
@@ -308,6 +312,7 @@ class ScreenerService:
                 "screen returned PARTIAL results — the chain pull was cut short (timeout/cancel); "
                 "some qualifying names may be missing"
             )
+        chains = in_price_range(chains, criteria)
 
         candidates: list[CandidateResult] = []
         for u in survivors:

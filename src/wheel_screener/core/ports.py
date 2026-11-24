@@ -83,6 +83,18 @@ class EtfUniverseProvider(Protocol):
 
 
 @runtime_checkable
+class QuoteProvider(Protocol):
+    """Live share prices for many symbols in a few requests. Optional: without one, the screen's
+    price range is judged on the fundamentals source's own price.
+
+    Leaves out a symbol it could not price, so absence reads as unknown rather than as zero.
+    Systemic failures (auth, rate limit, outage) raise the typed ``ProviderError`` hierarchy.
+    """
+
+    def last_prices(self, symbols: list[str]) -> dict[str, float]: ...
+
+
+@runtime_checkable
 class BatchChainProvider(Protocol):
     """A chain source that can serve MANY underlyings in a few requests.
 

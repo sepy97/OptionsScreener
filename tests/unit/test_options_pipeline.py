@@ -4,6 +4,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from wheel_screener.core.errors import ProviderUnavailableError
 from wheel_screener.core.models import (
     CandidateResult,
     ChainSnapshot,
@@ -18,6 +19,7 @@ from wheel_screener.core.models import (
 )
 from wheel_screener.core.pipeline.rank import rank
 from wheel_screener.core.pipeline.select_strike import select_put, select_top_contracts
+from wheel_screener.core.pipeline.universe import build_universe
 from wheel_screener.core.service import ScreenerService
 
 _BASE = date(2026, 6, 22)
@@ -333,6 +335,58 @@ def test_run_screen_end_to_end():
     # absence from a verified sweep IS the clean verdict (there is no date to display).
     assert r.next_earnings is None
     assert r.earnings_status is EarningsStatus.CLEAN
+
+
+def test_the_price_range_is_judged_again_on_the_chain_s_price() -> None:
+    """The universe is cut on the store's price, as old as its last import; the chain's spot is
+    today's. A name that has since left the range is not shown."""
+    puts = [_put(90, -0.20, 40, 1.9)]
+    crit = ScreenCriteria(top_n=10, min_dte=30, max_dte=45, min_price=105, max_price=150)
+    moved = ScreenerService(fundamentals=_FakeFundamentals(),
+                            chains=_FakeChains(_chain(puts, underlying_price=104.0)))
+    assert moved.run_screen(crit, date(2026, 6, 22)) == []
+    within = crit.model_copy(update={"min_price": 100})
+    assert [r.symbol for r in moved.run_screen(within, date(2026, 6, 22))] == ["AAA"]
+    # a chain that carries no spot keeps the store's verdict
+    unquoted = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(_chain(puts)))
+    assert [r.symbol for r in unquoted.run_screen(crit, date(2026, 6, 22))] == ["AAA"]
+    # nor does one priced live before its chain is pulled
+    priced = ScreenerService(fundamentals=_FakeFundamentals(), chains=_FakeChains(_chain(puts)),
+                             quotes=_Quotes({"AAA": 104.0}))
+    assert priced.run_screen(crit, date(2026, 6, 22)) == []
+
+
+class _StoreAt:
+    """A store whose prices are as old as its last import, and which cuts its range on them."""
+
+    def __init__(self, prices: dict[str, float]) -> None:
+        self.prices = prices
+
+    def screen_universe(self, criteria):
+        return [Underlying(symbol=s, price=p) for s, p in self.prices.items()
+                if criteria.min_price <= p <= criteria.max_price]
+
+
+class _Quotes:
+    def __init__(self, prices=None, error: Exception | None = None) -> None:
+        self.prices, self.error = prices or {}, error
+
+    def last_prices(self, symbols):
+        if self.error is not None:
+            raise self.error
+        return {s: p for s, p in self.prices.items() if s in symbols}
+
+
+def test_the_universe_is_cut_on_live_prices_when_there_are_any() -> None:
+    store = _StoreAt({"FCX": 55.0, "UP": 45.0, "SAME": 80.0, "GONE": 20.0})
+    crit = ScreenCriteria(min_price=50, max_price=150)
+    assert [u.symbol for u in build_universe(store, crit)] == ["FCX", "SAME"]
+    live = build_universe(store, crit, _Quotes({"FCX": 46.78, "UP": 52.0, "GONE": 21.0}))
+    # FCX has fallen out and UP has risen in; SAME, with no quote, keeps its stored price
+    assert {u.symbol: u.price for u in live} == {"UP": 52.0, "SAME": 80.0}
+    # quotes that fail leave the stored prices to decide, as before
+    down = build_universe(store, crit, _Quotes(error=ProviderUnavailableError("alpaca down")))
+    assert [u.symbol for u in down] == ["FCX", "SAME"]
 
 
 # --- the earnings blackout: no short put may span a report (issue #113) ------------------
