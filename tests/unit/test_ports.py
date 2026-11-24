@@ -60,3 +60,36 @@ def test_dividend_source_is_fmp_when_keyed_and_absent_otherwise() -> None:
     assert keyless.dividends is None
     live = build_service(Settings(fundamentals_source="live", chain_source="schwab"))
     assert live.dividends is live.fundamentals  # the live source answers for itself
+
+
+def test_live_prices_come_from_alpaca_for_the_local_store_only() -> None:
+    from pydantic import SecretStr
+
+    from wheel_screener.core.ports import QuoteProvider
+
+    keys = {"fmp": FmpSettings(api_key=SecretStr("k")),
+            "alpaca": AlpacaSettings(api_key=SecretStr("a"), api_secret=SecretStr("s"))}
+    local = build_service(Settings(chain_source="schwab", **keys))
+    assert isinstance(local.quotes, QuoteProvider) and local.quotes is local.etfs
+    live = build_service(Settings(chain_source="schwab", fundamentals_source="live", **keys))
+    assert live.quotes is None  # FMP's screener prices its own rows
+    assert build_service(Settings(chain_source="schwab", fmp=FmpSettings())).quotes is None
+
+
+def test_live_prices_are_read_from_the_stock_snapshots() -> None:
+    import httpx
+
+    from wheel_screener.adapters.etf.universe import EtfUniverseProvider
+
+    def answer(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/v2/stocks/snapshots"
+        asked = request.url.params["symbols"].split(",")
+        assert asked == ["FCX", "ZZZ"]  # each name once
+        return httpx.Response(200, json={
+            "FCX": {"latestTrade": {"p": 46.78}, "dailyBar": {"c": 46.5, "v": 1000}},
+            "ZZZ": {"latestTrade": {}, "dailyBar": {}},  # nothing to price it by
+        })
+
+    quotes = EtfUniverseProvider(FmpSettings(), AlpacaSettings(chain_cache_enabled=False),
+                                 client=httpx.Client(transport=httpx.MockTransport(answer)))
+    assert quotes.last_prices(["ZZZ", "FCX", "FCX"]) == {"FCX": 46.78}

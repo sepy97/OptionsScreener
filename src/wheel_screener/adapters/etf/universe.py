@@ -142,6 +142,10 @@ class EtfUniverseProvider:
                     out[sym] = (float(price), float(price) * float(bar.get("v") or 0))
         return out
 
+    def last_prices(self, symbols: list[str]) -> dict[str, float]:
+        """``{symbol: price}`` for any stock, not only ETFs — the screen's live price range."""
+        return {sym: price for sym, (price, _) in self._quotes(sorted(set(symbols))).items()}
+
     def etf_universe(self, criteria: ScreenCriteria) -> list[Underlying]:
         """Optionable ETFs inside the criteria's price and turnover band."""
         names = self._etf_symbols()

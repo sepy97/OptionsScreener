@@ -16,7 +16,9 @@ background**. One command, `candidates`, does the whole thing and writes a CSV.
 Each run is a pipeline:
 
 1. **Universe** — read a local store of whole-market fundamentals (downloaded once) and keep common
-   stocks priced $20–200 on NASDAQ/NYSE.
+   stocks on NASDAQ/NYSE inside the price range. The store's prices are as old as its last import,
+   so with Alpaca keys set the range is judged on live prices instead; each chain's spot checks it
+   again before a name is shown.
 2. **Filter out the bad** — drop names that are insolvent, unprofitable, over-leveraged, or
    cash-flow-negative (hard gates), plus anything reporting earnings inside the trade window.
 3. **Rank the survivors** — a cross-sectional score across valuation / efficiency / sustainability.

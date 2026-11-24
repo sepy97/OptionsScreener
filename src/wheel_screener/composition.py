@@ -123,13 +123,17 @@ def _build_etfs(settings: Settings) -> EtfUniverseProvider | None:
 def build_service(settings: Settings | None = None) -> ScreenerService:
     settings = settings or Settings()
     fundamentals = _build_fundamentals(settings)
+    etfs = _build_etfs(settings)
     return ScreenerService(
         fundamentals=fundamentals,
         chains=_build_chains(settings),
         reports=_build_reports(settings),
         profiles=_build_profiles(fundamentals),
-        etfs=_build_etfs(settings),
+        etfs=etfs,
         dividends=_build_dividends(settings, fundamentals),
+        # The bulk store's price is as old as its last import; the same Alpaca snapshots that
+        # price the ETFs price its stocks. Live FMP prices its own screener rows.
+        quotes=etfs if settings.fundamentals_source == "local" else None,
         carry_rate=settings.portfolio.carry_rate,
         swap_params=SwapParams(
             used_up_yield=settings.swap.used_up_yield,
